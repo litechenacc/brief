@@ -17,7 +17,6 @@ media/*.map
 .env.*
 release.sh
 install.sh
-.github/**
 
 dist/*.map
 dist/controller.cjs

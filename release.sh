@@ -16,10 +16,8 @@
 # - package the .vsix via `npm run package`
 # - commit release commit, tag, push master+tag, publish GitHub release with the vsix
 #
-# Marketplace publishing is owned by the GitHub release: creating it triggers
-# .github/workflows/publish.yml, which runs `vsce publish` with the repo's
-# VSCE_PAT secret. This script waits for that run and reports its real outcome.
-# VSCE_PUBLISH=1 publishes from the local .env instead (see the plan block).
+# Marketplace publishing is optional: VSCE_PUBLISH=1 publishes from the local
+# .env (see the plan block). There is no GitHub Actions publisher.
 #
 set -euo pipefail
 
@@ -58,8 +56,7 @@ Environment:
   GIT_REMOTE            Force the publish remote (default: guessed from upstream/origin)
   ALLOW_NON_MASTER=1    Allow cutting from a non-master branch (warns, then proceeds)
   ALLOW_VERSION_BUMP=0  Refuse to bump package.json; the version must already match the tag
-  VSCE_PUBLISH=1        Publish to the marketplace from .env instead of letting the
-                        GitHub release's publish.yml workflow do it
+  VSCE_PUBLISH=1        Publish to the marketplace from .env after the GitHub release
 EOF
 }
 
@@ -79,29 +76,6 @@ preferred_remote() {
     if [ -n "$ups" ]; then printf '%s' "$ups"; return; fi
     if git remote | grep -qx origin; then printf 'origin'; return; fi
     git remote | head -n 1 || true
-}
-
-# Whether publish.yml can actually publish. Reported in the plan block so a
-# missing repo secret is visible before the release is cut, not after it red-Xes.
-repo_secret_state() {
-    have gh || { printf 'gh is not installed, so this run cannot check it'; return; }
-    local names environment_names
-    names="$(gh secret list --json name -q '.[].name' 2>/dev/null || true)"
-    if printf '%s\n' "$names" | grep -qx VSCE_PAT; then
-        printf 'VSCE_PAT repo secret is set'
-        return
-    fi
-    # publish.yml deliberately scopes VSCE_PAT to the CI environment so pull
-    # requests cannot access it. Check that scope too; otherwise the release
-    # plan would incorrectly warn about a secret the publish job can use.
-    environment_names="$(gh secret list --env CI --json name -q '.[].name' 2>/dev/null || true)"
-    if printf '%s\n' "$environment_names" | grep -qx VSCE_PAT; then
-        printf 'VSCE_PAT CI environment secret is set'
-    elif [ -z "$names" ] && [ -z "$environment_names" ]; then
-        printf 'this run could not read the repo or CI environment secrets'
-    else
-        printf 'VSCE_PAT repo secret is NOT set — that run will fail'
-    fi
 }
 
 prompt_with_default() {
@@ -385,8 +359,6 @@ apply_release_changes "$chosen_tag" "$DRY_RUN"
 # that showed up untracked: graphify-out shipped 4 MB of symbol map naming the
 # very sources .vscodeignore excludes. Assert the whole file set instead — a
 # denylist only ever knows about yesterday's mistake.
-# .github/workflows/publish.yml asserts the SAME list in CI: a release that only
-# updates this copy passes here and then fails at the publish step.
 unexpected="$(./node_modules/.bin/vsce ls --no-dependencies 2>/dev/null | grep -vE '^(package\.json|README\.md|LICENSE|CHANGELOG\.md|dist/extension\.js|media/(main\.js|main\.css|icon\.png|icon\.svg))$' || true)"
 if [ -n "$unexpected" ]; then
     printf '[release] refusing to package: unexpected files would ship inside the .vsix:\n' >&2
@@ -406,9 +378,6 @@ else
 fi
 
 # ---- who publishes to the marketplace ----
-# Decided BEFORE the plan block so the plan can state what will actually happen.
-# The GitHub release triggers .github/workflows/publish.yml; publishing locally
-# as well would mean two racing publishers and one confusing failure.
 if [ -f .env ]; then
     set -a
     # shellcheck disable=SC1091
@@ -421,18 +390,14 @@ if [ "$VSCE_PUBLISH" = "1" ]; then
     if [ -n "${VSCE_PAT:-}" ]; then
         publish_local=true
     else
-        warn "VSCE_PUBLISH=1 but no VSCE_PAT in .env — leaving the publish to the workflow"
+        warn "VSCE_PUBLISH=1 but no VSCE_PAT in .env — skip marketplace publish"
     fi
 fi
 
 if [ "$publish_local" = true ]; then
-    market_line="THIS SCRIPT publishes ${chosen_tag#v} from .env, before creating the release.
-             publish.yml then runs too and will report a duplicate version.
-             Unset VSCE_PUBLISH to let the workflow own it."
+    market_line="THIS SCRIPT publishes ${chosen_tag#v} from .env after the GitHub release."
 else
-    market_line="the GitHub release triggers .github/workflows/publish.yml, which
-             runs vsce publish ($(repo_secret_state)). This script waits for
-             that run. VSCE_PUBLISH=1 publishes from .env instead."
+    market_line="no marketplace publish (set VSCE_PUBLISH=1 and VSCE_PAT in .env to publish)."
 fi
 
 # ---- summarize ----
@@ -460,7 +425,7 @@ commit_title="Release $chosen_tag"
 if [ "$publish_local" = true ]; then
     confirm_prompt="Commit $chosen_tag, tag it, PUBLISH TO THE PUBLIC VS CODE MARKETPLACE, and publish a GitHub release?"
 else
-    confirm_prompt="Commit $chosen_tag, tag it, and publish a GitHub release (which publishes it to the PUBLIC VS Code Marketplace)?"
+    confirm_prompt="Commit $chosen_tag, tag it, and publish a GitHub release?"
 fi
 if ! confirm "$confirm_prompt"; then
     fail "release cancelled"
@@ -475,9 +440,6 @@ if [ -n "$git_remote" ]; then
     git push "$git_remote" "$chosen_tag"
 fi
 
-# Local publish goes FIRST when it is armed: the release event below starts the
-# workflow, and whichever publisher finishes second reports a duplicate version.
-# Ordering it here makes the winner the one the operator confirmed.
 if [ "$publish_local" = true ]; then
     log "publishing ${chosen_tag#v} to the VS Code Marketplace from .env…"
     if VSCE_PAT="$VSCE_PAT" ./node_modules/.bin/vsce publish --packagePath "$vsix"; then
@@ -507,44 +469,4 @@ if have gh; then
     log "published GitHub release $chosen_tag with $vsix"
 else
     warn "gh not found — tag + master pushed; create the release manually with: gh release create $chosen_tag $vsix"
-    warn "creating that release is what publishes ${chosen_tag#v} to the marketplace"
-fi
-
-# The release event queued publish.yml. Report its real outcome instead of
-# leaving the operator to guess which of the two signals is authoritative.
-if have gh && [ "$publish_local" = true ]; then
-    log "publish.yml also runs for this release; ${chosen_tag#v} is already published, so that run will fail on the duplicate"
-elif have gh; then
-    head_sha="$(git rev-parse HEAD)"
-    run_id=""
-    tries=0
-    log "waiting for the marketplace publish workflow (Ctrl-C is safe — the release is already pushed)…"
-    while [ "$tries" -lt 12 ]; do
-        run_id="$(gh run list --workflow=publish.yml --limit=20 --json databaseId,headSha,event \
-            -q "map(select(.headSha == \"$head_sha\" and .event == \"release\")) | .[0].databaseId" 2>/dev/null || true)"
-        case "$run_id" in ""|null) ;; *) break ;; esac
-        run_id=""
-        tries=$((tries + 1))
-        sleep 5
-    done
-    if [ -z "$run_id" ]; then
-        warn "publish.yml has not started a run for $chosen_tag yet — check the Actions tab: gh run list --workflow=publish.yml"
-    else
-        # `gh run watch` only draws progress; the verdict comes from the run
-        # itself, because watch also errors on already-finished runs.
-        gh run watch "$run_id" || true
-        case "$(gh run view "$run_id" --json conclusion -q .conclusion 2>/dev/null || true)" in
-            success)
-                log "marketplace listing updated for ${chosen_tag} (publish.yml run $run_id)"
-                ;;
-            ""|null)
-                warn "publish.yml run $run_id has no result yet — follow it: gh run watch $run_id"
-                ;;
-            *)
-                warn "publish.yml run $run_id did not publish ${chosen_tag#v} to the marketplace"
-                warn "  why:       gh run view $run_id --log-failed"
-                warn "  publish from here: VSCE_PAT=<pat> ./node_modules/.bin/vsce publish --packagePath $vsix"
-                ;;
-        esac
-    fi
 fi
