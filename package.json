@@ -1,9 +1,9 @@
 {
-  "name": "prime-agent-vscode",
-  "displayName": "Prime Agent",
-  "description": "Chat with Prime Agent from VS Code. Streams from the Prime Agent RPC protocol with full tool-call visibility.",
-  "version": "1.0.33",
-  "publisher": "sirouk",
+  "name": "brief",
+  "displayName": "Brief",
+  "description": "Prime Agent in VS Code, as the Brief POC 1 runtime shell.",
+  "version": "0.2.4",
+  "publisher": "litechenacc",
   "license": "MIT",
   "icon": "media/icon.png",
   "keywords": [
@@ -17,12 +17,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/sirouk/prime-agent-vscode"
+    "url": "https://github.com/litechenacc/brief"
   },
-  "homepage": "https://github.com/sirouk/prime-agent-vscode",
-  "bugs": "https://github.com/sirouk/prime-agent-vscode/issues",
+  "homepage": "https://github.com/litechenacc/brief",
+  "bugs": "https://github.com/litechenacc/brief/issues",
   "galleryBanner": {
-    "color": "#0f0f0f",
+    "color": "#1e1e1e",
     "theme": "dark"
   },
   "capabilities": {
@@ -46,8 +46,8 @@
       "activitybar": [
         {
           "id": "prime-agent",
-          "title": "Prime Agent",
-          "icon": "media/icon.svg"
+          "title": "Brief",
+          "icon": "media/activity.svg"
         }
       ]
     },
@@ -56,9 +56,7 @@
         {
           "id": "primeAgent.chat",
           "type": "webview",
-          "name": "Chat",
-          "icon": "media/icon.svg",
-          "contextualTitle": "Prime Agent"
+          "name": "Brief"
         }
       ]
     },
@@ -67,67 +65,79 @@
         "command": "primeAgent.openChat",
         "title": "Open Chat in Editor Tab",
         "icon": "$(comment-discussion)",
-        "category": "Prime Agent"
+        "category": "Brief"
       },
       {
         "command": "primeAgent.focusChat",
         "title": "Focus Chat",
         "icon": "$(comment-discussion)",
-        "category": "Prime Agent"
+        "category": "Brief"
       },
       {
         "command": "primeAgent.newSession",
         "title": "New Session",
         "icon": "$(add)",
-        "category": "Prime Agent"
+        "category": "Brief"
       },
       {
         "command": "primeAgent.abort",
         "title": "Stop Agent",
         "icon": "$(debug-stop)",
-        "category": "Prime Agent"
+        "category": "Brief"
       },
       {
         "command": "primeAgent.compact",
         "title": "Compact Context",
         "icon": "$(fold)",
-        "category": "Prime Agent"
+        "category": "Brief"
       },
       {
         "command": "primeAgent.installAgentExtension",
-        "title": "Install Background Jobs Agent Extension…",
+        "title": "Install Background Jobs Agent Extension\u2026",
         "icon": "$(cloud-download)",
-        "category": "Prime Agent"
+        "category": "Brief"
       },
       {
         "command": "primeAgent.exportChat",
-        "title": "Export Chat…",
+        "title": "Export Chat\u2026",
         "icon": "$(export)",
-        "category": "Prime Agent"
+        "category": "Brief"
       },
       {
         "command": "primeAgent.history",
-        "title": "Resume Recent Session…",
+        "title": "Sessions in this workspace",
         "icon": "$(history)",
-        "category": "Prime Agent"
+        "category": "Brief"
+      },
+      {
+        "command": "primeAgent.renameSession",
+        "title": "Rename Session",
+        "icon": "$(edit)",
+        "category": "Brief"
+      },
+      {
+        "command": "primeAgent.openPrimeIntellect",
+        "title": "Visit Prime Intellect",
+        "icon": "$(link-external)",
+        "category": "Brief"
       },
       {
         "command": "primeAgent.restart",
         "title": "Restart Agent Process",
         "icon": "$(debug-restart)",
-        "category": "Prime Agent"
+        "category": "Brief"
       },
       {
         "command": "primeAgent.addSelectionToChat",
         "title": "Add Selection to Chat",
         "icon": "$(symbol-snippet)",
-        "category": "Prime Agent"
+        "category": "Brief"
       },
       {
         "command": "primeAgent.addActiveFileToChat",
         "title": "Add Active File to Chat",
         "icon": "$(file)",
-        "category": "Prime Agent"
+        "category": "Brief"
       }
     ],
     "menus": {
@@ -143,11 +153,58 @@
           "group": "9_primeagent@2"
         }
       ],
+      "view/title": [
+        {
+          "command": "primeAgent.newSession",
+          "when": "view == primeAgent.chat",
+          "group": "navigation@1"
+        },
+        {
+          "command": "primeAgent.history",
+          "when": "view == primeAgent.chat",
+          "group": "navigation@2"
+        },
+        {
+          "command": "primeAgent.renameSession",
+          "when": "view == primeAgent.chat",
+          "group": "navigation@3"
+        },
+        {
+          "command": "primeAgent.compact",
+          "when": "view == primeAgent.chat",
+          "group": "1_session@2"
+        },
+        {
+          "command": "primeAgent.exportChat",
+          "when": "view == primeAgent.chat",
+          "group": "1_session@3"
+        },
+        {
+          "command": "primeAgent.restart",
+          "when": "view == primeAgent.chat",
+          "group": "1_session@4"
+        },
+        {
+          "command": "primeAgent.openPrimeIntellect",
+          "when": "view == primeAgent.chat",
+          "group": "2_links@1"
+        }
+      ],
       "editor/title": [
         {
           "command": "primeAgent.focusChat",
           "when": "editorTextFocus",
           "group": "navigation@99"
+        },
+        {
+          "command": "primeAgent.newSession",
+          "when": "activeWebviewPanelId == 'primeAgent.chatPanel'",
+          "group": "navigation@1"
+        },
+        {
+          "command": "primeAgent.history",
+          "when": "activeWebviewPanelId == 'primeAgent.chatPanel'",
+          "group": "navigation@2"
         }
       ],
       "commandPalette": [
@@ -214,6 +271,16 @@
           ],
           "default": "steer",
           "description": "How messages sent while the agent is working are delivered: steer interrupts after the current turn, followUp waits until the run ends. Toggleable per-run in the chat rail."
+        },
+        "primeAgent.liveTranscript": {
+          "type": "boolean",
+          "default": false,
+          "description": "Paint thinking and tool-call arguments as they stream. Off (default) keeps unfinished parts behind the working row until thinking settles, a tool starts running, or reply text appears."
+        },
+        "primeAgent.streamToolOutput": {
+          "type": "boolean",
+          "default": false,
+          "description": "Paint tool output as it arrives. Off (default) waits until the tool finishes. Independent of liveTranscript."
         }
       }
     }
@@ -224,7 +291,7 @@
     "typecheck": "tsc --noEmit",
     "package": "node esbuild.config.mjs --production && npx @vscode/vsce package --no-dependencies",
     "smoke": "node test/smoke.mjs",
-    "test": "node test/agent-locator.test.mjs && node test/activate.test.mjs && node test/chat-view-message.test.mjs && node test/session-controller-boundary.test.mjs && node test/attach-lifecycle.test.mjs && node test/session-actions.test.mjs && node test/webview.test.mjs && node test/transcript-window.test.mjs && node test/thread-diffs.test.mjs && node test/processes.test.mjs && node test/agent-jobs.test.mjs && node test/background-jobs.test.mjs && node test/export-md.test.mjs && node test/recent-sessions-tail.test.mjs && node test/roster-parity.test.mjs && node test/crosswire.test.mjs && node test/image-fit.test.mjs && node test/transport-regression.test.mjs && node test/owner-visibility.test.mjs",
+    "test": "node test/agent-locator.test.mjs && node test/activate.test.mjs && node test/chat-view-message.test.mjs && node test/session-controller-boundary.test.mjs && node test/attach-lifecycle.test.mjs && node test/session-actions.test.mjs && node test/webview.test.mjs && node test/transcript-window.test.mjs && node test/thread-diffs.test.mjs && node test/processes.test.mjs && node test/background-task-tracker.test.mjs && node test/agent-jobs.test.mjs && node test/background-jobs.test.mjs && node test/export-md.test.mjs && node test/recent-sessions-tail.test.mjs && node test/roster-parity.test.mjs && node test/crosswire.test.mjs && node test/image-fit.test.mjs && node test/transport-regression.test.mjs && node test/owner-visibility.test.mjs",
     "test:live": "node esbuild.config.mjs && node test/extension-load.mjs && node test/daemon-parity.mjs --require-daemon && node test/owned-roster.mjs --require-daemon && node test/host-e2e.mjs && node test/smoke.mjs",
     "test:e2e": "node test/vscode-e2e.mjs",
     "test:shots": "node test/preview-shot.mjs",

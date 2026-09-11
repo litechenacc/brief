@@ -39,3 +39,9 @@ dist/background-jobs.cjs
 # is what let 4 MB of symbol map — naming the very files this file excludes —
 # into the locally packaged vsix.
 graphify-out/**
+
+# Repo-level product docs live next to the extension after flattening vscode/.
+docs/**
+prd.md
+issues.md
+justfile
