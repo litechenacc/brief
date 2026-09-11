@@ -327,6 +327,39 @@ textarea.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbl
 const promptMsg = posted.find((m) => m.type === "prompt");
 check("enter sends prompt", !!promptMsg && promptMsg.payload.text === "test prompt");
 
+// --- IME composition: the mirror must show the composing range, and Enter must
+// not send while a candidate is still being chosen (the native underline is
+// invisible because the textarea is color:transparent).
+posted.length = 0;
+textarea.value = "輸入";
+textarea.selectionStart = 0;
+textarea.selectionEnd = 2;
+textarea.dispatchEvent(new window.CompositionEvent("compositionstart", { data: "輸入" }));
+textarea.dispatchEvent(new window.CompositionEvent("compositionupdate", { data: "輸入" }));
+textarea.dispatchEvent(new window.InputEvent("input", { data: "輸入", isComposing: true, bubbles: true }));
+check("composing range is underlined on the mirror",
+	[...document.querySelectorAll(".composer-mirror .ime")].some((n) => n.textContent === "輸入"),
+	document.querySelector(".composer-mirror")?.innerHTML ?? "<none>");
+textarea.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, isComposing: true }));
+check("Enter during composition does not send", !posted.some((m) => m.type === "prompt"), JSON.stringify(posted.map((m) => m.type)));
+textarea.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, isComposing: true, keyCode: 229 }));
+check("IME keyCode 229 Enter does not send", !posted.some((m) => m.type === "prompt"));
+textarea.dispatchEvent(new window.CompositionEvent("compositionend", { data: "輸入" }));
+textarea.dispatchEvent(new window.InputEvent("input", { data: "輸入", bubbles: true }));
+check("underline clears after compositionend",
+	document.querySelectorAll(".composer-mirror .ime").length === 0,
+	document.querySelector(".composer-mirror")?.innerHTML ?? "<none>");
+const confirmEnter = new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+textarea.dispatchEvent(confirmEnter);
+check("Enter that confirms composition does not send", !posted.some((m) => m.type === "prompt"), JSON.stringify(posted.map((m) => m.type)));
+await new Promise((resolve) => setTimeout(resolve, 0));
+posted.length = 0;
+textarea.value = "輸入";
+textarea.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+check("Enter after composition sends the committed text",
+	posted.some((m) => m.type === "prompt" && m.payload.text === "輸入"),
+	JSON.stringify(posted.filter((m) => m.type === "prompt").map((m) => m.payload?.text)));
+
 // --- history view (grouped) ---
 posted.length = 0;
 const historyBtn = [...document.querySelectorAll(".icon-btn")].find((b) => b.title === "Sessions in this workspace");

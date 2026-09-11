@@ -97,6 +97,12 @@ export class Composer {
 	 * mentions, and #19 asked for a mention to *look* selected.
 	 */
 	private accepted = new Set<string>();
+	/** IME composition range in `textarea.value`, painted on the mirror. */
+	private composing = false;
+	private compositionStart = 0;
+	private compositionEnd = 0;
+	/** Confirming an IME candidate with Enter must not also send the prompt. */
+	private swallowEnterAfterComposition = false;
 
 	constructor(private readonly deps: ComposerDeps) {
 		this.root = el("div", "composer-dock");
@@ -173,12 +179,32 @@ export class Composer {
 		card.appendChild(this.autocompleteEl);
 
 		this.textarea.addEventListener("keydown", (event) => this.onKeyDown(event));
+		this.textarea.addEventListener("compositionstart", () => {
+			this.composing = true;
+			const caret = this.textarea.selectionStart ?? 0;
+			this.compositionStart = caret;
+			this.compositionEnd = caret;
+		});
+		this.textarea.addEventListener("compositionupdate", (event) => {
+			this.refreshCompositionRange(event.data);
+			this.autoGrow();
+		});
+		this.textarea.addEventListener("compositionend", () => {
+			this.composing = false;
+			this.compositionStart = 0;
+			this.compositionEnd = 0;
+			// Chromium fires keydown Enter after compositionend for a confirm.
+			this.swallowEnterAfterComposition = true;
+			window.setTimeout(() => { this.swallowEnterAfterComposition = false; }, 0);
+			this.autoGrow();
+		});
 		this.textarea.addEventListener("input", () => {
 			// Real typing ends history browsing: from here the text is the
 			// operator's, so Up must go back to moving the caret.
 			this.historyIndex = null;
+			if (this.composing) this.refreshCompositionRange();
 			this.autoGrow();
-			this.updateAutocomplete();
+			if (!this.composing) this.updateAutocomplete();
 			window.clearTimeout(this.draftDebounce);
 			this.draftDebounce = window.setTimeout(() => this.deps.onDraftChanged(this.textarea.value), 300);
 		});
@@ -188,7 +214,7 @@ export class Composer {
 		this.textarea.addEventListener("click", () => this.updateAutocomplete());
 		this.textarea.addEventListener("keyup", (event) => {
 			// ArrowUp/Down belong to the open panel — they move the selection, not the caret.
-			if (CARET_KEYS.has(event.key)) this.updateAutocomplete();
+			if (CARET_KEYS.has(event.key) && !this.composing) this.updateAutocomplete();
 		});
 		this.textarea.addEventListener("scroll", () => {
 			if (this.mirror) this.mirror.scrollTop = this.textarea.scrollTop;
@@ -789,6 +815,7 @@ export class Composer {
 	// ---------------------------------------------------------------
 
 	send(): void {
+		if (this.composing) return;
 		// Keyboard paths (Enter) bypass the disabled button, so the gate lives here too.
 		if (!this.canSend()) return;
 		const text = this.textarea.value.trim();
@@ -1020,6 +1047,13 @@ export class Composer {
 	}
 
 	private onKeyDown(event: KeyboardEvent): void {
+		// IME candidate keys (arrows, Enter, numbers) must reach the IME.
+		// keyCode 229 is the legacy "processing" sentinel some IMEs still send.
+		if (event.isComposing || event.keyCode === 229) return;
+		if (this.swallowEnterAfterComposition && event.key === "Enter") {
+			event.preventDefault();
+			return;
+		}
 		if (this.acKind) {
 			if (event.key === "ArrowDown") {
 				event.preventDefault();
@@ -1123,6 +1157,38 @@ export class Composer {
 		if (this.textarea.title !== title) this.textarea.title = title;
 	}
 
+	/**
+	 * Where the IME is currently composing. Prefer the live selection while
+	 * composition is active; `event.data` is the fallback when the selection
+	 * has not yet moved over the candidate.
+	 */
+	private refreshCompositionRange(data?: string): void {
+		const value = this.textarea.value;
+		const selStart = this.textarea.selectionStart ?? 0;
+		const selEnd = this.textarea.selectionEnd ?? selStart;
+		if (selEnd > selStart) {
+			this.compositionStart = selStart;
+			this.compositionEnd = selEnd;
+			return;
+		}
+		if (data && data.length > 0) {
+			const fromCaret = Math.max(0, selStart - data.length);
+			if (value.slice(fromCaret, selStart) === data) {
+				this.compositionStart = fromCaret;
+				this.compositionEnd = selStart;
+				return;
+			}
+			const at = value.lastIndexOf(data, selStart);
+			if (at >= 0) {
+				this.compositionStart = at;
+				this.compositionEnd = at + data.length;
+				return;
+			}
+		}
+		this.compositionEnd = selStart;
+		if (this.compositionStart > this.compositionEnd) this.compositionStart = this.compositionEnd;
+	}
+
 	private syncMirror(): void {
 		if (!this.mirror) return;
 		const text = this.textarea.value;
@@ -1135,17 +1201,40 @@ export class Composer {
 			.replace(/>/g, "&gt;")
 			.replace(/"/g, "&quot;")
 			.replace(/'/g, "&#39;");
-		let html = "";
-		let last = 0;
-		for (const range of this.mentionRanges(text)) {
-			if (range.start > last) html += esc(text.slice(last, range.start));
-			// data-path, not title: the mirror is pointer-events:none beneath an
-			// opaque textarea, so a title here could never fire. updateMentionHover
-			// hit-tests these rects and lends the tooltip to the textarea instead.
-			html += `<span class="mm" data-path="${esc(range.path)}">@${esc(range.path)}</span>`;
-			last = range.end;
+		const mentions = this.mentionRanges(text);
+		const imeStart = Math.max(0, Math.min(this.compositionStart, text.length));
+		const imeEnd = Math.max(0, Math.min(this.compositionEnd, text.length));
+		const ime = this.composing && imeEnd > imeStart ? { start: imeStart, end: imeEnd } : null;
+		const points = new Set<number>([0, text.length]);
+		for (const range of mentions) {
+			points.add(range.start);
+			points.add(range.end);
 		}
-		if (last < text.length) html += esc(text.slice(last));
+		if (ime) {
+			points.add(ime.start);
+			points.add(ime.end);
+		}
+		const sorted = [...points].filter((n) => n >= 0 && n <= text.length).sort((a, b) => a - b);
+		let html = "";
+		const mentionAt = (index: number) => mentions.find((range) => range.start <= index && index < range.end);
+		const inIme = (index: number) => !!ime && ime.start <= index && index < ime.end;
+		for (let i = 0; i < sorted.length - 1; i++) {
+			const from = sorted[i];
+			const to = sorted[i + 1];
+			if (to <= from) continue;
+			const slice = esc(text.slice(from, to));
+			const mention = mentionAt(from);
+			const composing = inIme(from);
+			if (mention && composing) {
+				html += `<span class="mm" data-path="${esc(mention.path)}"><span class="ime">${slice}</span></span>`;
+			} else if (mention) {
+				html += `<span class="mm" data-path="${esc(mention.path)}">${slice}</span>`;
+			} else if (composing) {
+				html += `<span class="ime">${slice}</span>`;
+			} else {
+				html += slice;
+			}
+		}
 		// A trailing newline collapses without this spacer — keep rows visible.
 		if (text.endsWith("\n") || text.length === 0) html += " ";
 		this.mirror.innerHTML = html;
