@@ -13,7 +13,7 @@ import { promisify } from "node:util";
 import * as vscode from "vscode";
 import { locateAgent, type LocatedAgent } from "./agent-locator.js";
 import { DaemonSidecar } from "./daemon-sidecar.js";
-import { defaultAgentDir, resolveOwnerClientId, resolveWorkerDescriptor, type OwnerLookup } from "./daemon-owner.js";
+import { resolveOwnerClientId, resolveWorkerDescriptor } from "./daemon-owner.js";
 import type { AttachSnapshot, DaemonServerMessage, RosterEntry, SavedSessionInfo, SessionSummaryRef } from "./daemon-sidecar.js";
 import type {
 	AgentEvent,
@@ -28,17 +28,12 @@ import type {
 	RpcSessionState,
 	RpcSlashCommand,
 	SessionChild,
-	SessionProcess,
 	StatusSnapshot,
 } from "./protocol.js";
 import { DebugFileLog } from "./debug-log.js";
 import { buildMarkdownExport } from "./markdown-export.js";
 import { listRecentSessions, normalizeFsPath } from "./recent-sessions.js";
 import { deriveSessionLabel, firstUserPrompt } from "./session-label.js";
-import { AgentJobIndex } from "./agent-jobs.js";
-import { BackgroundTaskTracker, backgroundTasksDir } from "./background-task-tracker.js";
-import { ProcessTracker, tailFile } from "./process-tracker.js";
-import { ThreadDiffTracker } from "./thread-diffs.js";
 import { archiveSessionFile, deleteSession, isSessionActive, renameSessionOffline } from "./session-actions.js";
 import { RpcClient } from "./rpc-client.js";
 
@@ -111,10 +106,6 @@ interface ResolvedHistorySession extends RecentSession {
 	fileId: string;
 }
 
-// Re-exported so extension.ts and the controller-bundle harnesses keep one
-// import site while the implementation lives in its own module.
-export { GitHeadContentProvider } from "./git-head-provider.js";
-
 export class SessionController implements vscode.Disposable {
 	private client: RpcClient | null = null;
 	private disposed = false;
@@ -148,8 +139,6 @@ export class SessionController implements vscode.Disposable {
 	private startGeneration = 0;
 	private sinks = new Set<WebviewSink>();
 	private disposables: vscode.Disposable[] = [];
-	private watcher: vscode.FileSystemWatcher | null = null;
-	private changedFiles = new Set<string>();
 	private state: RpcSessionState | null = null;
 	private cachedMessages: AgentMessage[] = [];
 	private extensionStatusText: string | undefined;
@@ -242,8 +231,6 @@ export class SessionController implements vscode.Disposable {
 		private readonly output: vscode.OutputChannel,
 	) {
 		this.restoreHistoryUiState();
-		this.startWatcher();
-		this.scheduleProcessRefresh(0);
 		this.disposables.push(
 			vscode.workspace.onDidChangeConfiguration((event) => {
 				if (
@@ -300,9 +287,6 @@ export class SessionController implements vscode.Disposable {
 		// webview is destroyed on every hide, so without this the operator's next
 		// visit to history starts from an empty list and flashes "Loading…".
 		if (this.lastHistory) sink.post({ type: "history", sessions: this.lastHistory });
-		// Same reason as history: the panel would otherwise stay empty until the
-		// next poll, which is exactly when a live process matters most.
-		if (this.lastProcesses) sink.post({ type: "processes", processes: this.lastProcesses });
 		return new vscode.Disposable(() => this.sinks.delete(sink));
 	}
 
@@ -508,8 +492,6 @@ export class SessionController implements vscode.Disposable {
 			this.releaseOwnerIdentity();
 			if (!this.isForegroundRpcClient(client)) return;
 			this.clearRunFlags();
-			this.clearChangedFiles();
-			this.threadDiffs.clear();
 			if (!this.intentionalStop) {
 				this.broadcast({ type: "notice", level: "warning", text: `Agent process exited (code ${code ?? "?"}). Use Restart to start it again.` });
 			}
@@ -587,11 +569,7 @@ export class SessionController implements vscode.Disposable {
 		this.statsTimer = null;
 		if (this.installWatchdog) clearTimeout(this.installWatchdog);
 		this.installWatchdog = null;
-		if (this.processTimer) clearTimeout(this.processTimer);
-		this.processTimer = null;
-		this.threadDiffs.clear();
 		this.sidecar?.dispose();
-		this.watcher?.dispose();
 		for (const d of this.disposables) d.dispose();
 		this.sinks.clear();
 		this.debugLog.dispose();
@@ -613,27 +591,12 @@ export class SessionController implements vscode.Disposable {
 		switch (event.type) {
 			case "agent_start":
 				this.streaming = true;
-				this.changedFiles.clear();
-				// The finished rows are this thread's receipts, cleared with the rest
-				// of the per-run strips. Anything still running keeps its row.
-				this.processes.clearFinished();
-				this.agentJobs.clearFinished();
-				this.scheduleProcessRefresh(0);
-				// The strip and the attribution that filters it are both per-run, so
-				// they have to reset together. Keeping attribution cumulative while
-				// the strip resets is what let an edit from an earlier run hide your
-				// own later save of the same file.
-				this.threadDiffs.startRun();
-				this.broadcast({ type: "changedFiles", files: [] });
 				break;
 			case "agent_end":
 				this.streaming = false;
 				this.retrying = false;
 				this.onBusySettled();
 				this.scheduleChildrenRefresh();
-				// A command that outlives the turn becomes unexplained the instant the
-				// turn ends, so promote it now rather than up to a poll later.
-				this.scheduleProcessRefresh(0);
 				// Rank only moves when the turn is done and the agent is waiting.
 				this.markHistoryWaitingForUser();
 				this.scheduleHistoryRefresh();
@@ -668,11 +631,6 @@ export class SessionController implements vscode.Disposable {
 				this.scheduleHistoryRefresh();
 				break;
 		}
-		this.trackChangedFilesDone(event);
-		this.threadDiffs.track(event);
-		// A `background` tool result is a job announcing that it started; the
-		// completion arrives as a custom message and lands via rebuildFromMessages.
-		if (this.agentJobs.track(event)) this.republishProcesses();
 		if (this.isCreatingSession()) return;
 		this.broadcast({ type: "event", event });
 		// Hot path: reuse cached stats; expensive stats refresh only on transitions.
@@ -726,41 +684,6 @@ export class SessionController implements vscode.Disposable {
 
 	private onBusySettled(): void {
 		void this.refreshStateAndStats();
-		this.changedFilesNeedRecompute = false;
-		if (this.changedFiles.size > 0) this.pushChangedFiles();
-	}
-
-	/** Set when a diff post could not refresh the strip because a run looked live. */
-	private changedFilesNeedRecompute = false;
-
-	/**
-	 * The changed-files strip is what the watcher saw MINUS what this session can
-	 * prove it edited. Both the main agent's edits and its subagents' count as
-	 * this session's work, so both come out — they are already presented, with
-	 * attribution, in the Changes panel, and listing them twice invited the
-	 * reading that something else had touched them.
-	 *
-	 * What is left is genuinely outside the session's edit tool: your own saves,
-	 * another thread, a build step — plus the one honest overlap, a file the
-	 * agent rewrote from a shell or Python cell, which publishes no diff to
-	 * attribute it by.
-	 */
-	private pushChangedFiles(): void {
-		// Compare on a canonical key. The watcher's paths come from
-		// asRelativePath (always forward slashes, on-disk case) while a tool path
-		// is whatever the model wrote — a backslash or a different case on a
-		// case-insensitive filesystem is the same file and must filter as one.
-		const edited = new Set([...this.threadDiffs.editedPaths()].map((file) => canonicalRelPath(file)));
-		this.broadcast({
-			type: "changedFiles",
-			files: [...this.changedFiles].filter((file) => !edited.has(canonicalRelPath(file))).sort(),
-		});
-	}
-
-	/** Clear the session-scoped strip in both host state and every visible webview. */
-	private clearChangedFiles(): void {
-		this.changedFiles.clear();
-		this.broadcast({ type: "changedFiles", files: [] });
 	}
 
 	// ------------------------------------------------------------------
@@ -869,7 +792,6 @@ export class SessionController implements vscode.Disposable {
 		this.resetChildrenBaseline();
 		this.resetViewedSessionState();
 		this.clearRunFlags();
-		this.threadDiffs.clear();
 		this.broadcast({ type: "sessionChildren", children: [] });
 		this.broadcast({
 			type: "snapshot",
@@ -986,7 +908,6 @@ export class SessionController implements vscode.Disposable {
 		// session the operator just left.
 		this.compactionModelsTried.clear();
 		this.noticeActions.clear();
-		this.clearChangedFiles();
 	}
 
 	/**
@@ -1002,7 +923,6 @@ export class SessionController implements vscode.Disposable {
 		this.state = null;
 		this.rentedState = null;
 		this.clearRunFlags();
-		this.threadDiffs.clear();
 		this.broadcast({ type: "sessionChildren", children: [] });
 		this.broadcast({
 			type: "snapshot",
@@ -1922,12 +1842,10 @@ export class SessionController implements vscode.Disposable {
 			[
 				{ label: "Markdown, tool calls summarized", detail: "Compact .md for humans — one line per tool call", mode: "md-tools" },
 				{ label: "Markdown, without tool calls", detail: "Conversation only (.md)", mode: "md-clean" },
-				{ label: "HTML", detail: "Full interactive transcript via the agent", mode: "html" },
 			] as Array<{ label: string; detail: string; mode: string }>,
 			{ title: "Export chat" },
 		);
 		if (!picked || this.disposed || epoch !== this.viewEpoch || this.attached !== attached || this.observingId || this.observationRestoring) return;
-		if (picked.mode === "html") return this.exportHtml();
 		await this.exportMarkdown(picked.mode === "md-tools");
 	}
 
@@ -1947,44 +1865,6 @@ export class SessionController implements vscode.Disposable {
 		if (!picked || this.disposed || epoch !== this.viewEpoch || this.attached !== attached || this.observingId || this.observationRestoring) return;
 		await vscode.workspace.fs.writeFile(picked, Buffer.from(md, "utf8"));
 		void vscode.window.showInformationMessage(`Chat exported to ${picked.fsPath}`);
-	}
-
-	async exportHtml(): Promise<void> {
-		if (this.guardObservedReadOnly("exporting this conversation")) return;
-		if (!this.workspaceRoot) return;
-		const epoch = this.viewEpoch;
-		const attached = this.attached;
-		const target = vscode.Uri.file(path.join(this.workspaceRoot, `prime-agent-session-${Date.now()}.html`));
-		const picked = await vscode.window.showSaveDialog({ defaultUri: target, filters: { HTML: ["html"] } });
-		if (!picked || this.disposed || epoch !== this.viewEpoch || this.attached !== attached || this.observingId || this.observationRestoring) return;
-		if (attached) {
-			try {
-				const sidecar = await this.ensureSidecar();
-				if (!this.isCurrentAttachment(attached)) return;
-				await sidecar.request({ type: "export_html", activeSessionId: attached.activeSessionId, outputPath: picked.fsPath }, 60_000);
-				if (!this.isCurrentAttachment(attached)) return;
-				void vscode.window.showInformationMessage(`Chat exported to ${picked.fsPath}`);
-				} catch (err) {
-					if (this.isCurrentAttachment(attached)) this.broadcast({ type: "notice", level: "error", text: `Export failed: ${err instanceof Error ? err.message : String(err)}` });
-			}
-			return;
-		}
-		await this.ensureStarted();
-		const client = this.client;
-		if (!client || !this.isCurrentRpcView(client, epoch)) return;
-		try {
-			const response = await client.request({ type: "export_html", outputPath: picked.fsPath }, 60_000);
-			if (!this.isCurrentRpcView(client, epoch)) return;
-			if (response.success) {
-				void vscode.window.showInformationMessage(`Chat exported to ${picked.fsPath}`);
-			} else {
-				this.broadcast({ type: "notice", level: "error", text: `Export failed: ${response.error ?? "unknown error"}` });
-			}
-		} catch (err) {
-			if (this.isCurrentRpcView(client, epoch)) {
-				this.broadcast({ type: "notice", level: "error", text: `Export failed: ${err instanceof Error ? err.message : String(err)}` });
-			}
-		}
 	}
 
 	async setModel(provider: string, modelId: string): Promise<void> {
@@ -3122,12 +3002,6 @@ export class SessionController implements vscode.Disposable {
 		if (inFlight?.role === "assistant") {
 			this.broadcast({ type: "event", event: { type: "message_start", message: inFlight } as AgentEvent });
 		}
-		// The Changes panel has to be derived from the snapshot too. Attaching and
-		// catch-up frames both land a thread whose edits already happened, and a
-		// `session_replaced` frame exists precisely because the live events we
-		// accumulate from were withheld.
-		this.threadDiffs.rebuildFromMessages(this.cachedMessages);
-		if (this.agentJobs.rebuildFromMessages(this.cachedMessages)) this.republishProcesses();
 		this.pushStatus();
 	}
 
@@ -3205,7 +3079,6 @@ export class SessionController implements vscode.Disposable {
 			void this.refreshAttachedState();
 			this.scheduleChildrenRefresh();
 			this.resetViewedSessionState();
-			this.threadDiffs.clear();
 			// Stats before the first paint: otherwise the gauge shows the previous
 			// session's context until the throttled status push catches up.
 			await this.fetchAttachedStats();
@@ -3284,16 +3157,6 @@ export class SessionController implements vscode.Disposable {
 		this.rentedState = null;
 		// The run we were following belongs to the session we just let go of.
 		this.clearRunFlags();
-		// So do its changes and its subagents' — every caller here is landing on a
-		// different session. Leaving them would credit this thread with edits it
-		// never made; the snapshot that follows rebuilds the real ones.
-		//
-		// Order matters: clearing the tracker posts, and that post recomputes the
-		// changed-files strip. Drop the watcher's set FIRST or the strip is
-		// recomputed against an empty attribution map and re-lists every file the
-		// agent just edited as somebody else's work.
-		this.clearChangedFiles();
-		this.threadDiffs.clear();
 		this.clearReattachTimer();
 		return true;
 	}
@@ -3452,297 +3315,6 @@ export class SessionController implements vscode.Disposable {
 		}
 	}
 
-	// ------------------------------------------------------------------
-	// Background processes
-	// ------------------------------------------------------------------
-
-	/**
-	 * The processes panel: what the agent started that is still alive.
-	 *
-	 * This lane exists because the header could only ever answer "is a turn
-	 * streaming". A command the agent left running after its turn ended is real
-	 * work with no representation anywhere else on screen — not in the transcript
-	 * (its tool call already closed), not in the subagent strip, not in `status`.
-	 *
-	 * Three local reads feed it: extension-owned jobs, `background_task` receipts
-	 * under the session's artifacts dir, and a worker descriptor / orphan journal /
-	 * `ps` listing (see process-tracker.ts). None of them ask the daemon, so the
-	 * panel keeps working after `agent_end` when the event-driven roster refresh
-	 * has gone quiet — which is the exact window it is for.
-	 */
-	private readonly processes = new ProcessTracker((line) => this.debugLog.append(line));
-	/**
-	 * Jobs the `background-jobs` agent extension owns. Preferred over anything the
-	 * tracker reconstructs: these carry an exit code, a published log and a job id
-	 * the agent will act on, none of which can be recovered from outside.
-	 */
-	private readonly agentJobs = new AgentJobIndex();
-	/**
-	 * Prime Agent `background_task` skill receipts on disk. No RPC event carries
-	 * them, so this is a directory poll of the session on screen — parent jobs on
-	 * the parent, child jobs only after browsing into that child.
-	 */
-	private readonly backgroundTasks = new BackgroundTaskTracker();
-	private processTimer: ReturnType<typeof setTimeout> | null = null;
-	private processRefreshInFlight = false;
-	/** Last payload sent, so an unchanged panel does not repaint every poll. */
-	private lastProcessPayload: string | null = null;
-	private lastProcesses: SessionProcess[] | null = null;
-	/** Refs the operator removed from the panel. Disk receipts stay; only the row goes. */
-	private readonly dismissedProcessRefs = new Set<string>();
-	/** Poll fast only while there is something to watch. */
-	private static readonly PROCESS_POLL_ACTIVE_MS = 2_500;
-	private static readonly PROCESS_POLL_IDLE_MS = 6_000;
-
-	private scheduleProcessRefresh(delayMs?: number): void {
-		if (this.disposed) return;
-		if (this.processTimer) {
-			if (delayMs !== 0) return;
-			clearTimeout(this.processTimer);
-			this.processTimer = null;
-		}
-		const wait =
-			delayMs ??
-			(this.processes.runningCount > 0 || this.backgroundTasks.runningCount > 0
-				? SessionController.PROCESS_POLL_ACTIVE_MS
-				: SessionController.PROCESS_POLL_IDLE_MS);
-		this.processTimer = setTimeout(() => {
-			this.processTimer = null;
-			void this.refreshProcesses().finally(() => this.scheduleProcessRefresh());
-		}, wait);
-	}
-
-	/** The worker whose journal describes the session currently on screen. */
-	private processLookup(): OwnerLookup | null {
-		const sessionFile = this.attached?.sessionPath ?? this.state?.sessionFile;
-		const activeSessionId = this.attached?.activeSessionId;
-		if (!sessionFile && !activeSessionId) return null;
-		return {
-			...(sessionFile ? { sessionFile } : {}),
-			...(activeSessionId ? { activeSessionId } : {}),
-		};
-	}
-
-	private async refreshProcesses(): Promise<void> {
-		if (this.disposed || this.processRefreshInFlight) return;
-		// An observed transcript is someone else's session, read-only by design.
-		// Its worker's processes are not ours to present as this view's work.
-		const lookup = this.observingId ? null : this.processLookup();
-		if (!lookup) {
-			this.backgroundTasks.reset();
-			this.publishProcesses([]);
-			return;
-		}
-		this.processRefreshInFlight = true;
-		try {
-			this.backgroundTasks.refresh(backgroundTasksDir(lookup.sessionFile));
-			this.publishProcesses(
-				await this.processes.refresh(lookup, {
-					streaming: this.effectiveStreaming(),
-					skipPids: new Set([...this.agentJobs.knownPids(), ...this.backgroundTasks.knownPids()]),
-				}),
-			);
-		} catch (err) {
-			// A missing worker, an unreadable journal or a ps that will not run is
-			// "we learned nothing", never an empty panel claiming everything ended.
-			this.debugLog.append(`processes: refresh failed: ${err instanceof Error ? err.message : String(err)}`);
-		} finally {
-			this.processRefreshInFlight = false;
-		}
-	}
-
-	/**
-	 * Publish the panel: extension-owned jobs first, then skill receipts, then
-	 * whatever the tracker observed that neither already accounts for. Three
-	 * sources, one list, and the better-evidenced rows lead it.
-	 */
-	private publishProcesses(observed: SessionProcess[]): void {
-		const owned = this.agentJobs.snapshot();
-		const tasks = this.backgroundTasks.snapshot();
-		// Running jobs only, for the same reason knownPids() is: a finished job must
-		// not suppress an unrelated process that inherited its pid.
-		const skipPids = new Set([...this.agentJobs.knownPids(), ...this.backgroundTasks.knownPids()]);
-		const processes = [
-			...owned,
-			...tasks,
-			...observed.filter(
-				(row) => row.source === "observed" && (row.pid === undefined || !skipPids.has(row.pid)),
-			),
-		].filter((row) => !this.dismissedProcessRefs.has(row.ref));
-		const payload = JSON.stringify(processes);
-		if (payload === this.lastProcessPayload) return;
-		this.lastProcessPayload = payload;
-		this.lastProcesses = processes;
-		this.broadcast({ type: "processes", processes });
-	}
-
-	/** Republish from what we already hold, for a change that needs no polling. */
-	private republishProcesses(): void {
-		this.publishProcesses((this.lastProcesses ?? []).filter((row) => row.source === "observed"));
-	}
-
-	/**
-	 * Answer a row click with the tail of whatever this command writes to a file.
-	 *
-	 * `ref` is a capability we minted, so the webview cannot ask for an arbitrary
-	 * path; the tracker resolves it to the descriptors that process actually
-	 * holds. When there is nothing readable the answer says why instead of
-	 * rendering an empty box that reads as "the command produced no output".
-	 */
-	async previewProcess(ref: string): Promise<void> {
-		if (this.disposed) return;
-		const logPath = this.agentJobs.logPathForRef(ref);
-		if (logPath) {
-			// The extension published this path for exactly this purpose, so unlike
-			// the observed path there is no descriptor hunting and no caveat: this
-			// file is the job's whole stdout and stderr.
-			const tail = tailFile(logPath, 100);
-			this.broadcast({
-				type: "processOutput",
-				preview: tail
-					? { ref, lines: tail.lines, source: logPath, truncated: tail.truncated }
-					: { ref, lines: [], note: `The job's log is not readable yet (${logPath}).` },
-			});
-			return;
-		}
-		const taskPreview = this.backgroundTasks.preview(ref);
-		if (taskPreview) {
-			this.broadcast({ type: "processOutput", preview: taskPreview });
-			return;
-		}
-		this.broadcast({ type: "processOutput", preview: await this.processes.preview(ref) });
-	}
-
-	/**
-	 * Install `agent-extension/background-jobs` into the operator's agent.
-	 *
-	 * The panel prefers extension-reported jobs over anything it can observe from
-	 * outside, and that preference is worth nothing until the extension is
-	 * actually loaded by Prime Agent. Copying it there is the whole install: Prime
-	 * Agent auto-discovers `~/.prime/agent/extensions/<name>/index.ts`.
-	 */
-	async installBackgroundJobsExtension(): Promise<void> {
-		const source = vscode.Uri.joinPath(this.context.extensionUri, "agent-extension", "background-jobs").fsPath;
-		const target = path.join(defaultAgentDir(), "extensions", "background-jobs");
-		try {
-			await fs.access(source);
-		} catch {
-			this.broadcast({ type: "notice", level: "error", text: "This build does not ship the background-jobs agent extension." });
-			return;
-		}
-		let existing = false;
-		try {
-			await fs.access(target);
-			existing = true;
-		} catch {
-			// Not installed yet; the copy below creates it.
-		}
-		const choice = await vscode.window.showInformationMessage(
-			existing ? "Update the background-jobs Prime Agent extension?" : "Install the background-jobs Prime Agent extension?",
-			{
-				modal: true,
-				detail:
-					`${existing ? "Replaces" : "Creates"} ${target}\n\n` +
-					"It lets the agent run commands that outlive a turn, reports their exit codes, " +
-					"wakes the agent when one finishes, and lets you stop one from the Processes panel. " +
-					"Restart your Prime Agent session afterwards to load it.",
-			},
-			existing ? "Update" : "Install",
-		);
-		if (choice !== "Install" && choice !== "Update") return;
-		try {
-			await fs.mkdir(path.dirname(target), { recursive: true });
-			await fs.cp(source, target, { recursive: true, force: true });
-		} catch (err) {
-			this.broadcast({
-				type: "notice",
-				level: "error",
-				text: `Could not install the agent extension: ${err instanceof Error ? err.message : String(err)}`,
-			});
-			return;
-		}
-		this.broadcast({
-			type: "notice",
-			level: "info",
-			text: `Installed the background-jobs agent extension to ${target}. Start a new Prime Agent session to load it.`,
-		});
-	}
-
-	/**
-	 * Stop a background job.
-	 *
-	 * Delivered as `/jobs kill <id>`: Prime Agent checks extension commands before
-	 * anything else, so this runs the extension's handler and never reaches the
-	 * model — no turn, no tokens. Confirmed first because it is irreversible, and
-	 * refused outright for anything but a job the extension owns, since this host
-	 * has no supported way to interrupt a process it merely observed.
-	 */
-	/**
-	 * Hide one finished row. Running work cannot be cleared: it would vanish while
-	 * still executing, and the next poll would bring it back anyway.
-	 */
-	dismissProcess(ref: string): void {
-		if (this.disposed) return;
-		const row = this.lastProcesses?.find((entry) => entry.ref === ref);
-		if (!row || row.state === "running") return;
-		this.dismissedProcessRefs.add(ref);
-		this.republishProcesses();
-	}
-
-	/** Hide every finished row currently on the panel. */
-	dismissFinishedProcesses(): void {
-		if (this.disposed) return;
-		for (const row of this.lastProcesses ?? []) {
-			if (row.state !== "running") this.dismissedProcessRefs.add(row.ref);
-		}
-		this.republishProcesses();
-	}
-
-	/**
-	 * Open this job's captured log in the editor. `ref` is a host-minted
-	 * capability, so the webview cannot name an arbitrary path.
-	 */
-	async openProcessLog(ref: string): Promise<void> {
-		if (this.disposed) return;
-		const files = this.logFilesForRef(ref);
-		if (files.length === 0) {
-			this.broadcast({ type: "notice", level: "warning", text: "That job has no log file to open." });
-			return;
-		}
-		try {
-			for (const file of files) {
-				const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
-				await vscode.window.showTextDocument(doc, { preview: false });
-			}
-		} catch {
-			this.broadcast({ type: "notice", level: "error", text: "Could not open that log in the editor." });
-		}
-	}
-
-	private logFilesForRef(ref: string): string[] {
-		const taskFiles = this.backgroundTasks.logFilesForRef(ref);
-		if (taskFiles) return taskFiles;
-		const jobLog = this.agentJobs.logPathForRef(ref);
-		if (jobLog) return [jobLog];
-		return this.processes.filesForRef(ref);
-	}
-
-	async killProcess(ref: string): Promise<void> {
-		if (this.disposed) return;
-		const job = this.agentJobs.recordForRef(ref);
-		if (!job || job.state !== "running") {
-			this.broadcast({ type: "notice", level: "warning", text: "That job is not running any more." });
-			return;
-		}
-		const choice = await vscode.window.showWarningMessage(
-			`Stop background job ${job.id}?`,
-			{ modal: true, detail: job.command },
-			"Stop job",
-		);
-		if (choice !== "Stop job") return;
-		await this.prompt({ text: `/jobs kill ${job.id}`, images: [], selections: [], streamingBehavior: "steer" });
-	}
-
 	/** Refresh and broadcast the children (subagents) of the CURRENT session. */
 	/** Previous flattened children set (for spawn/retire card derivation). */
 	private previousChildIds: Set<string> | null = null;
@@ -3757,16 +3329,6 @@ export class SessionController implements vscode.Disposable {
 	 * copy on a session change.
 	 */
 	private resetChildrenBaseline(): void {
-		// Process rows belong to one session's worker; carrying them across a switch
-		// would attribute another session's commands to the one on screen.
-		this.processes.reset();
-		this.agentJobs.clear();
-		this.backgroundTasks.reset();
-		this.dismissedProcessRefs.clear();
-		this.lastProcesses = null;
-		this.lastProcessPayload = null;
-		this.broadcast({ type: "processes", processes: [] });
-		this.scheduleProcessRefresh(0);
 		this.childrenContext += 1;
 		this.previousChildIds = null;
 		this.lastChildrenPayload = null;
@@ -3886,10 +3448,6 @@ export class SessionController implements vscode.Disposable {
 				if (this.browseRefByActiveId.get(capability.activeSessionId) === ref) this.browseRefByActiveId.delete(capability.activeSessionId);
 			}
 			if (this.disposed || epoch !== this.viewEpoch || this.attached !== attachment || this.observingId) return;
-			// The Changes panel is "main + subagents combined", and a child's edits
-			// live only in the child's own session file. Harvest before the
-			// unchanged-roster early return below: a stable roster still edits.
-			void this.threadDiffs.harvestSubagents(children);
 			const flat = new Set<string>(children.map(stableId));
 			const prev = this.previousChildIds;
 			const spawnCards = prev === null
@@ -4266,8 +3824,6 @@ export class SessionController implements vscode.Disposable {
 				steerDefault: vscode.workspace.getConfiguration("primeAgent").get<"steer" | "followUp">("defaultStreamingBehavior", "steer"),
 			});
 			if (options.keepDraft !== true) this.restoreDraft();
-			this.threadDiffs.rebuildFromMessages(this.cachedMessages);
-		if (this.agentJobs.rebuildFromMessages(this.cachedMessages)) this.republishProcesses();
 			this.pushStatus();
 			this.repaintChildrenStrip();
 			return true;
@@ -4315,8 +3871,6 @@ export class SessionController implements vscode.Disposable {
 		}
 		if (!this.isCurrentRpcView(client, epoch, allowRestoring)) return false;
 		if (options.keepDraft !== true) this.restoreDraft();
-		this.threadDiffs.rebuildFromMessages(this.cachedMessages);
-		if (this.agentJobs.rebuildFromMessages(this.cachedMessages)) this.republishProcesses();
 		this.pushStatus();
 		this.repaintChildrenStrip();
 		return true;
@@ -4816,83 +4370,6 @@ export class SessionController implements vscode.Disposable {
 			return null;
 		}
 	}
-
-	async openDiff(relPath: string): Promise<void> {
-		const uri = await this.resolveWorkspaceUri(relPath);
-		if (!uri) return;
-		const left = uri.with({ scheme: "prime-agent-git-head" });
-		const title = `${relPath} (changes since HEAD)`;
-		try {
-			await vscode.commands.executeCommand("vscode.diff", left, uri, title);
-		} catch {
-			await this.openFile(relPath);
-		}
-	}
-
-	// ------------------------------------------------------------------
-	// Changed-file tracking during runs
-	// ------------------------------------------------------------------
-
-	private startWatcher(): void {
-		this.watcher = vscode.workspace.createFileSystemWatcher("**/*");
-		const track = (uri: vscode.Uri) => {
-			if (!this.streaming) return;
-			const rel = vscode.workspace.asRelativePath(uri, false);
-			if (
-				rel.startsWith("..") ||
-				rel === ".git" ||
-				rel.startsWith(".git/") ||
-				rel.includes("/.git/") ||
-				rel === "node_modules" ||
-				rel.startsWith("node_modules/") ||
-				rel.includes("/node_modules/")
-			) return;
-			this.changedFiles.add(rel);
-		};
-		this.watcher.onDidCreate(track, null, this.disposables);
-		this.watcher.onDidChange(track, null, this.disposables);
-		this.watcher.onDidDelete(track, null, this.disposables);
-	}
-
-	private trackChangedFilesDone(_event: AgentEvent): void {
-		// Reserved for future per-tool tracking; watcher coverage is sufficient for now.
-	}
-
-	// ------------------------------------------------------------------
-	// Per-thread diff panel — owned by ThreadDiffTracker (src/thread-diffs.ts).
-	// The controller keeps only the wiring: workspace root, the webview
-	// transport, and which transcript is on screen.
-	// ------------------------------------------------------------------
-
-	private readonly threadDiffs = new ThreadDiffTracker({
-		workspaceRoot: () => this.workspaceRoot,
-		currentSessionFile: () =>
-			(this.attached?.sessionPath || undefined) ?? (this.rentedState?.sessionFile || undefined) ?? (this.state?.sessionFile || undefined),
-		post: (message) => {
-			this.broadcast(message);
-			// A subagent harvest lands after its child's run — and often after our
-			// own agent_end — so a file the strip already listed can become
-			// attributable later. Re-file it then. Guarded on the run being over
-			// because the strip is only pushed at agent_end; during a run there is
-			// nothing on screen to correct.
-			// A harvest that lands while the run still looks live cannot correct the
-			// strip yet, so remember to do it rather than dropping the correction:
-			// effectiveStreaming() reads state refreshed asynchronously at agent_end,
-			// and that stale-true window is exactly when a subagent harvest arrives.
-			if (this.effectiveStreaming()) this.changedFilesNeedRecompute = true;
-			else if (this.changedFiles.size > 0 || this.changedFilesNeedRecompute) {
-				this.changedFilesNeedRecompute = false;
-				this.pushChangedFiles();
-			}
-		},
-		isDisposed: () => this.disposed,
-	});
-}
-
-/** Workspace-relative path reduced to a comparison key (separators + case). */
-function canonicalRelPath(file: string): string {
-	const slashed = file.split(/[\\/]+/).join("/");
-	return process.platform === "linux" ? slashed : slashed.toLowerCase();
 }
 
 function formatNumber(value: number): string {
@@ -4900,9 +4377,3 @@ function formatNumber(value: number): string {
 	if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
 	return String(value);
 }
-
-
-// ---------------------------------------------------------------------------
-// Per-thread diff accumulation helpers (module scope; host-only state lives
-// on SessionController above).
-// ---------------------------------------------------------------------------

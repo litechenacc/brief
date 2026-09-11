@@ -79,7 +79,6 @@ import type {
 export interface TranscriptDeps {
 	onOpenLink: (href: string) => void;
 	onOpenFile: (path: string, startLine?: number, endLine?: number) => void;
-	onOpenDiff: (path: string) => void;
 	onForkFromUser: (ordinal: number) => void;
 	onSpawnedCardClick: (browseRef: string) => void;
 	onNewSession: () => void;
@@ -114,8 +113,6 @@ const LOAD_BATCH = 100;
 const MAX_RENDERED_ROWS = 600;
 /** How close to the top counts as "reading back", and pulls the next batch in. */
 const LAZY_LOAD_MARGIN_PX = 400;
-/** Chips drawn in the expanded changed-files strip before it says "+N more". */
-const CHANGED_FILES_MAX = 40;
 const PRUNE_TO = 400;
 
 interface ToolBlock {
@@ -166,11 +163,8 @@ export class Transcript {
 	/** Latest user footer still waiting for the reply that prices its turn. */
 	private pendingUserFooter: HTMLElement | null = null;
 	private welcome: HTMLElement | null = null;
-	private changedFilesBar: HTMLElement;
 
 	private stickToBottom = true;
-	/** Collapsed until asked, and the choice survives every re-render of the strip. */
-	private changedFilesExpanded = false;
 	private spawnCardIds = new Set<string>();
 	/** Messages held as data, above the rendered window. */
 	private olderMessages: AgentMessage[] = [];
@@ -338,10 +332,8 @@ export class Transcript {
 
 	constructor(
 		private readonly scroller: HTMLElement,
-		changedFilesBar: HTMLElement,
 		private readonly deps: TranscriptDeps,
 	) {
-		this.changedFilesBar = changedFilesBar;
 		// Scroll-lock: auto-follow only while the reader is already at the bottom.
 		//
 		// Intent is read from the input events, not from the scroll position. A
@@ -495,10 +487,6 @@ export class Transcript {
 		for (const message of messages) {
 			if (message.role === "user") this.userOrdinals.set(message, this.nextUserOrdinal++);
 		}
-		// Changed-files state is scoped to the session on screen. A snapshot is the
-		// boundary between sessions (and is also used by restart), so retaining the
-		// previous thread's strip here would be a false claim about this thread.
-		this.renderChangedFiles([]);
 		// The jump pill lived inside the scroller we just emptied; keeping the
 		// detached node would leave the operator with no way back to the bottom
 		// for the rest of the session.
@@ -1808,61 +1796,6 @@ export class Transcript {
 		this.place(orphan.root);
 		this.attachToolResultText(message.toolCallId, text, message.isError ?? false);
 	}
-
-	// ---------------------------------------------------------------
-	// Changed files strip
-	// ---------------------------------------------------------------
-
-	/**
-	 * Files that changed on disk without this session's edit tool behind them —
-	 * your own saves, another thread, a build step. Collapsed by default and
-	 * behind a header, exactly like the Changes panel: a run that touches thirty
-	 * files used to push a thirty-chip wall between the transcript and the
-	 * composer with no way to fold it away.
-	 */
-	renderChangedFiles(files: string[]): void {
-		const bar = this.changedFilesBar;
-		bar.textContent = "";
-		bar.classList.toggle("visible", files.length > 0);
-		if (files.length === 0) return;
-
-		const header = el("button", "cf-header") as HTMLButtonElement;
-		header.append(
-			el("span", "cf-caret", this.changedFilesExpanded ? "▾" : "▸"),
-			el("span", "cf-label", `${files.length} other file${files.length === 1 ? "" : "s"} changed`),
-		);
-		header.title =
-			"Changed on disk without this session's edit tool behind them — your edits, another thread, a build step, " +
-			"or a file the agent rewrote from a shell or Python cell. Click to expand.";
-		header.setAttribute("aria-expanded", String(this.changedFilesExpanded));
-		header.addEventListener("click", () => {
-			this.changedFilesExpanded = !this.changedFilesExpanded;
-			this.renderChangedFiles(files);
-		});
-		bar.appendChild(header);
-		if (!this.changedFilesExpanded) return;
-
-		const list = el("div", "cf-list");
-		for (const file of files.slice(0, CHANGED_FILES_MAX)) {
-			const chip = el("span", "cf-chip");
-			const nameBtn = el("button", "cf-open", shortenPath(file));
-			nameBtn.title = `Open ${file}`;
-			nameBtn.addEventListener("click", () => this.deps.onOpenFile(file));
-			const diffBtn = document.createElement("button");
-			diffBtn.className = "cf-diff";
-			diffBtn.title = "Diff against git HEAD";
-			diffBtn.appendChild(icon("diff", 12));
-			diffBtn.addEventListener("click", () => this.deps.onOpenDiff(file));
-			chip.append(nameBtn, diffBtn);
-			list.appendChild(chip);
-		}
-		if (files.length > CHANGED_FILES_MAX) {
-			list.appendChild(el("span", "cf-more", `+${files.length - CHANGED_FILES_MAX} more`));
-		}
-		bar.appendChild(list);
-	}
-
-	// ---------------------------------------------------------------
 
 	scrollToBottom(): void {
 		if (!this.stickToBottom) return;

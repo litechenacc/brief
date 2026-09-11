@@ -458,7 +458,7 @@ check(
 );
 vscodeStub.window.showInformationMessage = originalShowInformationMessage;
 
-// Native dialogs are another await boundary. An HTML export must not operate
+// Native dialogs are another await boundary. A Markdown export must not operate
 // on whichever session happens to be current after the picker closes.
 posts.length = 0;
 const originalShowSaveDialog = vscodeStub.window.showSaveDialog;
@@ -480,7 +480,7 @@ controller.client = {
 	},
 };
 vscodeStub.window.showSaveDialog = () => new Promise((resolve) => { releaseSaveDialog = resolve; });
-const staleExport = controller.exportHtml();
+const staleExport = controller.exportMarkdown(true);
 await new Promise((resolve) => setImmediate(resolve));
 controller.viewEpoch = exportStartEpoch + 1;
 controller.client = {
@@ -490,11 +490,11 @@ controller.client = {
 		return { success: true };
 	},
 };
-releaseSaveDialog({ fsPath: path.join(workdir, "stale-export.html"), scheme: "file" });
+releaseSaveDialog({ fsPath: path.join(workdir, "stale-export.md"), scheme: "file" });
 await staleExport;
 check(
 	"an export dialog response is discarded after navigation",
-	oldViewExportCommands.length === 0 && newViewExportCommands.length === 0,
+	oldViewExportCommands.length === 1 && oldViewExportCommands[0]?.type === "get_messages" && newViewExportCommands.length === 0,
 	JSON.stringify({ oldViewExportCommands, newViewExportCommands }),
 );
 vscodeStub.window.showSaveDialog = originalShowSaveDialog;

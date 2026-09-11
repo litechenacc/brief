@@ -17,7 +17,7 @@ import * as path from "node:path";
 const require = createRequire(import.meta.url);
 require("./vscode-stub.cjs");
 const { vscodeStub } = require("./vscode-stub.cjs");
-const { SessionController, GitHeadContentProvider } = require("../dist/controller.cjs");
+const { SessionController } = require("../dist/controller.cjs");
 const { DaemonSidecar } = require("../dist/daemon-sidecar.cjs");
 const { isSessionActive } = require("../dist/session-actions.cjs");
 
@@ -136,20 +136,6 @@ await controller.searchHistory("abc");
 check("a stale catalog failure does not repaint a newer query", !posts.some((m) => m.type === "history"), JSON.stringify(posts.map((p) => p.type)));
 check("a stale catalog failure does not re-authorize the old row set", controller.actionHistory?.[0]?.id === "current", String(controller.actionHistory?.[0]?.id));
 
-// --- a browsed child with no session file must not disable diff harvesting ---
-const parentFile = path.join(workdir, "parent.jsonl");
-const childFile = path.join(workdir, "child.jsonl");
-fs.writeFileSync(parentFile, "{}\n");
-fs.writeFileSync(childFile, "{}\n");
-controller.attached = { activeSessionId: "h", sessionPath: "", sessionId: "p" };
-controller.state = { sessionFile: parentFile };
-// The guard now lives on the tracker; going through it also proves the
-// controller's currentSessionFile() wiring still resolves the same three
-// sources in the same order.
-check("an empty attachment path falls through to the RPC session file", (await controller.threadDiffs.validChildSessionFile(childFile)) === childFile);
-check("a path outside the transcript directory is still refused", (await controller.threadDiffs.validChildSessionFile(path.join(os.tmpdir(), "elsewhere.jsonl"))) === null);
-controller.attached = null;
-
 // --- a success with no payload is "empty", not a crash ----------------------
 const bare = new DaemonSidecar();
 bare.connected = true;
@@ -177,12 +163,6 @@ try {
 } finally {
 	fs.rmSync(lockDir, { recursive: true, force: true });
 }
-
-// --- git HEAD content: empty means "new file", not "we failed" ---------------
-const untracked = path.join(workdir, "untracked.txt");
-fs.writeFileSync(untracked, "x");
-const head = await new GitHeadContentProvider().provideTextDocumentContent({ with: () => ({ fsPath: untracked }) });
-check("a path outside any repository yields an empty HEAD side", head === "", JSON.stringify(head).slice(0, 48));
 
 // --- the slash catalog answers for the session on screen, whatever it is ------
 // It describes the agent build, not the session, and the webview asks for it

@@ -8,7 +8,7 @@ This repository exists because of that work. Thank you to [sirouk](https://githu
 
 ## What this repo is right now
 
-Today Brief is still very close to origin: a VS Code sidebar that runs `prime-agent --mode rpc` and renders the agent stream (assistant text, thinking, tool calls, sessions, subagents, processes).
+Today Brief is a VS Code sidebar that runs `prime-agent --mode rpc` and renders the agent stream (assistant text, thinking, tool calls, sessions, and subagents).
 
 That is intentional. The fork starts from a working Prime Agent UI instead of rewriting the runtime.
 

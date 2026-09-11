@@ -417,20 +417,15 @@ check("resume switches session", posted.some((m) => m.type === "switchSession" &
 check("subagents strip hidden with no children", !document.querySelector(".subagents-strip.visible"));
 
 // --- bottom stack order -----------------------------------------------------
-// Read top to bottom: who is working, then what changed outside this thread,
-// then what the agent itself changed, then the box you type in. Outside edits
-// used to sit inside the transcript, which put them ABOVE the subagent strip
-// and pushed the agent's own changes further from the composer.
 {
 	const order = [...document.querySelector("#app").children]
 		.map((node) => node.className.split(" ")[0])
-		.filter((name) => ["subagents-strip", "changed-files", "td-panel", "composer-dock"].includes(name));
+		.filter((name) => ["subagents-strip", "composer-dock"].includes(name));
 	check(
-		"bottom stack reads subagents -> outside changes -> agent changes -> composer",
-		order.join(" > ") === "subagents-strip > changed-files > td-panel > composer-dock",
+		"bottom stack reads subagents then composer",
+		order.join(" > ") === "subagents-strip > composer-dock",
 		order.join(" > "),
 	);
-	check("outside changes no longer live inside the transcript view", !document.querySelector(".chat-view .changed-files"));
 }
 hostMessage({
 	type: "sessionChildren",
@@ -1400,10 +1395,7 @@ chips[0].dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
 const openFileMsg = posted.find((m) => m.type === "openFile");
 check("chip click posts openFile", !!openFileMsg && openFileMsg.path === "src/a.ts", JSON.stringify(openFileMsg));
 
-// --- full-history user ordinals survive transcript windowing, and snapshot
-// boundaries clear stale changed-file state from the session that just left. ---
-hostMessage({ type: "changedFiles", files: ["src/from-old-session.ts"] });
-check("changed-files strip is visible before a replacement snapshot", document.querySelector(".changed-files").classList.contains("visible"));
+// --- full-history user ordinals survive transcript windowing ---
 const longMessages = Array.from({ length: 100 }, (_, index) => [
 	{ role: "user", content: `question ${index}` },
 	{ role: "assistant", model: "kimi", content: [{ type: "text", text: `answer ${index}` }] },
@@ -1414,7 +1406,6 @@ hostMessage({
 	state: { model: { provider: "chutes", id: "kimi" }, thinkingLevel: "max" },
 	status: baseStatus,
 });
-check("replacement snapshot clears stale changed-files strip", !document.querySelector(".changed-files").classList.contains("visible"));
 const windowedUserRows = [...scroller.querySelectorAll(".row-user")];
 check("long snapshot renders a bounded user window", windowedUserRows.length < 100 && windowedUserRows.length > 0, String(windowedUserRows.length));
 posted.length = 0;
@@ -1548,32 +1539,6 @@ check("match snippet shown as the row subtitle", !!document.querySelector(".hist
 document.querySelector(".history-search").value = "";
 document.querySelector(".history-search").dispatchEvent(new window.Event("input", { bubbles: true }));
 
-// --- thread diffs: the Changes panel only ever asserts what it can show ---
-const tdPanel = document.querySelector(".td-panel");
-check("changes panel exists but stays hidden with no changes", !!tdPanel && !tdPanel.classList.contains("visible"));
-hostMessage({
-	type: "threadDiffs",
-	files: [
-		{ path: "src/a.ts", viaSource: "edit", hunks: [{ removed: ["old"], added: ["new"] }, { removed: [], added: ["x"], agent: "verify-vault" }] },
-		{ path: "src/b.ts", viaSource: "edit", hunks: [{ removed: [], added: ["only"], agent: "verify-vault" }] },
-		// A row with no hunks would claim a change with nothing behind it.
-		{ path: "src/ghost.ts", viaSource: "edit", hunks: [] },
-	],
-});
-check("panel appears once there are changes", tdPanel.classList.contains("visible"));
-check("hunkless row is dropped", document.querySelector(".td-header").textContent.includes("Changes (2)"), document.querySelector(".td-header").textContent);
-document.querySelector(".td-header").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-const tdPaths = [...document.querySelectorAll(".td-path")].map((n) => n.textContent);
-check("expanded list shows the changed files", tdPaths.join("|") === "src/a.ts|src/b.ts", tdPaths.join("|"));
-check("subagent named on the row it edited", [...document.querySelectorAll(".td-file")][1].textContent.includes("verify-vault"));
-check("coverage footnote states what the panel cannot show", (document.querySelector(".td-foot")?.textContent ?? "").includes("changed-files strip"));
-[...document.querySelectorAll(".td-toggle")][0].dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-const tdDetail = document.querySelector(".td-detail");
-check("hunk lines render red/green", tdDetail.querySelectorAll(".diff-line.del").length === 1 && tdDetail.querySelectorAll(".diff-line.add").length === 2);
-const byLabels = [...tdDetail.querySelectorAll(".td-by")].map((n) => n.textContent);
-check("a file two agents touched attributes every block", byLabels.join("|") === "this session|subagent verify-vault", byLabels.join("|"));
-check("thread-diff file action is separate from its disclosure control",
-	!!document.querySelector(".td-row > .td-toggle + .td-open") && !document.querySelector(".td-toggle .td-open"));
 check("rendered webview has no nested native interactive controls",
 	document.querySelectorAll("button button, button input, button select, button textarea").length === 0,
 	[...document.querySelectorAll("button button, button input, button select, button textarea")].map((node) => node.outerHTML).join("\n"));
@@ -1645,42 +1610,6 @@ check("jump returns to the latest and retires the pill", scroller.scrollTop === 
 	`${scroller.scrollTop} / ${jumpBtn.className}`);
 hostMessage({ type: "event", event: { type: "message_update", message: { role: "assistant", model: "kimi", content: [{ type: "text", text: "still going and going and going" }] } } });
 check("auto-follow resumes after the jump", scroller.scrollTop === 2000, String(scroller.scrollTop));
-
-// --- Changed-files strip: collapsible, and it lists only OUTSIDE changes ------
-// The host already subtracts what the session edited; the panel's job is to
-// keep a wide run from walling off the composer with an unfoldable chip wall.
-const cfFiles = Array.from({ length: 12 }, (_, i) => `src/other-${i}.ts`);
-hostMessage({ type: "changedFiles", files: cfFiles });
-const cfBar = document.querySelector(".changed-files");
-check("changed-files strip becomes visible", cfBar.className.includes("visible"));
-check("changed-files strip is collapsed by default", document.querySelectorAll(".changed-files .cf-chip").length === 0,
-	`${document.querySelectorAll(".changed-files .cf-chip").length} chips`);
-const cfHeader = document.querySelector(".changed-files .cf-header");
-check("collapsed header states the count and that they are OTHER changes",
-	/12 other files changed/.test(cfHeader.textContent), cfHeader.textContent.trim());
-check("collapsed header carries the caret and aria state",
-	cfHeader.querySelector(".cf-caret")?.textContent === "▸" && cfHeader.getAttribute("aria-expanded") === "false");
-cfHeader.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-check("expanding reveals the file chips", document.querySelectorAll(".changed-files .cf-chip").length === 12,
-	`${document.querySelectorAll(".changed-files .cf-chip").length} chips`);
-check("expanded caret flips", document.querySelector(".changed-files .cf-caret").textContent === "▾");
-posted.length = 0;
-document.querySelector(".changed-files .cf-open").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-check("a chip still opens its file", posted.some((m) => m.type === "openFile" && m.path === "src/other-0.ts"),
-	JSON.stringify(posted.map((m) => m.type)));
-document.querySelector(".changed-files .cf-header").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-check("collapsing hides them again", document.querySelectorAll(".changed-files .cf-chip").length === 0);
-// The expanded/collapsed choice must survive the next push from the host.
-document.querySelector(".changed-files .cf-header").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-hostMessage({ type: "changedFiles", files: ["src/other-0.ts", "src/other-1.ts"] });
-check("expanded state survives a re-render", document.querySelectorAll(".changed-files .cf-chip").length === 2,
-	`${document.querySelectorAll(".changed-files .cf-chip").length} chips`);
-check("singular wording for one file", (() => {
-	hostMessage({ type: "changedFiles", files: ["src/solo.ts"] });
-	return /1 other file changed/.test(document.querySelector(".changed-files .cf-header").textContent);
-})(), document.querySelector(".changed-files .cf-header").textContent.trim());
-hostMessage({ type: "changedFiles", files: [] });
-check("an empty list hides the strip entirely", !document.querySelector(".changed-files").className.includes("visible"));
 
 // --- Up/Down recall of previous prompts from an EMPTY composer ---------------
 const recallStatus = { ...baseStatus, sessionId: "session-recall" };
@@ -1821,245 +1750,6 @@ check("a recalled prompt with a mention added is now the operator's text, so the
 clearBox(); arrow("ArrowUp");
 check("...and clearing it starts recall again at the newest", textarea.value === "steer now", JSON.stringify(textarea.value));
 clearBox();
-
-// --- processes panel -------------------------------------------------------
-// The lane that had no representation before: a command the agent left running
-// after its turn ended. The panel must appear on its own for exactly that case,
-// name the command rather than the gate script, and never render an empty box
-// where the host said there is nothing readable.
-
-const processesPanel = () => document.querySelector(".pr-panel");
-const panelRow = () => document.querySelector(".pr-row");
-
-hostMessage({ type: "processes", processes: [] });
-check("no processes means no panel", !processesPanel()?.classList.contains("visible"));
-
-const RUNNING = {
-	ref: "proc-ref-1",
-	pid: 4242,
-	command: "codex exec --ephemeral '/graphify . --update'",
-	fullCommand: "codex exec --ephemeral '/graphify . --update'",
-	state: "running",
-	startedMs: Date.now() - 62_000,
-	hasOutput: true,
-};
-hostMessage({ type: "processes", processes: [RUNNING] });
-check("a running process shows the panel", processesPanel()?.classList.contains("visible"));
-check(
-	"the header counts what is running",
-	document.querySelector(".pr-header")?.textContent.includes("1 running"),
-	document.querySelector(".pr-header")?.textContent,
-);
-check("a process that outlived the turn opens the panel by itself", !!panelRow());
-check("the row names the agent's command", panelRow()?.textContent.includes("codex exec"), panelRow()?.textContent);
-check("the row shows how long it has been running", panelRow()?.textContent.includes("1m02s"), panelRow()?.textContent);
-check(
-	"the header names the process lane separately from subagents",
-	document.querySelector(".live-label")?.textContent.includes("1 process running"),
-	document.querySelector(".live-label")?.textContent,
-);
-
-panelRow().dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-const asked = posted.filter((message) => message.type === "previewProcess").at(-1);
-check("clicking a row asks the host for its output", asked?.ref === "proc-ref-1", JSON.stringify(asked));
-check("the preview says it is loading until the host answers", document.querySelector(".pr-note")?.textContent.includes("Reading"));
-
-hostMessage({
-	type: "processOutput",
-	preview: { ref: "proc-ref-1", lines: ["building graph", "10258 nodes"], source: "/tmp/graphify.log", truncated: true },
-});
-check(
-	"the output lands in the preview",
-	document.querySelector(".pr-output")?.textContent === "building graph\n10258 nodes",
-	document.querySelector(".pr-output")?.textContent,
-);
-check("the preview names the file it read", document.querySelector(".pr-source")?.textContent === "/tmp/graphify.log");
-check("the preview says what it is NOT showing", !!document.querySelector(".pr-foot"));
-
-// Nothing readable must read as an explanation, never as "no output".
-hostMessage({ type: "processOutput", preview: { ref: "proc-ref-1", lines: [], note: "buffered inside the agent's kernel" } });
-check(
-	"an unreadable command explains itself instead of showing an empty box",
-	document.querySelector(".pr-note")?.textContent.includes("buffered inside the agent's kernel"),
-	document.querySelector(".pr-note")?.textContent,
-);
-check("no empty output box is rendered", !document.querySelector(".pr-output"));
-
-hostMessage({
-	type: "processes",
-	processes: [{ ...RUNNING, state: "exited", endedMs: RUNNING.startedMs + 90_000 }],
-});
-check(
-	"a finished command becomes a receipt rather than vanishing",
-	document.querySelector(".pr-header")?.textContent.includes("1 finished"),
-	document.querySelector(".pr-header")?.textContent,
-);
-check(
-	"the header stops claiming a running process",
-	!document.querySelector(".live-label")?.textContent.includes("process running"),
-	document.querySelector(".live-label")?.textContent,
-);
-
-// An extension-owned job says more than an observed one can, and the panel has
-// to show the difference: a real exit status, and a Stop that is only offered
-// where the agent can actually deliver it.
-
-hostMessage({
-	type: "processes",
-	processes: [
-		{
-			ref: "job-ref-1",
-			pid: 5150,
-			command: "npm run build:all",
-			fullCommand: "npm run build:all",
-			state: "running",
-			startedMs: Date.now() - 5_000,
-			hasOutput: true,
-			killable: true,
-			source: "agent",
-		},
-	],
-});
-check("an agent-owned running job offers a stop", !!document.querySelector(".pr-kill"));
-document.querySelector(".pr-kill").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-const killAsk = posted.filter((message) => message.type === "killProcess").at(-1);
-check("the stop button asks the host to kill that job", killAsk?.ref === "job-ref-1", JSON.stringify(killAsk));
-check("stopping does not also open the preview", !document.querySelector(".pr-preview"));
-
-hostMessage({
-	type: "processes",
-	processes: [
-		{
-			ref: "job-ref-1",
-			pid: 5150,
-			command: "npm run build:all",
-			fullCommand: "npm run build:all",
-			state: "exited",
-			startedMs: Date.now() - 95_000,
-			endedMs: Date.now(),
-			exitCode: 2,
-			hasOutput: true,
-			source: "agent",
-		},
-	],
-});
-check(
-	"a failure is counted in the collapsed Finished header",
-	document.querySelector(".pr-subhead")?.textContent.includes("1 failed"),
-	document.querySelector(".pr-subhead")?.textContent,
-);
-// Finished rows live in their own collapsed group; open it to read them.
-document.querySelector(".pr-subhead").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-check(
-	"a finished job shows the exit code the agent extension reported",
-	document.querySelector(".pr-status")?.textContent === "exit 2",
-	document.querySelector(".pr-status")?.textContent,
-);
-check("a non-zero exit is marked as a failure", document.querySelector(".pr-status")?.classList.contains("bad"));
-check("a finished job no longer offers a stop", !document.querySelector(".pr-kill"));
-
-// An observed row knows a process ended and nothing about how. It must not
-// borrow the vocabulary of a row that actually has an exit code.
-hostMessage({
-	type: "processes",
-	processes: [
-		{
-			ref: "obs-ref-1",
-			pid: 6000,
-			command: "sleep 300",
-			fullCommand: "sleep 300",
-			state: "exited",
-			startedMs: Date.now() - 30_000,
-			endedMs: Date.now(),
-			source: "observed",
-		},
-	],
-});
-document.querySelector(".pr-subhead")?.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-check("an observed row claims no exit status", !document.querySelector(".pr-status"));
-check("an observed row offers no stop", !document.querySelector(".pr-kill"));
-
-hostMessage({
-	type: "processes",
-	processes: [
-		{
-			ref: "task-ref-1",
-			command: "sleep 30",
-			fullCommand: "ui-test-sleep-30s\nsleep 30",
-			state: "running",
-			startedMs: Date.now() - 5_000,
-			hasOutput: true,
-			source: "task",
-		},
-	],
-});
-check("a skill receipt shows in the processes panel", document.querySelector(".pr-row")?.textContent.includes("sleep 30"));
-check("a skill receipt offers no stop", !document.querySelector(".pr-kill"));
-check("a running skill receipt can open its log", !!document.querySelector(".pr-open"));
-check("a running skill receipt cannot be cleared", !document.querySelector(".pr-dismiss"));
-document.querySelector(".pr-row").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-hostMessage({
-	type: "processOutput",
-	preview: { ref: "task-ref-1", lines: ["tick"], source: "/tmp/stdout.log" },
-});
-check(
-	"a skill receipt preview names the captured log",
-	document.querySelector(".pr-foot")?.textContent.includes("background task"),
-	document.querySelector(".pr-foot")?.textContent,
-);
-document.querySelector(".pr-preview-head .pr-open")?.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-const openAsk = posted.filter((message) => message.type === "openProcessLog").at(-1);
-check("the preview open button asks the host to open the log", openAsk?.ref === "task-ref-1", JSON.stringify(openAsk));
-
-hostMessage({
-	type: "processes",
-	processes: [
-		{
-			ref: "task-ref-1",
-			command: "sleep 30",
-			fullCommand: "sleep 30",
-			state: "exited",
-			startedMs: Date.now() - 30_000,
-			endedMs: Date.now(),
-			exitCode: 0,
-			hasOutput: true,
-			source: "task",
-		},
-	],
-});
-check("finished rows offer a bulk clear", !!document.querySelector(".pr-clear-finished"));
-document.querySelector(".pr-clear-finished").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-check(
-	"clear finished asks the host to drop every finished row",
-	posted.filter((message) => message.type === "dismissFinishedProcesses").length > 0,
-);
-document.querySelector(".pr-subhead").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-check("a finished skill receipt can be cleared on its own", !!document.querySelector(".pr-dismiss"));
-document.querySelector(".pr-dismiss").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-const dismissAsk = posted.filter((message) => message.type === "dismissProcess").at(-1);
-check("the row clear asks the host for that ref", dismissAsk?.ref === "task-ref-1", JSON.stringify(dismissAsk));
-
-document.querySelector(".pr-header").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-check("the panel can be collapsed by hand", !document.querySelector(".pr-row"));
-hostMessage({ type: "status", status: { ...anytimeStatus, streaming: true } });
-hostMessage({
-	type: "processes",
-	processes: [
-		{
-			ref: "task-ref-new",
-			command: "sleep 30",
-			fullCommand: "sleep 30",
-			state: "running",
-			startedMs: Date.now(),
-			hasOutput: true,
-			source: "task",
-		},
-	],
-});
-check(
-	"a newly started background task reopens the panel even while the agent is working",
-	!!document.querySelector(".pr-row"),
-);
 
 console.log(failed === 0 ? "\nPASS webview harness" : `\n${failed} webview checks FAILED`);
 process.exit(failed === 0 ? 0 : 1);

@@ -180,57 +180,6 @@ export interface SessionChild {
 	attachedClients?: number;
 }
 
-/**
- * A process the agent started, as the host observed it (process-tracker.ts).
- *
- * `ref` is an opaque host-issued capability, like a subagent's `browseRef`: the
- * webview can ask for an output preview of something the host already decided to
- * offer, and can never name a pid or a path of its own.
- */
-export interface SessionProcess {
-	ref: string;
-	/** Absent only when a job failed before the OS gave it a pid. */
-	pid?: number;
-	/** Single-line label for the row. */
-	command: string;
-	/** The command as spawned, for the tooltip. Bounded by the host. */
-	fullCommand: string;
-	state: "running" | "exited";
-	startedMs: number;
-	endedMs?: number;
-	/**
-	 * Exit status, present only for a job the `background-jobs` agent extension
-	 * owned. A process merely observed from the outside has no exit code to
-	 * report — the journal records that it ended, never how.
-	 */
-	exitCode?: number;
-	/** Signal that ended it, when it did not exit on its own. */
-	signal?: string;
-	/** A file this command writes was found, so a preview has something to read. */
-	hasOutput?: boolean;
-	/** The host can stop this one. Only true for extension-owned jobs. */
-	killable?: boolean;
-	/**
-	 * Where the row came from, and therefore how much it can honestly claim.
-	 * "agent" is a job the `background-jobs` extension owns inside the agent;
-	 * "task" is a Prime Agent `background_task` skill receipt on disk; "observed"
-	 * is one this host reconstructed from the worker's process journal and `ps`.
-	 */
-	source?: "agent" | "task" | "observed";
-}
-
-/** Answer to `previewProcess`: what the command wrote, or why we have nothing. */
-export interface ProcessOutputPreview {
-	ref: string;
-	lines: string[];
-	/** Absolute path the lines came from. */
-	source?: string;
-	/** Present instead of lines when there is nothing readable to show. */
-	note?: string;
-	/** True when older output was dropped to bound the read. */
-	truncated?: boolean;
-}
-
 export interface FileSearchItem {
 	path: string;
 	isDir: boolean;
@@ -317,7 +266,6 @@ export type WebviewToHost =
 	| { type: "abort" }
 	| { type: "newSession" }
 	| { type: "compact"; instructions?: string }
-	| { type: "exportHtml" }
 	| { type: "exportChat" }
 	| { type: "restart" }
 	| { type: "requestState" }
@@ -332,7 +280,6 @@ export type WebviewToHost =
 	| { type: "deleteSession"; path: string; sessionId: string }
 	| { type: "searchFiles"; query: string; requestId: number }
 	| { type: "openFile"; path: string; startLine?: number; endLine?: number }
-	| { type: "openDiff"; path: string }
 	| { type: "pickImage"; requestId: number }
 	| { type: "attachActiveFile" }
 	| { type: "attachSelection" }
@@ -340,11 +287,6 @@ export type WebviewToHost =
 	| { type: "pickThinkingLevel" }
 	| { type: "toggleFavoriteModel"; provider: string; modelId: string }
 	| { type: "browseChild"; browseRef: string }
-	| { type: "previewProcess"; ref: string }
-	| { type: "killProcess"; ref: string }
-	| { type: "dismissProcess"; ref: string }
-	| { type: "dismissFinishedProcesses" }
-	| { type: "openProcessLog"; ref: string }
 	| { type: "backToParent" }
 	| { type: "forkFromUser"; ordinal: number }
 	| { type: "copyConversation" }
@@ -455,7 +397,6 @@ export type HostToWebview =
 	| { type: "favorites"; favorites: ModelRef[] }
 	| { type: "sessionChildren"; children: SessionChild[]; parent?: SessionChild; siblings?: SessionChild[]; viewedActiveSessionId?: string; spawned?: Array<{ activeSessionId: string; browseRef?: string; name?: string; created?: string }> }
 	| { type: "installPrompt"; url: string; reason: string }
-	| ThreadDiffsMessage
 	| { type: "draft"; text: string }
 	| { type: "compactThreshold"; percent: number | null; defaultPercent?: number | null }
 	| { type: "event"; event: AgentEvent }
@@ -463,8 +404,6 @@ export type HostToWebview =
 	| { type: "models"; models: RpcModel[] }
 	| { type: "commands"; commands: RpcSlashCommand[] }
 	| { type: "history"; sessions: RecentSession[] }
-	| { type: "processes"; processes: SessionProcess[] }
-	| { type: "processOutput"; preview: ProcessOutputPreview }
 	| { type: "showHistory" }
 	| { type: "newThread" }
 	| { type: "promptAccepted"; kind: "prompt" | "steer" | "followUp" }
@@ -486,7 +425,6 @@ export type HostToWebview =
 	| { type: "imagePicked"; requestId: number; images: ImageAttachment[] }
 	| { type: "insertSelection"; selection: SelectionAttachment }
 	| { type: "insertMention"; path: string }
-	| { type: "changedFiles"; files: string[] }
 	| { type: "observedSession"; sessionId: string; messages: AgentMessage[] }
 	| { type: "observedEvent"; sessionId: string; event: AgentEvent }
 	| { type: "observedClosed"; sessionId: string }
@@ -496,40 +434,3 @@ export type HostToWebview =
 // ---------------------------------------------------------------------------
 // Per-thread diff panel (host -> webview)
 // ---------------------------------------------------------------------------
-
-/**
- * How the change was captured. Practically always `edit`: prime-agent registers
- * exactly one tool (`ipython`) and the hunks come from the diff payloads its
- * bundled `edit` skill publishes. `write` only appears when an extension
- * registers a tool of that name. There is deliberately no `shell` source — a
- * shell command carries no before/after content, so claiming it changed a file
- * would be a guess.
- */
-export type ThreadDiffSource = "edit" | "write";
-
-/** One stitched change block per recorded edit on a file. */
-export interface ThreadDiffHunk {
-	/** Removed lines (rendered with a red "-" gutter). */
-	removed: string[];
-	/** Added lines (rendered with a green "+" gutter). */
-	added: string[];
-	/** Optional gutter note rendered after the hunk (e.g. line-cap truncation). */
-	note?: string;
-	/** Subagent that made this change; absent means the viewed session's own agent. */
-	agent?: string;
-}
-
-export interface ThreadDiffFile {
-	/** Workspace-relative path, validated by the extension host. */
-	path: string;
-	/** Source of the most recent recorded change. */
-	viaSource: ThreadDiffSource;
-	/** Stitched change blocks, one per recorded edit, in event order. */
-	hunks: ThreadDiffHunk[];
-}
-
-/** Cumulative per-thread diff state; `files` empty hides the panel. */
-export interface ThreadDiffsMessage {
-	type: "threadDiffs";
-	files: ThreadDiffFile[];
-}

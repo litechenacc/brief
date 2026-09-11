@@ -60,7 +60,6 @@ observeBanner.style.display = "none";
 
 const chatView = el("div", "chat-view");
 const scroller = el("div", "messages");
-const changedFilesBar = el("div", "changed-files");
 chatView.append(scroller);
 
 // Scope IDs to this webview instance: a late rejection from a panel that was
@@ -119,10 +118,9 @@ const composerDeps = {
 };
 const composer = new Composer(composerDeps);
 
-const transcript = new Transcript(scroller, changedFilesBar, {
+const transcript = new Transcript(scroller, {
 	onOpenLink: (href) => post({ type: "openExternal", url: href }),
 	onOpenFile: (path, startLine, endLine) => post({ type: "openFile", path, startLine, endLine }),
-	onOpenDiff: (path) => post({ type: "openDiff", path }),
 	onForkFromUser: (ordinal) => post({ type: "forkFromUser", ordinal }),
 	onSpawnedCardClick: (browseRef) => post({ type: "browseChild", browseRef }),
 	onNewSession: () => {
@@ -186,17 +184,6 @@ convCopy.addEventListener("click", (event) => {
 	post({ type: "copyConversation" });
 });
 statusStrip.append(connDot, liveLabel, sessionIdLabel, el("span", "spacer"), statsLabel, convCopy);
-
-// Background processes the agent started; mounted above the subagents strip.
-const processesPanel = new ProcessesPanel({
-	onPreview: (ref) => post({ type: "previewProcess", ref }),
-	onKill: (ref) => post({ type: "killProcess", ref }),
-	onDismiss: (ref) => post({ type: "dismissProcess", ref }),
-	onDismissFinished: () => post({ type: "dismissFinishedProcesses" }),
-	onOpenLog: (ref) => post({ type: "openProcessLog", ref }),
-});
-/** Rows the host currently reports as running, for the header's liveness word. */
-let runningProcessCount = 0;
 
 // Subagents strip: collapsible panel floating on top of the composer.
 const subagentsStrip = el("div", "subagents-strip") as HTMLElement;
@@ -492,9 +479,6 @@ function showView(view: "chat" | "history"): void {
 	// on content, so without this they hang over the history list with no
 	// composer under them. "" hands display back to their own .visible class.
 	subagentsStrip.style.display = view === "chat" ? "" : "none";
-	processesPanel.root.style.display = view === "chat" ? "" : "none";
-	changedFilesBar.style.display = view === "chat" ? "" : "none";
-	threadDiffsPanel.root.style.display = view === "chat" ? "" : "none";
 	if (view === "history") historyView.showLoading();
 }
 
@@ -717,15 +701,9 @@ function renderLiveLabel(status: StatusSnapshot): void {
 					: "live"
 				: "offline";
 	const text = status.statusText || base;
-	const busy = status.connected && (status.streaming || working > 0 || runningProcessCount > 0);
-	// Each lane is named for what it is. Folding processes into the subagent
-	// count, or into `streaming`, would put work behind a word that does not
-	// describe it — and Stop would then appear to own something it cannot stop.
+	const busy = status.connected && (status.streaming || working > 0);
 	const lanes: string[] = [];
 	if (status.connected && !status.streaming && working > 0) lanes.push(`${working} subagent${working === 1 ? "" : "s"} working`);
-	if (status.connected && runningProcessCount > 0) {
-		lanes.push(`${runningProcessCount} process${runningProcessCount === 1 ? "" : "es"} running`);
-	}
 	liveLabel.textContent = lanes.length > 0 ? `${text} · ${lanes.join(" · ")}` : text;
 	liveLabel.className = `live-label${status.connected ? " on" : ""}`;
 	connDot.className = `conn-dot${status.connected ? (busy ? " busy" : " live") : ""}`;
@@ -829,14 +807,6 @@ function dispatchHostMessage(message: HostToWebview): void {
 			break;
 		case "status":
 			applyStatus(message.status);
-			break;
-		case "processes":
-			processesPanel.setProcesses(message.processes, currentStatus?.streaming ?? false);
-			runningProcessCount = message.processes.filter((entry) => entry.state === "running").length;
-			if (currentStatus) renderLiveLabel(currentStatus);
-			break;
-		case "processOutput":
-			processesPanel.setPreview(message.preview);
 			break;
 		case "models":
 			composer.setModels(message.models);
@@ -972,9 +942,6 @@ function dispatchHostMessage(message: HostToWebview): void {
 				if (entry.text.length === 0 && entry.images.length === 0) pendingPrompts.delete(id);
 			}
 			break;
-		case "changedFiles":
-			transcript.renderChangedFiles(message.files);
-			break;
 		case "editorText":
 			composer.setText(message.text);
 			break;
@@ -1042,36 +1009,3 @@ if (typeof PRIME_AGENT_BUILD_REV === "string") {
 
 transcript.showWelcome();
 post({ type: "ready" });
-
-// ---------------------------------------------------------------------------
-// Per-thread diff panel (appended wiring only)
-// ---------------------------------------------------------------------------
-
-import { ProcessesPanel } from "./processes.js";
-import { ThreadDiffsPanel } from "./thread-diffs.js";
-
-const threadDiffsPanel = new ThreadDiffsPanel({
-	onOpenFile: (path) => post({ type: "openFile", path }),
-});
-// Bottom stack, in the order the operator reads it: who is working (subagents),
-// then what changed outside this thread, then what the agent itself changed —
-// closest to the composer because it is the one tied to the reply being written.
-// `changedFilesBar` used to live inside the transcript view, which put outside
-// edits above the subagent strip and buried the agent's own changes under them.
-subagentsStrip.after(changedFilesBar);
-changedFilesBar.after(threadDiffsPanel.root);
-// Processes sit ABOVE the subagents strip: it is the only lane with no other
-// representation on screen, so when it appears it must appear in one fixed
-// place rather than wedged between two panels the eye is already tracking.
-subagentsStrip.before(processesPanel.root);
-
-// Handled outside dispatchHostMessage so this wiring stays append-only; the
-// panel is driven purely by the host's cumulative `threadDiffs` pushes.
-window.addEventListener("message", (messageEvent) => {
-	try {
-		const data = messageEvent.data as { type?: unknown; files?: unknown } | undefined;
-		if (data && data.type === "threadDiffs") {
-			threadDiffsPanel.setFiles(data.files);
-		}
-	} catch { /* panel must never break sibling handlers */ }
-});

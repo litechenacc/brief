@@ -5,7 +5,7 @@
 import * as fs from "node:fs";
 import * as vscode from "vscode";
 import { ChatPanel, ChatViewProvider } from "./chat-view.js";
-import { GitHeadContentProvider, SessionController } from "./session-controller.js";
+import { SessionController } from "./session-controller.js";
 
 let controller: SessionController | null = null;
 
@@ -33,10 +33,6 @@ export function activate(context: vscode.ExtensionContext): void {
 		}),
 	);
 	context.subscriptions.push(provider);
-
-	context.subscriptions.push(
-		vscode.workspace.registerTextDocumentContentProvider("prime-agent-git-head", new GitHeadContentProvider()),
-	);
 
 	const reveal = () => {
 		void vscode.commands.executeCommand("primeAgent.chat.focus").then(
@@ -68,9 +64,6 @@ export function activate(context: vscode.ExtensionContext): void {
 		vscode.commands.registerCommand("primeAgent.compact", () => runCommand("Compact", () => controller!.compact())),
 		vscode.commands.registerCommand("primeAgent.exportChat", () => runCommand("Export chat", () => controller!.exportChat())),
 		vscode.commands.registerCommand("primeAgent.restart", () => runCommand("Restart", () => controller!.restart())),
-		vscode.commands.registerCommand("primeAgent.installAgentExtension", () =>
-			runCommand("Install agent extension", () => controller!.installBackgroundJobsExtension()),
-		),
 		vscode.commands.registerCommand("primeAgent.history", () => {
 			reveal();
 			controller!.showHistoryView();

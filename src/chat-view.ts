@@ -327,7 +327,6 @@ export function parseWebviewMessage(value: unknown): WebviewToHost | undefined {
 		case "ready":
 		case "abort":
 		case "newSession":
-		case "exportHtml":
 		case "exportChat":
 		case "restart":
 		case "requestState":
@@ -354,16 +353,6 @@ export function parseWebviewMessage(value: unknown): WebviewToHost | undefined {
 			return isRequestId(value.ordinal) && value.ordinal <= MAX_FORK_ORDINAL ? { type: "forkFromUser", ordinal: value.ordinal } : undefined;
 		case "browseChild":
 			return isIdentifier(value.browseRef) ? { type: "browseChild", browseRef: value.browseRef } : undefined;
-		case "previewProcess":
-			return isIdentifier(value.ref) ? { type: "previewProcess", ref: value.ref } : undefined;
-		case "killProcess":
-			return isIdentifier(value.ref) ? { type: "killProcess", ref: value.ref } : undefined;
-		case "dismissProcess":
-			return isIdentifier(value.ref) ? { type: "dismissProcess", ref: value.ref } : undefined;
-		case "dismissFinishedProcesses":
-			return { type: "dismissFinishedProcesses" };
-		case "openProcessLog":
-			return isIdentifier(value.ref) ? { type: "openProcessLog", ref: value.ref } : undefined;
 		case "noticeAction":
 			return isIdentifier(value.id) ? { type: "noticeAction", id: value.id } : undefined;
 		case "renameSession":
@@ -420,8 +409,6 @@ export function parseWebviewMessage(value: unknown): WebviewToHost | undefined {
 				...(value.endLine === undefined ? {} : { endLine: value.endLine }),
 			};
 		}
-		case "openDiff":
-			return isPath(value.path) ? { type: "openDiff", path: value.path } : undefined;
 		case "pickImage":
 			return isRequestId(value.requestId) ? { type: "pickImage", requestId: value.requestId } : undefined;
 		case "toggleFavoriteModel":
@@ -471,9 +458,6 @@ async function handleMessage(message: WebviewToHost, controller: SessionControll
 		case "compact":
 			await controller.compact(message.instructions);
 			return;
-		case "exportHtml":
-			await controller.exportHtml();
-			return;
 		case "exportChat":
 			await controller.exportChat();
 			return;
@@ -482,21 +466,6 @@ async function handleMessage(message: WebviewToHost, controller: SessionControll
 			return;
 		case "browseChild":
 			await controller.browseChild(message.browseRef);
-			return;
-		case "previewProcess":
-			await controller.previewProcess(message.ref);
-			return;
-		case "killProcess":
-			await controller.killProcess(message.ref);
-			return;
-		case "dismissProcess":
-			controller.dismissProcess(message.ref);
-			return;
-		case "dismissFinishedProcesses":
-			controller.dismissFinishedProcesses();
-			return;
-		case "openProcessLog":
-			await controller.openProcessLog(message.ref);
 			return;
 		case "noticeAction":
 			await controller.runNoticeAction(message.id);
@@ -567,9 +536,6 @@ async function handleMessage(message: WebviewToHost, controller: SessionControll
 			return;
 		case "openFile":
 			await controller.openFile(message.path, message.startLine, message.endLine);
-			return;
-		case "openDiff":
-			await controller.openDiff(message.path);
 			return;
 		case "pickImage":
 			await controller.pickImages(message.requestId, reply);

@@ -10,7 +10,6 @@ tsconfig.json
 *.vsix
 *.map
 media/*.map
-media/preview.html
 
 # Maintainer-only. .env holds the Marketplace PAT: vsce globs with dot:true and
 # never reads .gitignore, so without these lines the token ships to every user.
@@ -20,19 +19,10 @@ release.sh
 install.sh
 .github/**
 
-# agent-extension/ is DELIBERATELY shipped: it is the Prime Agent extension the
-# Processes panel prefers as its data source, and "Prime Agent: Install
-# Background Jobs Agent Extension" copies it out of the packaged extension into
-# ~/.prime/agent/extensions/. Excluding it makes that command fail at runtime.
-agent-extension/**/*.map
-
 dist/*.map
 dist/controller.cjs
 dist/daemon-sidecar.cjs
 dist/session-actions.cjs
-dist/process-tracker.cjs
-dist/agent-jobs.cjs
-dist/background-jobs.cjs
 
 # Knowledge-graph output. Gitignored, which is exactly why it needs a line here:
 # vsce globs with dot:true and never reads .gitignore, so being invisible to git

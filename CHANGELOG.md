@@ -13,6 +13,7 @@ After a cut, add the new version's compare link at the bottom and re-point [Unre
 
 ## [Unreleased]
 
+- **Drop the Processes panel, Changes panel, and the background-jobs agent extension.** Chat, RPC, daemon attach, history, and subagents stay. Export is Markdown only. Tests that only existed to pin those extra lanes are gone.
 - **Chinese and other IME composition is visible in the composer, and Enter no longer sends mid-composition.** Mentions are drawn on a mirror behind a transparent textarea, which also hid the browser's composing underline — so a candidate like `輸入` looked committed. The composing range is now underlined on that mirror, IME keys are left to the IME, and the Enter that confirms a candidate is not treated as Send.
 
 - **Chat colors now follow the VS Code Color Theme.** Surfaces, accent, links, diffs, and terminal blocks were a Prime green/neutral palette mixed from the sidebar, so a colored or High Contrast theme looked like a second app. `--pa-*` is now an alias of `--vscode-*` tokens, with High Contrast using contrast borders instead of translucent mixes.

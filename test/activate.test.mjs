@@ -138,10 +138,6 @@ if (!registeredViews.includes("primeAgent.chat")) {
 	console.error("MISSING VIEW primeAgent.chat");
 	process.exit(1);
 }
-if (!registeredSchemes.includes("prime-agent-git-head")) {
-	console.error("MISSING content provider scheme");
-	process.exit(1);
-}
 console.log(`commands registered: ${registeredCommands.length}/${expectedCommands.length}`);
 extension.deactivate();
 console.log("deactivate() OK");
