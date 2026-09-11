@@ -3,7 +3,7 @@
  */
 
 import { Composer } from "./composer.js";
-import { butterfly, el, icon, iconButton } from "./dom.js";
+import { butterfly, el, icon } from "./dom.js";
 import { HistoryView } from "./history.js";
 import { Transcript } from "./transcript.js";
 import type {
@@ -27,128 +27,7 @@ function post(message: WebviewToHost): void {
 const app = document.getElementById("app") as HTMLDivElement;
 app.classList.add("chat-root");
 
-// ---------------------------------------------------------------------------
-// Top bar
-// ---------------------------------------------------------------------------
-
-const topbar = el("div", "topbar");
-const brand = el("div", "brand") as HTMLElement & { role?: string };
-brand.tabIndex = 0;
-brand.title = "Prime Agent — by Prime Intellect";
-brand.appendChild(butterfly(20));
-brand.appendChild(el("span", "brand-name", "Prime Agent"));
-brand.addEventListener("click", () => post({ type: "openExternal", url: "https://www.primeintellect.ai/blog/prime-agent#article-top" }));
-brand.addEventListener("keydown", (event) => {
-	if (event.key === "Enter" || event.key === " ") post({ type: "openExternal", url: "https://www.primeintellect.ai/blog/prime-agent#article-top" });
-});
-const sessionTitleWrap = el("div", "session-title-wrap");
-const sessionTitle = el("span", "session-title", "");
-sessionTitleWrap.append(sessionTitle);
-topbar.append(brand, sessionTitleWrap, el("span", "spacer"));
-
-/**
- * Inline session-title editing: double-click the name, Enter or click away to
- * keep it, Escape to discard.
- *
- * Committing on blur is deliberate. An editor that throws away what you typed
- * because you clicked somewhere else is the clunky part of inline renaming, and
- * Escape already says "discard" unambiguously. Nothing is sent unless the text
- * actually changed, so a stray double-click costs nothing.
- */
-let titleEditing: { finish: (commit: boolean) => void; sessionId?: string } | null = null;
-
-function sizeTitleInput(input: HTMLInputElement): void {
-	input.style.width = `${Math.min(340, Math.max(120, input.value.length * 8 + 24))}px`;
-}
-
-function startTitleEdit(): void {
-	if (titleEditing || !sessionTitle.isConnected) return;
-	const original = (sessionTitle.textContent ?? "").trim();
-	const input = document.createElement("input");
-	input.className = "session-title-input";
-	input.value = original;
-	input.spellcheck = false;
-	input.setAttribute("aria-label", "Session name");
-	input.title = "Enter to save · Escape to cancel";
-	const finish = (commit: boolean): void => {
-		if (!titleEditing) return;
-		titleEditing = null;
-		const next = input.value.trim();
-		input.replaceWith(sessionTitle);
-		// An emptied box means "leave it alone": the daemon has no way to clear a
-		// name, so sending one would only bounce back as an error notice.
-		if (commit && next && next !== original) post({ type: "renameSession", name: next });
-	};
-	titleEditing = { finish, sessionId: currentStatus?.sessionId };
-	input.addEventListener("input", () => sizeTitleInput(input));
-	input.addEventListener("keydown", (event) => {
-		if (event.key === "Enter") {
-			event.preventDefault();
-			finish(true);
-		} else if (event.key === "Escape") {
-			event.preventDefault();
-			finish(false);
-		}
-	});
-	input.addEventListener("blur", () => finish(true));
-	sessionTitle.replaceWith(input);
-	sizeTitleInput(input);
-	input.focus();
-	input.select();
-}
-
-sessionTitle.addEventListener("dblclick", (event) => {
-	// Without this the second click leaves the name text-selected under the input.
-	event.preventDefault();
-	startTitleEdit();
-});
-
-const newChatBtn = iconButton("plus", "New session", 16);
-const historyBtn = iconButton("history", "Sessions in this workspace", 16);
-const menuBtn = iconButton("kebab", "Session actions", 16);
-topbar.append(newChatBtn, historyBtn, menuBtn);
-
-const menu = el("div", "menu");
-function menuItem(label: string, iconName: Parameters<typeof icon>[0] | "butterfly", action: () => void, title?: string): HTMLButtonElement {
-	const item = document.createElement("button");
-	item.className = "menu-item";
-	if (title) item.title = title;
-	if (iconName === "butterfly") {
-		item.appendChild(butterfly(13, "menu-butterfly"));
-	} else {
-		item.appendChild(icon(iconName, 13));
-	}
-	item.appendChild(el("span", "", label));
-	item.addEventListener("click", () => {
-		menu.classList.remove("visible");
-		action();
-	});
-	return item;
-}
-function menuSeparator(): HTMLElement {
-	const sep = el("div", "menu-sep");
-	sep.setAttribute("role", "separator");
-	return sep;
-}
-menu.append(
-	menuItem("Compact context", "compact", () => post({ type: "compact" }), "Runs automatically when the context window fills up; run it now"),
-	menuItem("Export chat…", "export", () => post({ type: "exportChat" })),
-	menuItem("Restart agent process", "refresh", () => {
-		transcript.renderSnapshot([]);
-		post({ type: "restart" });
-	}),
-	menuSeparator(),
-	menuItem("Visit Prime Intellect", "butterfly", () => post({ type: "openExternal", url: "https://app.primeintellect.ai" }), "Prime Intellect dashboard — app.primeintellect.ai"),
-);
-menuBtn.addEventListener("click", (event) => {
-	event.stopPropagation();
-	menu.classList.toggle("visible");
-});
-document.addEventListener("click", (event) => {
-	if (!menu.contains(event.target as Node) && event.target !== menuBtn) {
-		menu.classList.remove("visible");
-	}
-});
+// Session actions live in the VS Code view title bar (same row as maximize).
 
 // ---------------------------------------------------------------------------
 // Notices + views
@@ -246,16 +125,20 @@ const transcript = new Transcript(scroller, changedFilesBar, {
 	onForkFromUser: (ordinal) => post({ type: "forkFromUser", ordinal }),
 	onSpawnedCardClick: (browseRef) => post({ type: "browseChild", browseRef }),
 	onNewSession: () => post({ type: "newSession" }),
-	onShowHistory: () => {
-		showView("history");
-		historyView.showLoading();
-		post({ type: "requestHistory" });
-	},
+	onShowHistory: () => openHistory(),
 	onFocusComposer: () => composer.focus(),
 	onOptimisticConfirmed: (clientRequestId) => pendingPrompts.delete(clientRequestId),
 });
 
 const historyView = new HistoryView({
+	readFolds: () => {
+		const state = vscode.getState() as { historyFolds?: { workspace?: boolean; other?: boolean; archive?: boolean } } | undefined;
+		return state?.historyFolds;
+	},
+	writeFolds: (folds) => {
+		const prev = (vscode.getState() as Record<string, unknown> | undefined) ?? {};
+		vscode.setState({ ...prev, historyFolds: folds });
+	},
 	onResume: (path, sessionId) => {
 		// Before the switch, or the last 300ms of typing lands under the INCOMING
 		// session id and overwrites the draft the operator saved there.
@@ -590,7 +473,7 @@ function renderInstallBanner(url: string, reason: string): void {
 	installBanner.appendChild(card);
 	installBanner.classList.add("visible");
 }
-app.append(topbar, menu, installBanner, observeBanner, noticesDock, chatView, historyView.root, subagentsStrip, composer.root, statusStrip);
+app.append(installBanner, observeBanner, noticesDock, chatView, historyView.root, subagentsStrip, composer.root, statusStrip);
 historyView.root.style.display = "none";
 
 function showView(view: "chat" | "history"): void {
@@ -607,20 +490,30 @@ function showView(view: "chat" | "history"): void {
 	if (view === "history") historyView.showLoading();
 }
 
+function openHistory(): void {
+	showView("history");
+	post({ type: "requestHistory" });
+}
+
+const newChatBtn = document.createElement("button");
+newChatBtn.className = "icon-btn chrome-action";
+newChatBtn.title = "New session";
+newChatBtn.setAttribute("aria-label", "New session");
 newChatBtn.addEventListener("click", () => {
 	showView("chat");
 	subagentsExpanded = false;
-	// A new thread starts with no instruction from the operator about this strip.
 	subagentsAutoExpandSuppressed = false;
 	spawnSeenBaseline = false;
 	resetSubagentActivityBaseline();
 	renderSubagentsStrip();
 	post({ type: "newSession" });
 });
-historyBtn.addEventListener("click", () => {
-	showView("history");
-	post({ type: "requestHistory" });
-});
+const historyBtn = document.createElement("button");
+historyBtn.className = "icon-btn chrome-action";
+historyBtn.title = "Sessions in this workspace";
+historyBtn.setAttribute("aria-label", "Sessions in this workspace");
+historyBtn.addEventListener("click", () => openHistory());
+app.append(newChatBtn, historyBtn);
 
 // ---------------------------------------------------------------------------
 // Status application
@@ -643,7 +536,6 @@ function adoptAuthoritativeSession(sessionId: string | undefined): boolean {
 	pendingImageRequests.clear();
 	pendingFileSearches.clear();
 	composer.resetForSessionBoundary();
-	menu.classList.remove("visible");
 	// resetForSessionBoundary() drops the slash catalog with the rest of the
 	// composer's per-session state, and the host only ever sends it in answer to
 	// `ready` — i.e. once per webview. Whoever discards it has to ask again, or
@@ -713,9 +605,6 @@ function applyStatus(incomingStatus: StatusSnapshot): void {
 		retireBootSplash();
 	}
 	if (currentStatus?.sessionId !== status.sessionId) {
-		// A rename in flight belongs to the session that was on screen when it
-		// started. Discard it rather than let Enter land on whatever replaced it.
-		if (titleEditing && titleEditing.sessionId !== status.sessionId) titleEditing.finish(false);
 		// Drop the previous session's tree before repainting — otherwise the old
 		// subagent rows linger as a stuck artifact until the next children push.
 		// `subagentsExpanded` deliberately survives: browsing into a subagent is a
@@ -732,17 +621,6 @@ function applyStatus(incomingStatus: StatusSnapshot): void {
 	currentStatus = status;
 	renderLiveLabel(status);
 
-	if (!titleEditing) {
-		if (status.sessionName) {
-			sessionTitle.textContent = status.sessionName;
-			sessionTitleWrap.style.display = "";
-			sessionTitle.title = `${status.sessionName} — double-click to rename`;
-		} else {
-			sessionTitle.textContent = status.sessionId ? `session ${status.sessionId.slice(0, 8)}` : "";
-			sessionTitleWrap.style.display = status.sessionId ? "" : "none";
-			sessionTitle.title = "Unnamed session — double-click to name it";
-		}
-	}
 	sessionIdLabel.textContent = status.sessionId ? `#${status.sessionId.slice(0, 8)}` : "";
 	sessionIdLabel.title = status.sessionFile ?? "";
 
@@ -1013,15 +891,7 @@ function dispatchHostMessage(message: HostToWebview): void {
 				});
 			} else if (!currentStatus) {
 				// An agent can set its title before the first state snapshot arrives.
-				// Paint that useful state now instead of silently dropping it.
 				if (message.statusText !== undefined) liveLabel.textContent = message.statusText;
-				if (message.title !== undefined && !titleEditing) {
-					sessionTitle.textContent = message.title;
-					sessionTitleWrap.style.display = message.title ? "" : "none";
-					sessionTitle.title = message.title
-						? `${message.title} — double-click to rename`
-						: "Unnamed session — double-click to name it";
-				}
 			}
 			break;
 		case "fileSearchResults":

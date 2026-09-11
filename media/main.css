@@ -100,6 +100,18 @@ button:focus-visible {
 	border-radius: 4px;
 }
 
+.chrome-action {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border: 0;
+}
+
 /* ---------- top bar ---------- */
 
 .topbar {
@@ -1652,11 +1664,33 @@ body.vscode-light pre.term {
 }
 
 .history-group {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.history-group-summary {
 	padding: 6px 4px 2px;
 	font-size: 9.5px;
 	text-transform: uppercase;
 	letter-spacing: 0.07em;
 	color: var(--pa-dim);
+	cursor: pointer;
+	list-style: none;
+}
+
+.history-group-summary::-webkit-details-marker {
+	display: none;
+}
+
+.history-group-summary::before {
+	content: "▾ ";
+	color: var(--pa-faint);
+	font-size: 9px;
+}
+
+.history-group:not([open]) > .history-group-summary::before {
+	content: "▸ ";
 }
 
 /* ---------- retry row ---------- */

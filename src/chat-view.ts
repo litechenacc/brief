@@ -26,6 +26,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		// into the void while returning true. Always post through the CURRENT one.
 		this.dynamicSink = {
 			post: (message: HostToWebview) => {
+				this.syncChrome(message);
 				const webview = this.view?.webview;
 				if (webview) void webview.postMessage(message);
 			},
@@ -39,6 +40,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		// that re-wires the webview once more per toggle.
 		for (const d of this.viewDisposables.splice(0)) d.dispose();
 		this.view = view;
+		this.paintChrome(view);
 		// VS Code silently replaces the inner webview object when the panel is
 		// hidden/re-shown/reloaded (activity-bar toggles, window restore, Developer:
 		// Reload Webviews). Every time it becomes visible again we must re-wire onto
@@ -99,6 +101,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
 	private viewDisposables: vscode.Disposable[] = [];
 	private receiveDisposables: vscode.Disposable[] = [];
+	private chromeTitle = "";
+
+	private paintChrome(view: vscode.WebviewView | null = this.view): void {
+		if (!view) return;
+		view.title = this.chromeTitle;
+		view.description = undefined;
+	}
+
+	private syncChrome(message: HostToWebview): void {
+		if (message.type !== "status" && message.type !== "snapshot") return;
+		const status = message.status;
+		const label = (status.sessionLabel ?? status.sessionName)?.trim() ?? "";
+		const id = status.sessionId ? status.sessionId.slice(0, 8) : "";
+		// Empty until there is a name or first prompt. Matching the container
+		// title ("Prime Agent") avoids VS Code painting `Prime Agent:`.
+		this.chromeTitle = label ? (id ? `#${id}-${label}` : label) : "Prime Agent";
+		this.paintChrome();
+	}
 
 	reveal(): void {
 		this.view?.show?.(true);

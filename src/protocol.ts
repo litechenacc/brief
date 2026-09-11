@@ -364,6 +364,8 @@ export interface StatusSnapshot {
 	thinkingLevel: string;
 	availableThinkingLevels?: string[] | null;
 	sessionName?: string;
+	/** Named title, else first prompt line. Empty when the thread has neither. */
+	sessionLabel?: string;
 	sessionFile?: string;
 	sessionId?: string;
 	statsText: string;
@@ -415,6 +417,19 @@ export interface RecentSession {
 	 * row rank in the webview's own filter, which cannot see the transcript.
 	 */
 	matchSnippet?: string;
+	/**
+	 * Rank time for the history list. Frozen while a turn is in flight; only
+	 * advances when a response finishes and the agent is waiting for the user.
+	 * Mid-turn RPC chatter must not reshuffle the list.
+	 */
+	sortMs?: number;
+	/** True when the operator archived this row from the extension (not daemon auto-archive). */
+	archived?: boolean;
+	/**
+	 * A turn finished and the operator has not opened this session since.
+	 * History shows this as the green "done" lamp.
+	 */
+	unreadComplete?: boolean;
 }
 
 export type HostToWebview =

@@ -112,6 +112,12 @@
         "category": "Prime Agent"
       },
       {
+        "command": "primeAgent.renameSession",
+        "title": "Rename Session",
+        "icon": "$(edit)",
+        "category": "Prime Agent"
+      },
+      {
         "command": "primeAgent.restart",
         "title": "Restart Agent Process",
         "icon": "$(debug-restart)",
@@ -148,12 +154,29 @@
           "command": "primeAgent.focusChat",
           "when": "editorTextFocus",
           "group": "navigation@99"
+        },
+        {
+          "command": "primeAgent.history",
+          "when": "activeWebviewPanelId == 'primeAgent.chatPanel'",
+          "group": "navigation@2"
         }
       ],
       "commandPalette": [
         {
           "command": "primeAgent.addSelectionToChat",
           "when": "editorHasSelection"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "primeAgent.history",
+          "when": "view == primeAgent.chat",
+          "group": "navigation@2"
+        },
+        {
+          "command": "primeAgent.renameSession",
+          "when": "view == primeAgent.chat",
+          "group": "navigation@3"
         }
       ]
     },

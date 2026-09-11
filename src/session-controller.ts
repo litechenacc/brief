@@ -34,6 +34,7 @@ import type {
 import { DebugFileLog } from "./debug-log.js";
 import { buildMarkdownExport } from "./markdown-export.js";
 import { listRecentSessions, normalizeFsPath } from "./recent-sessions.js";
+import { deriveSessionLabel, firstUserPrompt } from "./session-label.js";
 import { AgentJobIndex } from "./agent-jobs.js";
 import { ProcessTracker, tailFile } from "./process-tracker.js";
 import { ThreadDiffTracker } from "./thread-diffs.js";
@@ -202,6 +203,18 @@ export class SessionController implements vscode.Disposable {
 	/** Latest rendered history capability set, including catalog-search-only rows. */
 	private actionHistory: RecentSession[] | null = null;
 	private savedCatalog: { at: number; rows: SavedSessionInfo[] } | null = null;
+	/**
+	 * History rank times, frozen while a turn is in flight. A live RPC event
+	 * must not reshuffle the list; only `agent_end` (waiting for the user)
+	 * advances a row.
+	 */
+	private historySortMs = new Map<string, number>();
+	/** Sessions the operator archived from the extension. Daemon auto-archive is not this. */
+	private historyArchived = new Set<string>();
+	/** Finished turns the operator has not opened since. */
+	private historyUnreadComplete = new Set<string>();
+	/** Last seen running, so idle after a turn can bump rank exactly once. */
+	private historyWasRunning = new Set<string>();
 	/** Monotonic navigation ownership: late session RPCs cannot repaint a newer view. */
 	private viewEpoch = 0;
 	/** Supersedes slow history/search answers so they cannot repaint a newer query. */
@@ -216,6 +229,7 @@ export class SessionController implements vscode.Disposable {
 		private readonly context: vscode.ExtensionContext,
 		private readonly output: vscode.OutputChannel,
 	) {
+		this.restoreHistoryUiState();
 		this.startWatcher();
 		this.scheduleProcessRefresh(0);
 	}
@@ -583,6 +597,8 @@ export class SessionController implements vscode.Disposable {
 				this.retrying = false;
 				this.onBusySettled();
 				this.scheduleChildrenRefresh();
+				// Rank only moves when the turn is done and the agent is waiting.
+				this.markHistoryWaitingForUser();
 				// A command that outlives the turn becomes unexplained the instant the
 				// turn ends, so promote it now rather than up to a poll later.
 				this.scheduleProcessRefresh(0);
@@ -1380,6 +1396,11 @@ export class SessionController implements vscode.Disposable {
 	 * the entryId via get_fork_messages order alignment with user rows.
 	 */
 	/** Rename the active session: daemon set_session_name on attached mode, RPC otherwise. */
+	currentSessionName(): string | undefined {
+		const named = this.rentedState?.sessionName ?? this.state?.sessionName;
+		return this.sessionChromeLabel(named) || undefined;
+	}
+
 	async renameSession(name: string): Promise<void> {
 		if (this.guardObservedReadOnly("renaming a session")) return;
 		const trimmed = name.trim();
@@ -1661,6 +1682,112 @@ export class SessionController implements vscode.Disposable {
 			this.historyRefreshTimer = null;
 			void this.listHistory();
 		}, 800);
+	}
+
+
+	private static readonly HISTORY_UI_STATE_KEY = "brief.historyUi";
+
+	private historyPathKey(sessionPath: string): string {
+		return normalizeFsPath(sessionPath);
+	}
+
+	private restoreHistoryUiState(): void {
+		const saved = this.context.workspaceState?.get<{
+			sortMs?: Record<string, number>;
+			archived?: string[];
+			unread?: string[];
+		}>(SessionController.HISTORY_UI_STATE_KEY);
+		if (!saved) return;
+		if (saved.sortMs) {
+			for (const [path, ms] of Object.entries(saved.sortMs)) {
+				if (typeof ms === "number" && Number.isFinite(ms)) this.historySortMs.set(path, ms);
+			}
+		}
+		if (Array.isArray(saved.archived)) {
+			for (const path of saved.archived) {
+				if (typeof path === "string" && path) this.historyArchived.add(path);
+			}
+		}
+		if (Array.isArray(saved.unread)) {
+			for (const path of saved.unread) {
+				if (typeof path === "string" && path) this.historyUnreadComplete.add(path);
+			}
+		}
+	}
+
+	private persistHistoryUiState(): void {
+		void this.context.workspaceState?.update(SessionController.HISTORY_UI_STATE_KEY, {
+			sortMs: Object.fromEntries(this.historySortMs),
+			archived: [...this.historyArchived],
+			unread: [...this.historyUnreadComplete],
+		});
+	}
+
+	private overlayCachedHistory(): void {
+		if (this.lastHistory) this.lastHistory = this.lastHistory.map((row) => this.decorateHistoryRow(row));
+		if (this.actionHistory) this.actionHistory = this.actionHistory.map((row) => this.decorateHistoryRow(row));
+	}
+
+	/** Current chat session file, when the host knows it. */
+	private viewedSessionPath(): string | undefined {
+		if (this.attached?.sessionPath) return this.historyPathKey(this.attached.sessionPath);
+		if (this.state?.sessionFile) return this.historyPathKey(this.state.sessionFile);
+		return undefined;
+	}
+
+	/**
+	 * A turn finished and the agent is waiting. This is the only moment the
+	 * history row is allowed to move — not mid-turn RPC chatter.
+	 */
+	private markHistoryWaitingForUser(sessionPath = this.viewedSessionPath()): void {
+		if (!sessionPath) return;
+		const key = this.historyPathKey(sessionPath);
+		this.historySortMs.set(key, Date.now());
+		this.historyWasRunning.delete(key);
+		if (this.viewedSessionPath() !== key) this.historyUnreadComplete.add(key);
+		else this.historyUnreadComplete.delete(key);
+		this.persistHistoryUiState();
+		this.overlayCachedHistory();
+	}
+
+	private markHistorySessionOpened(sessionPath: string): void {
+		const key = this.historyPathKey(sessionPath);
+		if (!this.historyUnreadComplete.has(key)) return;
+		this.historyUnreadComplete.delete(key);
+		this.persistHistoryUiState();
+		this.overlayCachedHistory();
+	}
+
+	private markHistoryArchived(sessionPath: string): void {
+		this.historyArchived.add(this.historyPathKey(sessionPath));
+		this.persistHistoryUiState();
+		this.overlayCachedHistory();
+	}
+
+	/**
+	 * Rank is frozen while a session is running. Catalog mtime/lastActivity
+	 * moves on every RPC event; using it as the list order is what made the
+	 * history jump around mid-turn.
+	 */
+	private decorateHistoryRow(row: RecentSession): RecentSession {
+		const key = this.historyPathKey(row.path);
+		const catalogMs = row.modifiedMs ?? (Number.isFinite(Date.parse(row.timestamp)) ? Date.parse(row.timestamp) : 0);
+		const prev = this.historySortMs.get(key);
+		const running = row.status === "running" || row.running === true;
+		if (running) {
+			this.historyWasRunning.add(key);
+			if (prev === undefined) this.historySortMs.set(key, catalogMs);
+		} else if (this.historyWasRunning.delete(key)) {
+			this.historySortMs.set(key, Date.now());
+			if (this.viewedSessionPath() !== key) this.historyUnreadComplete.add(key);
+			else this.historyUnreadComplete.delete(key);
+		} else if (prev === undefined) {
+			this.historySortMs.set(key, catalogMs);
+		}
+		const sortMs = this.historySortMs.get(key) ?? catalogMs;
+		const archived = this.historyArchived.has(key);
+		const unreadComplete = !running && this.historyUnreadComplete.has(key);
+		return { ...row, sortMs, archived, unreadComplete };
 	}
 
 	private autoCompactSent = false;
@@ -2060,21 +2187,24 @@ export class SessionController implements vscode.Disposable {
 			const modified = s.modified ?? s.lastActivityAt;
 			const parsed = modified ? Date.parse(modified) : Number.NaN;
 			const inWorkspace = normalizeFsPath(s.cwd) === root;
-			(inWorkspace ? inWorkspaceRows : otherRows).push({
-				id: s.sessionId ?? path.basename(s.sessionFile, ".jsonl"),
-				path: s.sessionFile,
-				cwd: s.cwd,
-				timestamp: s.created ?? modified ?? new Date().toISOString(),
-				modifiedMs: Number.isFinite(parsed) ? parsed : undefined,
-				name: s.sessionName,
-				firstPrompt: s.firstMessage,
-				inWorkspace,
-				running: SessionController.isRunningSummary(s),
-				status: SessionController.rosterStatus(s),
-				...(s.statusLabel ? { statusLabel: s.statusLabel } : {}),
-			});
+			(inWorkspace ? inWorkspaceRows : otherRows).push(
+				this.decorateHistoryRow({
+					id: s.sessionId ?? path.basename(s.sessionFile, ".jsonl"),
+					path: s.sessionFile,
+					cwd: s.cwd,
+					timestamp: s.created ?? modified ?? new Date().toISOString(),
+					modifiedMs: Number.isFinite(parsed) ? parsed : undefined,
+					name: s.sessionName,
+					firstPrompt: s.firstMessage,
+					inWorkspace,
+					running: SessionController.isRunningSummary(s),
+					status: SessionController.rosterStatus(s),
+					...(s.statusLabel ? { statusLabel: s.statusLabel } : {}),
+				}),
+			);
 		}
 		const activityOf = (s: RecentSession): number => {
+			if (s.sortMs !== undefined) return s.sortMs;
 			if (s.modifiedMs !== undefined) return s.modifiedMs;
 			const parsed = Date.parse(s.timestamp);
 			return Number.isFinite(parsed) ? parsed : 0;
@@ -2082,6 +2212,7 @@ export class SessionController implements vscode.Disposable {
 		const byActivityDesc = (a: RecentSession, b: RecentSession): number => activityOf(b) - activityOf(a);
 		inWorkspaceRows.sort(byActivityDesc);
 		otherRows.sort(byActivityDesc);
+		this.persistHistoryUiState();
 		return [...inWorkspaceRows.slice(0, HISTORY_WORKSPACE_LIMIT), ...otherRows.slice(0, HISTORY_OTHER_LIMIT)];
 	}
 
@@ -2093,10 +2224,17 @@ export class SessionController implements vscode.Disposable {
 		} catch {
 			// Daemon unreachable: the scan is less exact about names but it is the
 			// difference between a stale title and no history at all.
-			return listRecentSessions(this.workspaceRoot, {
+			const rows = await listRecentSessions(this.workspaceRoot, {
 				workspaceLimit: HISTORY_WORKSPACE_LIMIT,
 				otherLimit: HISTORY_OTHER_LIMIT,
 			});
+			const decorated = rows.map((row) => this.decorateHistoryRow(row));
+			const activityOf = (s: RecentSession): number => s.sortMs ?? s.modifiedMs ?? 0;
+			const byActivityDesc = (a: RecentSession, b: RecentSession): number => activityOf(b) - activityOf(a);
+			return [
+				...decorated.filter((s) => s.inWorkspace).sort(byActivityDesc),
+				...decorated.filter((s) => !s.inWorkspace).sort(byActivityDesc),
+			];
 		}
 	}
 
@@ -2212,12 +2350,16 @@ export class SessionController implements vscode.Disposable {
 		this.broadcast({ type: "history", sessions: results });
 	}
 
-	/** Drop a row from the replay cache so a deleted/archived session never flashes back. */
+	/** Drop a row from the replay cache so a deleted session never flashes back. */
 	private forgetHistoryRow(sessionPath: string): void {
 		if (!this.lastHistory) return;
 		const target = normalizeFsPath(sessionPath);
 		this.lastHistory = this.lastHistory.filter((s) => normalizeFsPath(s.path) !== target);
 		if (this.actionHistory) this.actionHistory = this.actionHistory.filter((s) => normalizeFsPath(s.path) !== target);
+		this.historySortMs.delete(target);
+		this.historyArchived.delete(target);
+		this.historyUnreadComplete.delete(target);
+		this.persistHistoryUiState();
 	}
 
 	private async savedSessionCatalog(): Promise<SavedSessionInfo[]> {
@@ -2295,9 +2437,9 @@ export class SessionController implements vscode.Disposable {
 		}
 		const result = await archiveSessionFile(sessionPath, fileId);
 		if (result.ok) {
-			this.broadcast({ type: "notice", level: "info", text: "Session archived — the transcript is kept, and it stays resumable from the CLI." });
+			this.broadcast({ type: "notice", level: "info", text: "Session archived — hidden from the active list; expand Archive to find it again." });
 			this.savedCatalog = null;
-			this.forgetHistoryRow(sessionPath);
+			this.markHistoryArchived(sessionPath);
 			await this.listHistory();
 		} else {
 			this.broadcast({ type: "notice", level: "error", text: `Could not archive session: ${result.error ?? "unknown error"}` });
@@ -2419,6 +2561,7 @@ export class SessionController implements vscode.Disposable {
 		}
 		sessionPath = session.path;
 		sessionId = session.id;
+		this.markHistorySessionOpened(sessionPath);
 		// Re-attaching an already attached session and then releasing the previous
 		// attachment would release the attachment we just refreshed. Treat this as
 		// the no-op the history row represents instead.
@@ -4092,6 +4235,10 @@ export class SessionController implements vscode.Disposable {
 		return this.streaming || (this.state?.isStreaming ?? false);
 	}
 
+	private sessionChromeLabel(sessionName?: string): string {
+		return deriveSessionLabel({ name: sessionName, firstPrompt: firstUserPrompt(this.cachedMessages) });
+	}
+
 	private buildStatus(statsText = this.lastStatsText): StatusSnapshot {
 		if (this.observingId) {
 			const observed = this.observedSession;
@@ -4106,6 +4253,7 @@ export class SessionController implements vscode.Disposable {
 				availableThinkingLevels: null,
 				sessionFile: observed?.sessionPath,
 				sessionId: observed?.sessionId ?? this.observingId,
+				sessionLabel: this.sessionChromeLabel(),
 				statsText,
 				statusText: "watching another live session (read-only)",
 				observingId: this.observingId,
@@ -4127,6 +4275,7 @@ export class SessionController implements vscode.Disposable {
 				thinkingLevel: state?.thinkingLevel ?? "off",
 				availableThinkingLevels: supportedThinkingLevels(model),
 				sessionName: state?.sessionName,
+				sessionLabel: this.sessionChromeLabel(state?.sessionName),
 				sessionFile: attempt.sessionPath,
 				sessionId: attempt.sessionId ?? path.basename(attempt.sessionPath, ".jsonl"),
 				statsText,
@@ -4158,6 +4307,7 @@ export class SessionController implements vscode.Disposable {
 				thinkingLevel: st?.thinkingLevel ?? "off",
 				availableThinkingLevels: supportedThinkingLevels(model),
 				sessionName: st?.sessionName,
+				sessionLabel: this.sessionChromeLabel(st?.sessionName),
 				sessionFile: this.attached.sessionPath,
 				// History rows key on the jsonl stem. Falling back to the 12-char
 				// attach handle here would leave the row for the session on screen
@@ -4197,6 +4347,7 @@ export class SessionController implements vscode.Disposable {
 			thinkingLevel: this.state?.thinkingLevel ?? "off",
 			availableThinkingLevels: supportedThinkingLevels(model),
 			sessionName: this.state?.sessionName,
+			sessionLabel: this.sessionChromeLabel(this.state?.sessionName),
 			sessionFile: this.state?.sessionFile,
 			// Same derivation as sessionKey(): the identity the webview sends back
 			// with a draft has to be the identity the draft is stored under.

@@ -63,7 +63,7 @@ check("splash shows the Prime Agent mark and name",
 check("splash says what it is waiting for", (document.querySelector(".boot-splash-sub")?.textContent ?? "").includes("connecting"),
 	document.querySelector(".boot-splash-sub")?.textContent ?? "<none>");
 hostMessage({ type: "uiState", title: "early agent title", statusText: "warming up" });
-check("uiState title paints before the first status snapshot", document.querySelector(".session-title")?.textContent === "early agent title");
+check("uiState statusText paints before the first status snapshot", document.querySelector(".live-label")?.textContent === "warming up");
 
 const baseStatus = {
 	connected: true, streaming: false, compacting: false, retrying: false, restoring: false,
@@ -234,7 +234,6 @@ const swept = window.getSelection().getRangeAt(0);
 check("expanding sweeps the selection over the revealed thinking text",
 	thinking.querySelector(".thinking-body").contains(swept.endContainer),
 	`end=${swept.endContainer.nodeValue ?? swept.endContainer.nodeName}`);
-check("session title shown", document.querySelector(".session-title").textContent === "demo");
 check("live badge", document.querySelector(".live-label").textContent === "live");
 check("context meter labeled", document.querySelector(".context-label").textContent.includes("262k"));
 
@@ -329,7 +328,7 @@ check("enter sends prompt", !!promptMsg && promptMsg.payload.text === "test prom
 
 // --- history view (grouped) ---
 posted.length = 0;
-const historyBtn = [...document.querySelectorAll(".icon-btn")].find((b) => b.title === "Sessions in this workspace");
+const historyBtn = document.querySelector('button[title="Sessions in this workspace"]');
 historyBtn.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
 check("requests history on toggle", posted.some((m) => m.type === "requestHistory"));
 hostMessage({
@@ -342,16 +341,19 @@ hostMessage({
 hostMessage({
 	type: "history",
 	sessions: [
-		{ path: "/tmp/old.jsonl", cwd: "/ws", timestamp: new Date(Date.now() - 86_400e3 * 3).toISOString(), modifiedMs: Date.now() - 86_400e3 * 3, name: "oldest", inWorkspace: true },
-		{ path: "/tmp/new.jsonl", cwd: "/ws", timestamp: new Date(Date.now() - 86_400e3).toISOString(), modifiedMs: Date.now() - 86_400e3, name: "renamed-just-now", inWorkspace: true },
-		{ path: "/tmp/mid.jsonl", cwd: "/ws", timestamp: new Date().toISOString(), modifiedMs: Date.now(), name: "newest", inWorkspace: true },
+		{ path: "/tmp/old.jsonl", cwd: "/ws", timestamp: new Date(Date.now() - 86_400e3 * 3).toISOString(), modifiedMs: Date.now() - 86_400e3 * 3, sortMs: Date.now() - 86_400e3 * 3, name: "oldest", inWorkspace: true },
+		{ path: "/tmp/new.jsonl", cwd: "/ws", timestamp: new Date(Date.now() - 86_400e3).toISOString(), modifiedMs: Date.now() - 86_400e3, sortMs: Date.now() - 86_400e3, name: "renamed-just-now", inWorkspace: true },
+		{ path: "/tmp/mid.jsonl", cwd: "/ws", timestamp: new Date().toISOString(), modifiedMs: Date.now(), sortMs: Date.now(), name: "newest", inWorkspace: true },
+		{ path: "/tmp/busy.jsonl", cwd: "/ws", timestamp: new Date().toISOString(), modifiedMs: Date.now() + 86_400e3, sortMs: Date.now() - 86_400e3 * 10, name: "still-running-old", inWorkspace: true, status: "running" },
 	],
 });
 const itemNames = [...document.querySelectorAll(".history-item .history-item-name")].map((n) => n.textContent);
-check("history sorted recent-descending within bucket", itemNames[0] === "newest" && itemNames[1] === "renamed-just-now" && itemNames[2] === "oldest", itemNames.join("|"));
+check("history sorted by frozen sortMs, not mid-turn mtime", itemNames[0] === "newest" && itemNames[1] === "renamed-just-now" && itemNames[2] === "oldest" && itemNames[3] === "still-running-old", itemNames.join("|"));
 const relativeTimes = [...document.querySelectorAll(".history-item .history-item-time")].map((n) => n.textContent);
 check("renamed session labels by activity time", relativeTimes[1].includes("d"), JSON.stringify(relativeTimes));
-check("history groups rendered", document.querySelectorAll(".history-item").length === 3);
+check("history groups rendered", document.querySelectorAll(".history-item").length === 4);
+check("workspace group is foldable",
+	[...document.querySelectorAll(".history-group-summary")].some((n) => n.textContent.includes("This workspace")));
  // re-seed the canonical 2-item list for downstream checks
 hostMessage({
 	type: "history",
@@ -650,23 +652,39 @@ const rowNamed = (text) => [...document.querySelectorAll(".history-item")].find(
 const markOf = (text) => rowNamed(text)?.querySelector(".running-mark");
 const runRow = rowNamed("live worker");
 check("running row shows the animated mark", !!runRow.querySelector(".running-dot"));
-// All three roster states are visible, and only the live one moves.
-check("a running row is marked running", markOf("live worker")?.className.includes("running"));
+check("a running row is the red working lamp", markOf("live worker")?.className.includes("working"), markOf("live worker")?.className);
 check("an idle row still gets a dot, not nothing", !!markOf("quiet archive")?.querySelector(".running-dot"));
-check("an idle row is marked idle", markOf("quiet archive")?.className.includes("idle"), markOf("quiet archive")?.className);
-check("an inactive row is shown and marked inactive", markOf("retired thread")?.className.includes("inactive"), markOf("retired thread")?.className);
+check("an idle row without unread is grey", markOf("quiet archive")?.className.includes("seen"), markOf("quiet archive")?.className);
+check("an inactive row is shown and marked seen until a turn finishes", markOf("retired thread")?.className.includes("seen"), markOf("retired thread")?.className);
 check("each state says what it means", [markOf("live worker"), markOf("quiet archive"), markOf("retired thread")]
 	.map((m) => m?.title ?? "").every((t) => t.length > 0));
-check("a host that sends no status still reads as inactive, never as running",
-	markOf("legacy row")?.className.includes("inactive"), markOf("legacy row")?.className);
-check("history actions are siblings of its resume control", !!runRow.querySelector(".history-item-top > .history-resume + .history-actions") && !runRow.querySelector(".history-resume button"));
+check("a host that sends no status still reads as seen, never as working",
+	markOf("legacy row")?.className.includes("seen") && !markOf("legacy row")?.className.includes("working"), markOf("legacy row")?.className);
+hostMessage({
+	type: "history",
+	sessions: [
+		{ id: "done-1", path: "/tmp/done.jsonl", cwd: "/ws", timestamp: new Date().toISOString(), name: "just finished", inWorkspace: true, status: "idle", unreadComplete: true },
+	],
+});
+check("a finished unread row is the green complete lamp", markOf("just finished")?.className.includes("complete"), markOf("just finished")?.className);
+hostMessage({
+	type: "history",
+	sessions: [
+		{ id: "run-1", path: "/tmp/run.jsonl", cwd: "/ws", timestamp: new Date().toISOString(), name: "live worker", inWorkspace: true, running: true, status: "running" },
+		{ id: "idle-1", path: "/tmp/idle.jsonl", cwd: "/ws", timestamp: new Date().toISOString(), name: "quiet archive", inWorkspace: true, status: "idle" },
+		{ id: "gone-1", path: "/tmp/gone.jsonl", cwd: "/ws", timestamp: new Date().toISOString(), name: "retired thread", inWorkspace: true, status: "inactive" },
+		{ id: "old-host", path: "/tmp/old.jsonl", cwd: "/ws", timestamp: new Date().toISOString(), name: "legacy row", inWorkspace: true },
+	],
+});
+const liveRow = rowNamed("live worker");
+check("history actions are siblings of its resume control", !!liveRow.querySelector(".history-item-top > .history-resume + .history-actions") && !liveRow.querySelector(".history-resume button"));
 const idleRow = rowNamed("quiet archive");
 check("an idle row offers no Stop — there is no run to stop",
 	![...idleRow.querySelectorAll(".history-action")].some((b) => b.title.startsWith("Stop")));
-const actTitles = [...runRow.querySelectorAll(".history-action")].map((b) => b.title);
+const actTitles = [...liveRow.querySelectorAll(".history-action")].map((b) => b.title);
 check("actions ordered stop -> rename -> delete", actTitles[0].startsWith("Stop") && actTitles.some((t) => t.startsWith("Rename")) && actTitles.some((t) => t.startsWith("Delete")), actTitles.join("|"));
 posted.length = 0;
-[...runRow.querySelectorAll(".history-action")].find((b) => b.title.startsWith("Stop")).dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+[...liveRow.querySelectorAll(".history-action")].find((b) => b.title.startsWith("Stop")).dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
 check("stop posts stopSession", posted.some((m) => m.type === "stopSession" && m.sessionId === "run-1"));
 hostMessage({
 	type: "history",
@@ -676,76 +694,8 @@ hostMessage({
 	],
 });
 
-// --- session title rename by double-click (header) ---
-hostMessage({ type: "status", status: { ...baseStatus, sessionName: "vscode-extension" } });
-const titleWrap = document.querySelector(".session-title-wrap");
-check("session title shown in header", titleWrap && titleWrap.querySelector(".session-title").textContent === "vscode-extension");
-check("the rename button is gone — the name itself is the affordance", !titleWrap.querySelector(".title-edit-btn"));
-
-const dblclick = () => titleWrap.querySelector(".session-title").dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
-
-// A single click must not start editing, or selecting the title text would.
-posted.length = 0;
-titleWrap.querySelector(".session-title").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-check("a single click does not open the editor", !document.querySelector(".session-title-input"));
-
-dblclick();
-const titleInput = document.querySelector(".session-title-input");
-check("double-click swaps the span for an input", !!titleInput && titleInput.value === "vscode-extension");
-titleInput.value = "shiny-browser-app";
-titleInput.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
-check("enter posts renameSession", posted.some((m) => m.type === "renameSession" && m.name === "shiny-browser-app"));
-check("input restores to the span after commit", !!document.querySelector(".session-title-wrap .session-title"));
-
-// Escape discards, and says so by sending nothing.
-posted.length = 0;
-dblclick();
-const escInput = document.querySelector(".session-title-input");
-escInput.value = "typed-then-abandoned";
-escInput.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
-check("escape sends no rename", !posted.some((m) => m.type === "renameSession"));
-check("escape restores the span", !!document.querySelector(".session-title-wrap .session-title"));
-check("escape leaves the old name on screen", document.querySelector(".session-title").textContent === "vscode-extension");
-
-// Clicking away keeps the edit: losing a rename to a stray click is the clunk.
-posted.length = 0;
-dblclick();
-const blurInput = document.querySelector(".session-title-input");
-blurInput.value = "kept-on-blur";
-blurInput.dispatchEvent(new window.FocusEvent("blur", { bubbles: false }));
-check("blur commits the rename", posted.some((m) => m.type === "renameSession" && m.name === "kept-on-blur"));
-
-// Emptying the box means "leave it alone": the daemon cannot clear a name, so
-// sending one would only bounce back as an error under the operator's cursor.
-posted.length = 0;
-dblclick();
-const emptyInput = document.querySelector(".session-title-input");
-emptyInput.value = "   ";
-emptyInput.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
-check("an emptied name posts nothing", !posted.some((m) => m.type === "renameSession"));
-check("an emptied name leaves the old one on screen", document.querySelector(".session-title").textContent === "vscode-extension");
-
-// An unchanged value is not a rename, so a stray double-click costs nothing.
-posted.length = 0;
-dblclick();
-const noopInput = document.querySelector(".session-title-input");
-noopInput.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
-check("an unchanged name posts nothing", !posted.some((m) => m.type === "renameSession"));
-
-// A rename in flight belongs to the session it started on.
-posted.length = 0;
-dblclick();
-const staleInput = document.querySelector(".session-title-input");
-staleInput.value = "meant-for-the-old-session";
-hostMessage({ type: "status", status: { ...baseStatus, sessionId: "0000ffff-1111-2222-3333-444455556666", sessionName: "another-session" } });
-check("a session change discards the in-flight rename", !posted.some((m) => m.type === "renameSession"));
-check("a session change restores the span", !!document.querySelector(".session-title-wrap .session-title"));
-hostMessage({ type: "status", status: { ...baseStatus, sessionName: "vscode-extension" } });
-
-hostMessage({ type: "uiState", title: "title supplied by agent" });
-check("uiState title updates the header", document.querySelector(".session-title")?.textContent === "title supplied by agent",
-	document.querySelector(".session-title")?.textContent ?? "<none>");
-
+check("session chrome actions stay in the webview for tests and welcome",
+	!!document.querySelector('button[title="New session"]') && !!document.querySelector('button[title="Sessions in this workspace"]'));
 
 // --- the strip header tallies each state, and stays right as they change -----
 {
@@ -861,7 +811,7 @@ check("uiState title updates the header", document.querySelector(".session-title
 	const header = () => document.querySelector(".subagents-strip .subagents-header");
 	// Guarded: a selector that silently stops matching would reset nothing and
 	// make every check below pass for the wrong reason.
-	const newChatBtn = document.querySelector(".topbar .icon-btn[title='New session']");
+	const newChatBtn = document.querySelector('button[title="New session"]');
 	check("the New session control is reachable for these fixtures", !!newChatBtn);
 	const freshThread = () => newChatBtn.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
 
@@ -1373,7 +1323,7 @@ hostMessage({ type: "event", event: { type: "message_start", message: { role: "u
 check("confirmed second prompt does not duplicate its optimistic row", scroller.querySelectorAll(".row-user").length === 1, String(scroller.querySelectorAll(".row-user").length));
 
 // --- history delete: inline confirm posts deleteSession ---
-const historyBtnAgain = [...document.querySelectorAll(".icon-btn")].find((b) => b.title === "Sessions in this workspace");
+const historyBtnAgain = document.querySelector('button[title="Sessions in this workspace"]');
 historyBtnAgain.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
 // Search must be cleared BEFORE the fixture: the needle blocks lastSessions updates.
 document.querySelector(".history-search").value = "";
@@ -1433,6 +1383,22 @@ check("archive confirm is not styled destructive", !archConfirm.classList.contai
 archConfirm.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
 check("confirm posts archiveSession", posted.some((m) => m.type === "archiveSession" && m.sessionId === "arch-1"), JSON.stringify(posted));
 check("archive does not post deleteSession", !posted.some((m) => m.type === "deleteSession"));
+hostMessage({
+	type: "history",
+	sessions: [
+		{ id: "arch-1", path: "/tmp/arch.jsonl", cwd: "/ws", timestamp: new Date().toISOString(), name: "finished experiment", inWorkspace: true, archived: true },
+		{ id: "live-2", path: "/tmp/live2.jsonl", cwd: "/ws", timestamp: new Date().toISOString(), name: "still open", inWorkspace: true },
+	],
+});
+const archiveGroup = [...document.querySelectorAll(".history-group")].find((g) => g.querySelector(".history-group-summary")?.textContent.includes("Archive"));
+check("archive section starts folded", archiveGroup?.open === false);
+archiveGroup.open = true;
+check("archived row moves into its own section", archiveGroup.textContent.includes("finished experiment"));
+check("active list still shows the unarchived row",
+	[...document.querySelectorAll(".history-item .history-item-name")].some((n) => n.textContent.includes("still open")));
+const archivedRow = [...archiveGroup.querySelectorAll(".history-item")].find((i) => i.textContent.includes("finished experiment"));
+check("an already-archived row has no archive action",
+	!!archivedRow && ![...archivedRow.querySelectorAll(".history-action")].some((b) => (b.title ?? "").startsWith("Archive")));
 
 // --- history search reaches the host, and transcript hits rank and explain themselves ---
 posted.length = 0;
@@ -1484,26 +1450,6 @@ check("thread-diff file action is separate from its disclosure control",
 check("rendered webview has no nested native interactive controls",
 	document.querySelectorAll("button button, button input, button select, button textarea").length === 0,
 	[...document.querySelectorAll("button button, button input, button select, button textarea")].map((node) => node.outerHTML).join("\n"));
-
-// --- C12: the two links the operator asked for, and the butterfly on the entry ---
-posted.length = 0;
-const kebabBtn = [...document.querySelectorAll(".topbar .icon-btn")].find((b) => b.title === "Session actions");
-kebabBtn.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-const kebabMenu = document.querySelector(".menu.visible");
-check("kebab menu opens", !!kebabMenu);
-const kebabItems = [...kebabMenu.querySelectorAll(".menu-item")];
-const visitItem = kebabItems[kebabItems.length - 1];
-check("bottom kebab entry is Visit Prime Intellect", visitItem.textContent.trim() === "Visit Prime Intellect", kebabItems.map((i) => i.textContent.trim()).join("|"));
-// #44: the butterfly, not a generic link glyph — same mark as the brand.
-check("that entry wears the butterfly", !!visitItem.querySelector('svg[viewBox="0 0 178 178"]'));
-check("every kebab entry says what it does", kebabItems.every((i) => i.textContent.trim().length > 0));
-visitItem.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-check("visit opens the Prime Intellect dashboard", posted.some((m) => m.type === "openExternal" && m.url === "https://app.primeintellect.ai"), JSON.stringify(posted));
-check("choosing an entry closes the menu", !document.querySelector(".menu.visible"));
-posted.length = 0;
-document.querySelector(".topbar .brand").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-check("header mark opens the prime-agent write-up",
-	posted.some((m) => m.type === "openExternal" && m.url === "https://www.primeintellect.ai/blog/prime-agent#article-top"), JSON.stringify(posted));
 
 // --- #5/C10: steer vs queue while a run is live, and a Stop that really aborts ---
 const behaviorPill = document.querySelector(".composer-rail .rail-pill.behavior");

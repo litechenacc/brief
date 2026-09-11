@@ -111,6 +111,7 @@ const expectedCommands = [
 	"primeAgent.exportChat",
 	"primeAgent.restart",
 	"primeAgent.history",
+	"primeAgent.renameSession",
 	"primeAgent.addSelectionToChat",
 	"primeAgent.addActiveFileToChat",
 ];

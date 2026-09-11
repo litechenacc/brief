@@ -220,7 +220,7 @@ async function waitForChatFrame(timeoutMs = 90_000) {
 	while (Date.now() - start < timeoutMs) {
 		for (const frame of page.frames()) {
 			try {
-				if (await frame.evaluate(() => !!document.querySelector(".chat-root .brand .brand-name"))) return frame;
+				if (await frame.evaluate(() => !!document.querySelector(".chat-root"))) return frame;
 			} catch {
 				// detached or cross-origin, retry
 			}
@@ -276,7 +276,7 @@ try {
 		// tooltips: every visible button in chrome should have a non-empty title
 		const missingTitles = await frame.evaluate(() => {
 			const out = [];
-			for (const btn of document.querySelectorAll(".topbar button, .composer-rail button, .status-strip button")) {
+			for (const btn of document.querySelectorAll(".welcome-action, .composer-rail button, .status-strip button")) {
 				if (!btn.getAttribute("title")) out.push(btn.className || btn.textContent?.slice(0, 20));
 			}
 			return out;
