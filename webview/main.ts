@@ -172,6 +172,14 @@ const historyView = new HistoryView({
 		const prev = (vscode.getState() as Record<string, unknown> | undefined) ?? {};
 		vscode.setState({ ...prev, historyFolds: folds });
 	},
+	readSort: () => {
+		const state = vscode.getState() as { historySort?: "priority" | "birth" } | undefined;
+		return state?.historySort;
+	},
+	writeSort: (sort) => {
+		const prev = (vscode.getState() as Record<string, unknown> | undefined) ?? {};
+		vscode.setState({ ...prev, historySort: sort });
+	},
 	onResume: (path, sessionId) => {
 		// Before the switch, or the last 300ms of typing lands under the INCOMING
 		// session id and overwrites the draft the operator saved there.
@@ -185,6 +193,7 @@ const historyView = new HistoryView({
 	onArchive: (path, sessionId) => {
 		post({ type: "archiveSession", path, sessionId });
 	},
+	onMarkUnread: (path, sessionId) => post({ type: "markSessionUnread", path, sessionId }),
 	onRename: (path, sessionId, name) => {
 		post({ type: "renameHistorySession", path, sessionId, name });
 	},
@@ -312,7 +321,7 @@ function startNewThread(): void {
 	transcript.renderSnapshot([]);
 	composer.resetForSessionBoundary();
 	composer.setStreaming(false);
-	composer.setEnabled(false, "Creating session…");
+	composer.setEnabled(false, "Creating session…", true);
 	if (currentStatus) {
 		currentStatus = {
 			...currentStatus,
@@ -379,39 +388,6 @@ function adoptAuthoritativeSession(sessionId: string | undefined): boolean {
 	return true;
 }
 
-// Boot splash: until the FIRST live connection, hide the composer and show the
-// breathing Brief mark. Disconnections after that only touch the status strip.
-let everConnected = false;
-let bootSplashRetired = false;
-const bootSplash = el("div", "boot-splash");
-bootSplash.appendChild(el("div", "boot-splash-mark")).appendChild(brandMark(44));
-bootSplash.appendChild(el("div", "boot-splash-name", "Brief"));
-const bootSplashSub = el("div", "boot-splash-sub", "connecting…");
-bootSplash.appendChild(bootSplashSub);
-app.appendChild(bootSplash);
-
-/** Take the splash down for good. The overlay covers the whole view, so anything
- *  the operator needs to act on (the install banner above all) must retire it. */
-function retireBootSplash(): void {
-	if (bootSplashRetired) return;
-	bootSplashRetired = true;
-	bootSplash.classList.add("gone");
-	setTimeout(() => bootSplash.remove(), 700);
-}
-
-// Never leave "connecting…" standing as the whole story: if the first connection
-// hasn't landed in 12s, say so honestly instead of breathing forever.
-setTimeout(() => {
-	if (!everConnected && !bootSplashRetired) {
-		bootSplashSub.textContent = "still connecting — checking for the agent runtime…";
-	}
-}, 12_000);
-// Hard ceiling. The splash is opaque and covers the notices, the install card and
-// the kebab's "Restart agent process" — the operator's only escape hatches — so it
-// can never be their final state. The strip's honest "offline" carries the story
-// from here, and the composer stays disabled until a status says otherwise.
-setTimeout(retireBootSplash, 18_000);
-
 function applyStatus(incomingStatus: StatusSnapshot): void {
 	adoptAuthoritativeSession(incomingStatus.sessionId);
 	if (incomingStatus.sessionId && incomingStatus.sessionFile) {
@@ -442,10 +418,6 @@ function applyStatus(incomingStatus: StatusSnapshot): void {
 	const status = extensionTitle && extensionTitle.sessionId === incomingStatus.sessionId
 		? { ...incomingStatus, sessionName: extensionTitle.title }
 		: incomingStatus;
-	if (!everConnected && status.connected) {
-		everConnected = true;
-		retireBootSplash();
-	}
 	if (currentStatus?.sessionId !== status.sessionId) {
 		// A rename in flight belongs to the session that was on screen when it
 		// started. Discard it rather than let Enter land on whatever replaced it.
@@ -488,6 +460,7 @@ function applyStatus(incomingStatus: StatusSnapshot): void {
 			: status.connected
 				? null
 				: "Not connected — the agent runtime isn't answering",
+		status.restoring && !status.sessionId && !status.observingId,
 	);
 	// Apply capacity and thresholds together so each status paints the meter once.
 	// Missing overrides must clear the previous session's threshold.
@@ -522,8 +495,11 @@ function renderLiveLabel(status: StatusSnapshot): void {
 	const lanes: string[] = [];
 	if (status.connected && !status.streaming && working > 0) lanes.push(`${working} subagent${working === 1 ? "" : "s"} working`);
 	liveLabel.textContent = lanes.length > 0 ? `${text} · ${lanes.join(" · ")}` : text;
-	liveLabel.className = `live-label${status.connected ? " on" : ""}`;
-	connDot.className = `conn-dot${status.connected ? (busy ? " busy" : " live") : ""}`;
+	// This is the session's state, not its daemon attachment. A session opened
+	// here is already read; only active work needs the red working mark.
+	const lamp = status.connected && busy ? "working" : status.awaitingInput ? "complete" : "seen";
+	liveLabel.className = `live-label ${lamp}`;
+	connDot.className = `conn-dot ${lamp}`;
 }
 
 function setObserving(value: boolean): void {
@@ -606,7 +582,6 @@ function dispatchHostMessage(message: HostToWebview): void {
 			historyOnly = message.enabled;
 			app.classList.toggle("history-only", historyOnly);
 			statusStrip.style.display = historyOnly ? "none" : "";
-			if (historyOnly) retireBootSplash();
 			showView(historyOnly ? "history" : "chat");
 			break;
 		case "setViewMoving":
@@ -737,14 +712,9 @@ function dispatchHostMessage(message: HostToWebview): void {
 			addNotice("info", "Stopped watching the live session.");
 			break;
 		case "notice":
-			// A failure the operator has to read is painted underneath the splash.
-			if (message.level !== "info") retireBootSplash();
 			addNotice(message.level, message.text, message.action);
 			break;
 		case "installPrompt":
-			// The splash sits on top of everything — drop it or the operator can
-			// never reach the install guide we just told them to open.
-			retireBootSplash();
 			renderInstallBanner(message.url, message.reason);
 			break;
 		case "uiState":
@@ -780,13 +750,9 @@ function dispatchHostMessage(message: HostToWebview): void {
 			showView("chat");
 			break;
 		case "promptAccepted":
-			// Prompts WITH an echo are released by onOptimisticConfirmed when the
-			// agent echoes them. One without an echo (selection-only) never gets
-			// that callback, so its retained payload — images included — would sit
-			// in memory until the next session boundary.
-			for (const [id, entry] of pendingPrompts) {
-				if (entry.text.length === 0 && entry.images.length === 0) pendingPrompts.delete(id);
-			}
+			// Host acceptance makes the prompt durable. Keep its optimistic row until
+			// the transcript echoes it, but do not block switching away from a run.
+			if (message.clientRequestId) pendingPrompts.delete(message.clientRequestId);
 			break;
 		case "editorText":
 			composer.setText(message.text);

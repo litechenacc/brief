@@ -209,7 +209,7 @@ try {
 		);
 		check(
 			"the header keeps the attached session status",
-			/^(attached|running|compacting)$/.test(revisit?.status?.statusText ?? ""),
+			/^(opened|running|compacting)$/.test(revisit?.status?.statusText ?? ""),
 			revisit?.status?.statusText ?? "<none>",
 		);
 		watcher.dispose();

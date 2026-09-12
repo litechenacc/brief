@@ -12,10 +12,13 @@ export interface HistoryFoldState {
 	archive: boolean;
 }
 
+type HistorySort = "priority" | "birth";
+
 export interface HistoryDeps {
 	onResume: (path: string, sessionId: string) => void;
 	onDelete: (path: string, sessionId: string) => void;
 	onArchive: (path: string, sessionId: string) => void;
+	onMarkUnread: (path: string, sessionId: string) => void;
 	onRename: (path: string, sessionId: string, name: string) => void;
 	onStop: (path: string, sessionId: string) => void;
 	/** Ask the host to search the conversations themselves, not just these rows. */
@@ -23,6 +26,8 @@ export interface HistoryDeps {
 	onBack: () => void;
 	readFolds?: () => Partial<HistoryFoldState> | undefined;
 	writeFolds?: (folds: HistoryFoldState) => void;
+	readSort?: () => HistorySort | undefined;
+	writeSort?: (sort: HistorySort) => void;
 }
 
 /** Host round-trip debounce: long enough to not search every keystroke, short enough to feel live. */
@@ -61,8 +66,24 @@ export class HistoryView {
 			this.searchTimer = setTimeout(() => this.deps.onSearch(query), SEARCH_DEBOUNCE_MS) as unknown as number;
 		});
 		this.headerEl = header;
+		this.sortEl = document.createElement("select");
+		this.sortEl.className = "history-sort";
+		this.sortEl.setAttribute("aria-label", "Sort sessions");
+		for (const [label, value] of [["Priority", "priority"], ["Birth time", "birth"]] as const) {
+			const option = document.createElement("option");
+			option.textContent = label;
+			option.value = value;
+			this.sortEl.appendChild(option);
+		}
+		this.sort = this.deps.readSort?.() === "birth" ? "birth" : "priority";
+		this.sortEl.value = this.sort;
+		this.sortEl.addEventListener("change", () => {
+			this.sort = this.sortEl.value === "birth" ? "birth" : "priority";
+			this.deps.writeSort?.(this.sort);
+			this.render(this.lastSessions ?? [], this.currentId);
+		});
 		this.listEl = el("div", "history-list");
-		this.root.append(header, this.searchEl, this.listEl);
+		this.root.append(header, this.searchEl, this.sortEl, this.listEl);
 		const saved = this.deps.readFolds?.();
 		this.folds = {
 			workspace: saved?.workspace ?? false,
@@ -72,6 +93,8 @@ export class HistoryView {
 	}
 
 	private searchEl: HTMLInputElement;
+	private sortEl: HTMLSelectElement;
+	private sort: HistorySort = "priority";
 	private headerEl: HTMLElement;
 	private lastSessions: RecentSession[] | null = null;
 	private query = "";
@@ -148,15 +171,20 @@ export class HistoryView {
 		}
 		const activityOf = (s: RecentSession): number =>
 			s.sortMs ?? s.modifiedMs ?? (Number.isFinite(Date.parse(s.timestamp)) ? Date.parse(s.timestamp) : 0);
-		// Best hit first WITHIN each bucket, recency only as the tie-break — the
-		// ranks used to be computed and then thrown away by an unconditional
-		// re-sort on activity, so a name match lost to anything touched later.
-		const byRankThenActivity = (a: { s: RecentSession; rank: number }, b: { s: RecentSession; rank: number }) =>
-			b.rank - a.rank || activityOf(b.s) - activityOf(a.s);
-		const archived = withRanks.filter(({ s }) => s.archived).sort(byRankThenActivity);
+		const birthOf = (s: RecentSession): number => {
+			const birth = Date.parse(s.timestamp);
+			return Number.isFinite(birth) ? birth : 0;
+		};
+		const priorityOf = (s: RecentSession): number =>
+			s.unreadComplete && s.status !== "running" && !s.running ? 0 : s.status === "running" || s.running ? 1 : 2;
+		const bySelectedSort = (a: { s: RecentSession; rank: number }, b: { s: RecentSession; rank: number }) =>
+			this.sort === "birth"
+				? birthOf(b.s) - birthOf(a.s)
+				: priorityOf(a.s) - priorityOf(b.s) || b.rank - a.rank || activityOf(b.s) - activityOf(a.s);
+		const archived = withRanks.filter(({ s }) => s.archived).sort(bySelectedSort);
 		const active = withRanks.filter(({ s }) => !s.archived);
-		const inWorkspace = active.filter(({ s }) => s.inWorkspace).sort(byRankThenActivity);
-		const others = active.filter(({ s }) => !s.inWorkspace).sort(byRankThenActivity);
+		const inWorkspace = active.filter(({ s }) => s.inWorkspace).sort(bySelectedSort);
+		const others = active.filter(({ s }) => !s.inWorkspace).sort(bySelectedSort);
 		const searching = needle !== "";
 		if (inWorkspace.length > 0) {
 			this.listEl.appendChild(
@@ -277,6 +305,10 @@ export class HistoryView {
 			});
 			actions.appendChild(stop);
 		}
+		const unread = document.createElement("button");
+		unread.className = "history-action"; unread.title = "Mark unread"; unread.appendChild(icon("message", 11));
+		unread.addEventListener("click", (event) => { event.stopPropagation(); this.deps.onMarkUnread(session.path, session.id); });
+		actions.appendChild(unread);
 		const rename = document.createElement("button");
 		rename.className = "history-action";
 		rename.title = "Rename session";
@@ -343,8 +375,18 @@ export class HistoryView {
 			item.appendChild(children);
 		}
 		const openSession = (): void => {
-			if (isCurrent) this.deps.onBack();
-			else this.deps.onResume(session.path, session.id);
+			if (isCurrent) {
+				this.deps.onBack();
+				return;
+			}
+			// Do not leave a finished-unread lamp green while the host resolves and
+			// resumes the session. The host confirms this transition in its history push.
+			const mark = item.querySelector(".running-mark.complete");
+			if (mark) {
+				mark.classList.replace("complete", "seen");
+				mark.setAttribute("title", "Opened");
+			}
+			this.deps.onResume(session.path, session.id);
 		};
 		resume.addEventListener("click", openSession);
 		// Preserve click-anywhere row behavior without stealing clicks intended

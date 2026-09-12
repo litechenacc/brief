@@ -110,8 +110,10 @@ export class Composer {
 	private selections: SelectionAttachment[] = [];
 	private commands: RpcSlashCommand[] = [];
 	private streaming = false;
-	/** Starts false: until a status says the agent answers, we cannot take a prompt. */
+	/** Starts false: until a status says the agent answers, we cannot send a prompt. */
 	private enabled = false;
+	/** Lets a new, connecting chat collect its draft before sending is available. */
+	private draftAllowed = true;
 	private observing = false;
 	/** Host-supplied reason the composer is blocked, if any. */
 	private blockedReason: string | null = null;
@@ -360,8 +362,9 @@ export class Composer {
 	 * Offline means offline: an armed composer over an agent that does not answer
 	 * buys the operator an optimistic bubble and a 120s timeout, nothing else.
 	 */
-	setEnabled(enabled: boolean, blockedReason: string | null = null): void {
+	setEnabled(enabled: boolean, blockedReason: string | null = null, draftAllowed = false): void {
 		this.enabled = enabled;
+		this.draftAllowed = draftAllowed;
 		this.blockedReason = enabled ? null : blockedReason;
 		this.applyInputState();
 	}
@@ -373,14 +376,16 @@ export class Composer {
 
 	private applyInputState(): void {
 		const blocked = !this.canSend();
-		this.textarea.disabled = blocked;
+		this.textarea.disabled = this.observing || (!this.enabled && !this.draftAllowed);
 		this.sendBtn.disabled = blocked;
 		this.sendBtn.style.opacity = blocked ? "0.4" : "";
 		this.textarea.placeholder = this.observing
 			? "Watching a live session — read-only"
 			: this.enabled
 				? "Message Brief…"
-				: (this.blockedReason ?? "Not connected — the agent runtime isn't answering");
+				: this.draftAllowed
+					? "Connecting… you can start typing"
+					: (this.blockedReason ?? "Not connected — the agent runtime isn't answering");
 		this.updateSendState();
 	}
 

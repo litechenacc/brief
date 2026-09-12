@@ -443,9 +443,9 @@ body.vscode-high-contrast-light .working-letter {
 	opacity: 1;
 }
 
-@keyframes pa-pulse {
-	0%, 100% { opacity: 1; transform: scale(1); }
-	50% { opacity: 0.45; transform: scale(0.92); }
+@keyframes session-pulse {
+	from { opacity: 0.6; transform: scale(0.9); }
+	to { opacity: 1; transform: scale(1); }
 }
 
 @keyframes pa-spin {
@@ -660,7 +660,7 @@ details.thinking .thinking-body {
 
 .tool-dot.running {
 	background: var(--pa-warn);
-	animation: pa-pulse 1.2s ease-in-out infinite;
+	animation: session-pulse 1.4s ease-in-out infinite alternate;
 }
 
 .tool-dot.done {
@@ -795,6 +795,17 @@ details.thinking .thinking-body {
 .history-title {
 	font-size: 12px;
 	font-weight: 600;
+}
+
+.history-sort {
+	margin: 0 12px;
+	padding: 4px 7px;
+	font: inherit;
+	font-size: 11px;
+	color: var(--pa-text);
+	background: var(--pa-surface);
+	border: 1px solid var(--pa-border);
+	border-radius: 4px;
 }
 
 .history-list {
@@ -1132,6 +1143,9 @@ body.vscode-high-contrast-light .history-item.current {
 }
 
 .rail-pill {
+	display: inline-flex;
+	align-items: center;
+	height: 26px;
 	font-size: 10.5px;
 	padding: 2px 8px;
 	border-radius: 9px;
@@ -1161,6 +1175,9 @@ body.vscode-high-contrast-light .history-item.current {
 }
 
 .context-meter {
+	display: flex;
+	align-items: center;
+	height: 26px;
 	flex-shrink: 0;
 	margin: 0 9px 0 6px;
 	cursor: default;
@@ -1274,25 +1291,42 @@ body.vscode-high-contrast-light .history-item.current {
 	width: 7px;
 	height: 7px;
 	border-radius: 50%;
-	background: var(--pa-dim);
+	background: #8b8d98;
 	flex-shrink: 0;
 }
 
-.conn-dot.live {
-	background: var(--pa-accent);
+.conn-dot.working {
+	background: #e5484d;
+	box-shadow: 0 0 6px #e5484d99;
+	animation: session-pulse 1.4s ease-in-out infinite alternate;
 }
 
-.conn-dot.busy {
-	background: var(--pa-accent);
-	animation: pa-pulse 1.2s ease-in-out infinite;
+.conn-dot.complete {
+	background: #30a46c;
+	box-shadow: 0 0 6px #30a46c99;
+}
+
+.conn-dot.seen {
+	background: #8b8d98;
+	box-shadow: none;
 }
 
 .live-label {
 	white-space: nowrap;
 }
 
-.live-label.on {
-	color: var(--pa-accent);
+.live-label.working {
+	color: #e5484d;
+}
+
+.live-label.working { animation: session-pulse 1.4s ease-in-out infinite alternate; }
+
+.live-label.complete {
+	color: #30a46c;
+}
+
+.live-label.seen {
+	color: #8b8d98;
 }
 
 .session-id {
@@ -2347,12 +2381,8 @@ pre.term {
 
 .rail-pill.brain {
 	padding: 0;
-	width: 22px;
-	height: 22px;
-	display: inline-flex;
-	align-items: center;
+	width: 26px;
 	justify-content: center;
-	flex-shrink: 0;
 }
 
 .rail-pill.brain svg {
@@ -2658,7 +2688,7 @@ pre.term {
 }
 
 /* ---------- roster status mark for history rows ---------- */
-/* Working = red, finished-unread = green, opened = grey. Only working pulses. */
+/* Fixed semantic colors keep the three session states distinct across themes. */
 
 .running-mark {
 	display: inline-flex;
@@ -2671,29 +2701,29 @@ pre.term {
 	width: 7px;
 	height: 7px;
 	border-radius: 50%;
-	background: var(--pa-dim);
+	background: #8b8d98;
 }
 
 .running-mark.working .running-dot {
-	background: var(--pa-error);
-	animation: running-pulse 1.4s ease-in-out infinite;
+	background: #e5484d;
+	box-shadow: 0 0 6px #e5484d99;
+	animation: session-pulse 1.4s ease-in-out infinite alternate;
 }
 
 .running-mark.complete .running-dot {
-	background: var(--pa-accent);
+	background: #30a46c;
+	box-shadow: 0 0 6px #30a46c99;
 	animation: none;
 }
 
 .running-mark.seen .running-dot {
-	background: var(--pa-dim);
+	background: #8b8d98;
+	box-shadow: none;
 	animation: none;
 	opacity: 0.7;
 }
 
-@keyframes running-pulse {
-	0%, 100% { opacity: 0.35; transform: scale(0.85); }
-	50% { opacity: 1; transform: scale(1); }
-}
+
 
 /* ---------- subagent spawn card ---------- */
 

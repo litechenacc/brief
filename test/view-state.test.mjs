@@ -50,6 +50,20 @@ source.send({ type: "releaseViewState", requestId: "nonce-1", sessionId: "s1" })
 assert.equal(source.document.getElementById("app").inert, false);
 assert.equal(input.value, "draft text", "timeout release preserves original draft");
 
+// Once the host accepted a prompt, its eventual transcript echo must not prevent
+// the running session from yielding the sidebar to another session.
+const acceptedPrompt = view();
+acceptedPrompt.send({ type: "snapshot", messages: [], state: null, status });
+const acceptedInput = acceptedPrompt.document.querySelector("textarea");
+acceptedInput.value = "switch while running";
+acceptedInput.dispatchEvent(new acceptedPrompt.window.Event("input"));
+acceptedInput.dispatchEvent(new acceptedPrompt.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+const sent = acceptedPrompt.posted.find((message) => message.type === "prompt");
+acceptedPrompt.send({ type: "promptAccepted", clientRequestId: sent.payload.clientRequestId });
+acceptedPrompt.send({ type: "captureViewState", requestId: "accepted-prompt", sessionId: "s1" });
+assert.equal(acceptedPrompt.posted.at(-1).type, "viewStateCaptured", "an accepted running prompt does not block session switching");
+await acceptedPrompt.window.happyDOM.close();
+
 const state = structuredClone(captured.state);
 state.composer.draft.images = [{ data: "aGVsbG8=", mimeType: "image/png", name: "image.png" }];
 state.composer.stash = structuredClone(state.composer.draft);

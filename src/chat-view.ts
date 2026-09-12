@@ -488,6 +488,9 @@ async function handleMessage(message: WebviewToHost, controller: SessionControll
 		case "stopSession":
 			await controller.stopSession(message.path, message.sessionId);
 			return;
+		case "markSessionUnread":
+			await controller.markHistoryUnread(message.path, message.sessionId);
+			return;
 		case "archiveSession":
 			await controller.archiveSession(message.path, message.sessionId);
 			return;

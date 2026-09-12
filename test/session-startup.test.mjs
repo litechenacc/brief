@@ -149,6 +149,12 @@ const otherWorkspace = new SessionController(context(new Map()), output);
 check("history overlays do not leak to another workspace", otherWorkspace.historyArchived.size === 0);
 const titlePosts = [];
 panelA.attach({ post: (message) => titlePosts.push(message) });
+panelA.lastHistory = [{ id: "history-b", path: "/history/b.jsonl", cwd: "/history", timestamp: new Date().toISOString(), inWorkspace: true }];
+panelA.historyUnreadComplete.add("/history/b.jsonl");
+panelA.markHistorySessionOpened("/history/b.jsonl");
+check("opening a finished session immediately repaints it as read",
+	titlePosts.some((message) => message.type === "history" && message.sessions[0]?.unreadComplete === false));
+titlePosts.length = 0;
 panelA.cachedMessages = [];
 panelA.onAgentEvent({ type: "message_start", message: { role: "user", content: "# 修復登入流程\n請先檢查錯誤訊息" } });
 check("first accepted prompt immediately labels an empty session", titlePosts.filter((message) => message.type === "status").at(-1)?.status.sessionLabel === "修復登入流程");

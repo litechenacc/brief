@@ -310,6 +310,7 @@ export type WebviewToHost =
 	| { type: "renameHistorySession"; path: string; sessionId: string; name: string }
 	| { type: "stopSession"; path: string; sessionId: string }
 	| { type: "archiveSession"; path: string; sessionId: string }
+	| { type: "markSessionUnread"; path: string; sessionId: string }
 	| { type: "draftChanged"; text: string; sessionId: string }
 	| { type: "setCompactThreshold"; percent: number | null }
 	| { type: "openExternal"; url: string };
@@ -317,6 +318,8 @@ export type WebviewToHost =
 export interface StatusSnapshot {
 	connected: boolean;
 	streaming: boolean;
+	/** Current focused session finished and is waiting for operator input. */
+	awaitingInput?: boolean;
 	compacting: boolean;
 	retrying: boolean;
 	restoring: boolean;
@@ -432,7 +435,7 @@ export type HostToWebview =
 	| { type: "historySelection"; sessionId?: string }
 	| { type: "showHistory" }
 	| { type: "newThread" }
-	| { type: "promptAccepted"; kind: "prompt" | "steer" | "followUp" }
+	| { type: "promptAccepted"; kind: "prompt" | "steer" | "followUp"; clientRequestId?: string }
 	| { type: "promptRejected"; error: string; clientRequestId?: string }
 	| {
 			type: "notice";

@@ -122,6 +122,12 @@ markHistorySessionOpened(this: SessionController, sessionPath: string): void {
 	this.historyUnreadComplete.delete(key);
 	this.persistHistoryUiState();
 	this.overlayCachedHistory();
+	this.paintHistory();
+},
+
+async markHistoryUnread(this: SessionController, sessionPath: string, sessionId: string): Promise<void> {
+	if (!(await this.resolveHistorySession(sessionPath, sessionId))) return;
+	this.historyUnreadComplete.add(this.historyPathKey(sessionPath)); this.persistHistoryUiState(); this.overlayCachedHistory(); this.paintHistory();
 },
 
 markHistoryArchived(this: SessionController, sessionPath: string): void {

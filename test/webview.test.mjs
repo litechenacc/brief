@@ -54,15 +54,10 @@ window.eval(code);
 check("sends ready on boot", posted.some((m) => m.type === "ready"));
 check("welcome screen visible", !!document.querySelector(".welcome"));
 
-// --- #34: the connect experience. Until the FIRST live status the splash is the
-// whole panel — that is what keeps the input box away from an operator whose
-// agent isn't answering yet. Held by reference: retiring removes the node.
+// The chat opens immediately. The status strip remains the connection indicator,
+// while the composer accepts a draft before the first status arrives.
 const splash = document.querySelector(".boot-splash");
-check("boot splash covers the panel before any status", !!splash && !splash.className.includes("gone"), splash?.className ?? "<none>");
-check("splash shows the Brief mark and name",
-	!!splash?.querySelector('svg[viewBox="0 0 24 24"]') && document.querySelector(".boot-splash-name")?.textContent === "Brief");
-check("splash says what it is waiting for", (document.querySelector(".boot-splash-sub")?.textContent ?? "").includes("connecting"),
-	document.querySelector(".boot-splash-sub")?.textContent ?? "<none>");
+check("boot does not block the chat", !splash && !document.querySelector("textarea")?.disabled && document.querySelector(".live-label")?.textContent === "connecting");
 hostMessage({ type: "uiState", title: "early agent title", statusText: "warming up" });
 check("uiState statusText paints before the first status snapshot", document.querySelector(".live-label")?.textContent === "warming up");
 
@@ -104,7 +99,7 @@ hostMessage({
 check("status persists the exact session for editor restoration", savedWebviewState.session?.sessionId === baseStatus.sessionId && savedWebviewState.session?.sessionFile === baseStatus.sessionFile);
 check("session persistence preserves history fold state", savedWebviewState.historyFolds?.archive === true);
 const scroller = document.querySelector(".messages");
-check("boot splash retires on the first connected status", splash.className.includes("gone"), splash.className);
+check("connected status keeps the chat unobstructed", !document.querySelector(".boot-splash"));
 check("welcome removed after snapshot", !document.querySelector(".welcome"));
 check("user bubble rendered", !!scroller.querySelector(".bubble-user"));
 check("assistant row has no avatar (full width)", !scroller.querySelector(".avatar svg") && !!scroller.querySelector(".row-assistant .row-body"));
@@ -496,12 +491,30 @@ hostMessage({
 	],
 });
 const itemNames = [...document.querySelectorAll(".history-item .history-item-name")].map((n) => n.textContent);
-check("history sorted by frozen sortMs, not mid-turn mtime", itemNames[0] === "newest" && itemNames[1] === "renamed-just-now" && itemNames[2] === "oldest" && itemNames[3] === "still-running-old", itemNames.join("|"));
+check("priority sort keeps running sessions ahead, then uses frozen sortMs", itemNames.join("|") === "still-running-old|newest|renamed-just-now|oldest", itemNames.join("|"));
 const relativeTimes = [...document.querySelectorAll(".history-item .history-item-time")].map((n) => n.textContent);
-check("renamed session labels by activity time", relativeTimes[1].includes("d"), JSON.stringify(relativeTimes));
+check("renamed session labels by activity time", relativeTimes[2].includes("d"), JSON.stringify(relativeTimes));
 check("history groups rendered", document.querySelectorAll(".history-item").length === 4);
 check("workspace group is foldable",
 	[...document.querySelectorAll(".history-group-summary")].some((n) => n.textContent.includes("This workspace")));
+const historySort = document.querySelector(".history-sort");
+historySort.value = "birth";
+historySort.dispatchEvent(new window.Event("change", { bubbles: true }));
+const birthNames = [...document.querySelectorAll(".history-item .history-item-name")].map((n) => n.textContent);
+check("birth-time sort uses session creation time", birthNames[0] === "newest" && birthNames.at(-1) === "oldest", birthNames.join("|"));
+historySort.value = "priority";
+historySort.dispatchEvent(new window.Event("change", { bubbles: true }));
+hostMessage({
+	type: "history",
+	sessions: [
+		{ id: "read", path: "/tmp/read.jsonl", cwd: "/ws", timestamp: new Date().toISOString(), name: "read", inWorkspace: true },
+		{ id: "running", path: "/tmp/running.jsonl", cwd: "/ws", timestamp: new Date().toISOString(), name: "running", inWorkspace: true, status: "running" },
+		{ id: "done", path: "/tmp/done.jsonl", cwd: "/ws", timestamp: new Date().toISOString(), name: "done", inWorkspace: true, unreadComplete: true },
+	],
+});
+const priorityNames = [...document.querySelectorAll(".history-item .history-item-name")].map((n) => n.textContent);
+check("priority sort orders done, running, then read", priorityNames.join("|") === "done|running|read", priorityNames.join("|"));
+check("history sort selection persists", savedWebviewState.historySort === "priority");
  // re-seed the canonical 2-item list for downstream checks
 hostMessage({
 	type: "history",
@@ -620,14 +633,10 @@ posted.length = 0;
 document.querySelector(".subagents-strip .subagents-back-row").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
 check("back-row click posts backToParent", posted.some((m) => m.type === "backToParent"));
 
-// --- #34: once connected the splash is done for good. A dropout mid-conversation
-// may only move the status strip — the Brief mark fading back over a live transcript
-// is exactly what the operator ruled out.
+// A later disconnect only changes the status strip; it never covers the transcript.
 hostMessage({ type: "status", status: { ...baseStatus, connected: true, modelProvider: "chutes", modelId: "glm", modelLabel: "chutes/glm" } });
 hostMessage({ type: "status", status: { ...baseStatus, connected: false } });
-check("a later disconnect does not re-fade the splash",
-	splash.className.includes("gone") && ![...document.querySelectorAll(".boot-splash")].some((s) => !s.className.includes("gone")),
-	splash.className);
+check("a later disconnect leaves the transcript unobstructed", !document.querySelector(".boot-splash"));
 check("the dropout is told in the status strip instead", document.querySelector(".live-label").textContent === "offline", document.querySelector(".live-label").textContent);
 hostMessage({ type: "status", status: { ...baseStatus, connected: true, modelProvider: "chutes", modelId: "glm", modelLabel: "chutes/glm" } });
 
@@ -815,6 +824,10 @@ hostMessage({
 	],
 });
 check("a finished unread row is the green complete lamp", markOf("just finished")?.className.includes("complete"), markOf("just finished")?.className);
+posted.length = 0;
+rowNamed("just finished")?.querySelector(".history-resume")?.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+check("opening a finished row clears its lamp before the host replies",
+	markOf("just finished")?.className.includes("seen") && posted.some((message) => message.type === "switchSession"), markOf("just finished")?.className);
 hostMessage({
 	type: "history",
 	sessions: [
@@ -1185,8 +1198,8 @@ check("a notice without an action renders no button",
 	const label = document.querySelector(".live-label");
 	check("an idle parent reports the subagents still working for it",
 		label.textContent === "live · 1 subagent working", label.textContent);
-	check("...and the connection dot reads busy, not idle",
-		document.querySelector(".conn-dot").className.includes("busy"),
+	check("...and the connection dot uses the working session lamp",
+		document.querySelector(".conn-dot").className.includes("working"),
 		document.querySelector(".conn-dot").className);
 	// Plural, and repainted from the roster alone — no status push follows one.
 	hostMessage({ type: "sessionChildren", children: [
@@ -1824,7 +1837,7 @@ check("insertSelection retains the attached selection", [...document.querySelect
 hostMessage({ type: "newThread" });
 check("host newThread returns to chat", document.querySelector(".history-view")?.style.display === "none");
 check("newThread paints the empty session immediately", !!document.querySelector(".welcome"), document.querySelector(".messages")?.textContent?.slice(0, 80) ?? "none");
-check("newThread blocks send until the host confirms the session", textarea.disabled && textarea.placeholder === "Creating session…", `${textarea.disabled} ${textarea.placeholder}`);
+check("newThread accepts a draft while send waits for the session", !textarea.disabled && textarea.placeholder.includes("Connecting"), `${textarea.disabled} ${textarea.placeholder}`);
 posted.length = 0;
 textarea.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
 check("Enter during create does not post a prompt", !posted.some((m) => m.type === "prompt"), JSON.stringify(posted.map((m) => m.type)));

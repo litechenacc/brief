@@ -123,6 +123,7 @@ export interface SessionController {
 	viewedSessionPath(): string | undefined;
 	markHistoryWaitingForUser(sessionPath?: string): void;
 	markHistorySessionOpened(sessionPath: string): void;
+	markHistoryUnread(sessionPath: string, sessionId: string): Promise<void>;
 	markHistoryArchived(sessionPath: string): void;
 	decorateHistoryRow(row: RecentSession): RecentSession;
 	showHistoryView(): void;
@@ -161,6 +162,7 @@ export class SessionController implements vscode.Disposable {
 	firstPromptLabel = "";
 	extensionStatusText: string | undefined;
 	streaming = false;
+	awaitingInput = false;
 	compacting = false;
 	retrying = false;
 	debugLog = new DebugFileLog();
@@ -583,9 +585,11 @@ export class SessionController implements vscode.Disposable {
 		switch (event.type) {
 			case "agent_start":
 				this.streaming = true;
+				this.awaitingInput = false;
 				break;
 			case "agent_end":
 				this.streaming = false;
+				this.awaitingInput = true;
 				this.retrying = false;
 				this.onBusySettled();
 				this.scheduleChildrenRefresh();
@@ -954,7 +958,7 @@ export class SessionController implements vscode.Disposable {
 			try {
 				await sidecar.prompt(attached.activeSessionId, text, behavior, images);
 				if (!this.isCurrentAttachment(attached)) return;
-				this.broadcast({ type: "promptAccepted", kind: "prompt" });
+				this.broadcast({ type: "promptAccepted", kind: "prompt", clientRequestId: payload.clientRequestId });
 			} catch (err) {
 				if (this.isCurrentAttachment(attached)) this.rejectPrompt(payload, err instanceof Error ? err.message : "daemon prompt failed", reply);
 			}
@@ -1019,7 +1023,7 @@ export class SessionController implements vscode.Disposable {
 			this.debugLog.append(`prompt response: success=${response.success}`);
 			this.output.appendLine(`[prime-agent] prompt response: success=${response.success}`);
 			if (response.success) {
-				this.broadcast({ type: "promptAccepted", kind });
+				this.broadcast({ type: "promptAccepted", kind, clientRequestId: payload.clientRequestId });
 			} else {
 				this.rejectPrompt(payload, response.error ?? "prompt rejected", reply);
 			}
@@ -2207,6 +2211,7 @@ export class SessionController implements vscode.Disposable {
 			return {
 				connected: true,
 				streaming,
+				awaitingInput: this.awaitingInput && !streaming && !compacting,
 				compacting,
 				retrying: this.retrying,
 				restoring: switching,
@@ -2230,7 +2235,7 @@ export class SessionController implements vscode.Disposable {
 					? "compacting"
 					: streaming
 						? "running"
-						: "attached",
+						: "opened",
 				modelProvider: model?.provider,
 				modelId: model?.id,
 				observingId: this.observingId,
@@ -2251,6 +2256,7 @@ export class SessionController implements vscode.Disposable {
 			// green dot over a prompt that will time out 120s later.
 			connected: this.reachable,
 			streaming: this.streaming || (this.state?.isStreaming ?? false),
+			awaitingInput: this.awaitingInput && !(this.streaming || (this.state?.isStreaming ?? false)),
 			compacting: this.compacting || (this.state?.isCompacting ?? false),
 			retrying: this.retrying,
 			restoring: this.startingPromise !== null || this.observationRestoring,
