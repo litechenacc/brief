@@ -641,43 +641,6 @@ async listSessions(this: SessionController, sidecar: DaemonSidecar): Promise<Ses
 },
 
 /**
- * RPC mode creates a client-owned worker. Promote it to resident so:
- * other prime-agent processes can see the conversation, and closing the
- * RPC stdin does not reap the agent. Idempotent.
- */
-async promoteOwnRpcSession(this: SessionController): Promise<void> {
-	if (this.rpcSessionPromoted || this.disposed) return;
-	const sessionFile = this.state?.sessionFile;
-	if (!sessionFile) return;
-	let lastError: unknown;
-	for (let attempt = 0; attempt < 5; attempt++) {
-		const descriptor = resolveWorkerDescriptor({ sessionFile });
-		const activeSessionId = descriptor?.rootActiveSessionId;
-		if (!activeSessionId) {
-			await new Promise((resolve) => setTimeout(resolve, 200));
-			continue;
-		}
-		if (!descriptor?.ownerClientId) {
-			this.rpcSessionPromoted = true;
-			return;
-		}
-		try {
-			const sidecar = await this.ensureSidecar({ reattach: false });
-			await sidecar.promoteOwnedSession(activeSessionId);
-			this.rpcSessionPromoted = true;
-			this.output.appendLine(`[prime-agent] promoted RPC session ${activeSessionId} to resident`);
-			return;
-		} catch (err) {
-			lastError = err;
-			await new Promise((resolve) => setTimeout(resolve, 200));
-		}
-	}
-	if (lastError) {
-		this.output.appendLine(`[prime-agent] promote_owned_session failed: ${String(lastError)}`);
-	}
-},
-
-/**
  * Give up the owner identity when the RPC process that owns the worker is
  * gone.
  *

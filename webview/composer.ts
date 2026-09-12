@@ -326,12 +326,12 @@ export class Composer {
 		if (Array.isArray(dbg.__modelLog)) {
 			dbg.__modelLog.push(`${this.currentModel.modelId ?? "?"}|${this.modelBtn.textContent} -> ${provider ?? "?"}/${modelId ?? "?"}|${label}`);
 		}
-		// Guard: dropdowns are children of this pill; rewriting identical text
-		// would destroy an open menu mid-use (the churn you see while streaming).
+		// Compare the full label, not its truncated display, to avoid repeating
+		// label and capability writes on unchanged status updates.
 		const unchanged =
 			this.currentModel.provider === provider &&
 			this.currentModel.modelId === modelId &&
-			this.modelLabelEl.textContent === label;
+			this.currentDisplayedLabel === label;
 		if (unchanged) return;
 		// The level list belongs to the outgoing model; carrying it into the new
 		// one would offer levels the new model rejects until the next status lands.
@@ -488,11 +488,11 @@ export class Composer {
 	// Parameter deliberately NOT named `window`: this class calls window.setTimeout
 	// elsewhere, and shadowing the global with a number here is a TypeError
 	// waiting for the next line of code added to this method.
-	setContext(percent: number | null | undefined, tokens: number | null | undefined, contextWindow: number | undefined): void {
+	setContext(percent: number | null | undefined, tokens: number | null | undefined, contextWindow: number | undefined, compactThreshold: number | null, compactDefaultPercent: number | null): void {
 		this.contextPercentCurrent = percent ?? null;
 		this.contextTokensCurrent = tokens ?? null;
 		this.contextWindowCurrent = contextWindow;
-		this.renderContext();
+		this.setCompactThreshold(compactThreshold, compactDefaultPercent);
 	}
 
 	private renderContext(): void {

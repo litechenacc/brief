@@ -5,15 +5,28 @@ import { Window } from "happy-dom";
 const parserBuild = await build({ entryPoints: ["src/webview-message.ts"], bundle: true, format: "esm", platform: "node", write: false });
 const { parseWebviewMessage } = await import(`data:text/javascript;base64,${Buffer.from(parserBuild.outputFiles[0].text).toString("base64")}`);
 const uiBuild = await build({ entryPoints: ["webview/main.ts"], bundle: true, format: "iife", platform: "browser", write: false });
-function view() {
+function view(savedState) {
  const window = new Window({ url: "https://webview.local/" });
  window.document.body.innerHTML = '<div id="app"></div>';
  const posted = [];
- window.acquireVsCodeApi = () => ({ postMessage: m => posted.push(m), getState: () => undefined, setState: () => {} });
+ const writes = [];
+ window.acquireVsCodeApi = () => ({ postMessage: m => posted.push(m), getState: () => savedState, setState: state => { savedState = state; writes.push(state); } });
  window.eval(uiBuild.outputFiles[0].text);
- return { window, document: window.document, posted, send: data => window.dispatchEvent(new window.MessageEvent("message", { data })) };
+ return { window, document: window.document, posted, writes, send: data => window.dispatchEvent(new window.MessageEvent("message", { data })) };
 }
 const status = { connected: true, streaming: false, compacting: false, retrying: false, restoring: false, modelLabel: "p/m", thinkingLevel: "off", statsText: "", sessionId: "s1" };
+const persisted = view({ historyFolds: { archive: true } });
+const identity = { ...status, sessionFile: "/workspace/s1.jsonl" };
+persisted.send({ type: "status", status: identity });
+for (let i = 0; i < 20; i++) persisted.send({ type: "status", status: { ...identity, streaming: i % 2 === 0 } });
+assert.equal(persisted.writes.length, 1, "unchanged session identity is persisted only once across 21 status updates");
+persisted.send({ type: "status", status: { ...identity, sessionFile: "/moved/s1.jsonl" } });
+persisted.send({ type: "status", status: { ...identity, sessionId: "s2" } });
+assert.equal(persisted.writes.length, 3, "path and session identity changes each persist");
+assert.deepEqual(structuredClone(persisted.writes.at(-1)), { historyFolds: { archive: true }, session: { sessionId: "s2", sessionFile: identity.sessionFile } });
+persisted.send({ type: "status", status });
+assert.equal(persisted.writes.length, 3, "incomplete status does not erase persisted identity");
+await persisted.window.happyDOM.close();
 const messages = Array.from({ length: 420 }, (_, i) => ({ role: "user", content: `history-${i}` }));
 const source = view();
 source.send({ type: "snapshot", messages, state: null, status });

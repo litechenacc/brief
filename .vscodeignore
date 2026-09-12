@@ -34,3 +34,5 @@ docs/**
 prd.md
 issues.md
 justfile
+AGENTS.md
+scripts/**

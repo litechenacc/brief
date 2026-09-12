@@ -8,8 +8,6 @@
 
 import * as esbuild from "esbuild";
 import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
 
 let failed = 0;
 function check(name, condition, detail = "") {
@@ -22,13 +20,9 @@ function check(name, condition, detail = "") {
 // broke the moment anything moved below it in the file.
 const srcPath = new URL("../src/markdown-export.ts", import.meta.url);
 const src = fs.readFileSync(srcPath, "utf8");
-check("buildMarkdownExport is an exported symbol", /export function buildMarkdownExport/.test(src));
 const { code } = esbuild.transformSync(src, { loader: "ts", format: "esm", target: "node18" });
 
-const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "export-md-"));
-const tmpFile = path.join(tmpDir, "build-markdown-export.mjs");
-fs.writeFileSync(tmpFile, code);
-const { buildMarkdownExport } = await import(`file://${tmpFile}`);
+const { buildMarkdownExport } = await import(`data:text/javascript;base64,${Buffer.from(code).toString("base64")}`);
 check("harness exposes buildMarkdownExport", typeof buildMarkdownExport === "function");
 
 const LEAK = "SECRET_TOOL_OUTPUT_MARKER";

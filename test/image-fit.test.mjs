@@ -7,16 +7,8 @@
  */
 
 import * as esbuild from "esbuild";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import { createRequire } from "node:module";
-
-const require = createRequire(import.meta.url);
-const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "image-fit-test-"));
-const bundlePath = path.join(outputDir, "image-fit.cjs");
-await esbuild.build({ entryPoints: ["webview/image-fit.ts"], bundle: true, platform: "node", format: "cjs", outfile: bundlePath, logLevel: "silent" });
-const fit = require(bundlePath);
+const result = await esbuild.build({ entryPoints: ["webview/image-fit.ts"], bundle: true, platform: "node", format: "esm", write: false, logLevel: "silent" });
+const fit = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString("base64")}`);
 
 let failed = 0;
 function check(name, condition, detail = "") {

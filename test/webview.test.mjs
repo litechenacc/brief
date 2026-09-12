@@ -247,7 +247,6 @@ check("edit copy emits the output once, not twice", clipboard.split("edited src/
 check("user footer has no token estimate or input price", !scroller.querySelector(".uf-tokens, .uf-cost"));
 check("user copy and fork remain", scroller.querySelectorAll(".row-user .user-footer .uf-icon").length >= 2);
 check("reply usage is off by default", !scroller.classList.contains("show-usage-details"));
-check("stylesheet hides only model details by default", fs.readFileSync(new URL("../media/main.css", import.meta.url), "utf8").includes(".messages:not(.show-usage-details) .model-usage { display: none; }"));
 hostMessage({ type: "status", status: { ...baseStatus, showUsageDetails: true } });
 check("usage config enables existing replies immediately", scroller.classList.contains("show-usage-details"));
 const modelUsage = scroller.querySelector("details.model-usage");
@@ -262,7 +261,6 @@ check("disabling reply usage keeps copy and session fee", !!scroller.querySelect
 
 // Thought process visibility is independent of usage details and thinking level.
 check("thought process defaults to hidden", !scroller.classList.contains("show-thought-process"));
-check("stylesheet hides thought process by default", fs.readFileSync(new URL("../media/main.css", import.meta.url), "utf8").includes(".messages:not(.show-thought-process) .thinking { display: none; }"));
 const thoughtBlock = scroller.querySelector("details.thinking");
 hostMessage({ type: "status", status: { ...baseStatus, showThoughtProcess: true } });
 check("thought config reveals existing blocks without rebuilding", scroller.classList.contains("show-thought-process") && scroller.querySelector("details.thinking") === thoughtBlock);
@@ -330,6 +328,51 @@ check("dropdown is portaled outside its button anchor", !modelBtn.contains(dropd
 check("open model menu contains no nested native controls",
 	document.querySelectorAll("button button, button input, button select, button textarea").length === 0,
 	[...document.querySelectorAll("button button, button input, button select, button textarea")].map((node) => node.outerHTML).join("\n"));
+// Selection changes must not rebuild rows or their favorite buttons.
+{
+	const rows = [...dropdown.querySelectorAll(".dropdown-item")];
+	const stars = rows.map((row) => row.querySelector(".dropdown-star"));
+	const search = dropdown.querySelector(".dropdown-search");
+	const createElement = document.createElement;
+	const createElementNS = document.createElementNS;
+	let created = 0;
+	document.createElement = function (...args) { created++; return createElement.apply(this, args); };
+	document.createElementNS = function (...args) { created++; return createElementNS.apply(this, args); };
+	const hover = (index) => dropdown.querySelectorAll(".dropdown-item")[index]
+		.dispatchEvent(new window.MouseEvent("mousemove", { bubbles: true }));
+	const key = (value) => document.dispatchEvent(new window.KeyboardEvent("keydown", { key: value, bubbles: true, cancelable: true }));
+	try {
+		hover(1);
+		check("dropdown hover selects the pointed row", dropdown.querySelectorAll(".dropdown-item")[1].classList.contains("selected"));
+		hover(2);
+		hover(0);
+		key("ArrowUp");
+		check("dropdown ArrowUp wraps to last row", dropdown.querySelectorAll(".dropdown-item")[2].classList.contains("selected"));
+		key("ArrowDown");
+		check("dropdown ArrowDown wraps to first row", dropdown.querySelectorAll(".dropdown-item")[0].classList.contains("selected"));
+		key("ArrowDown");
+	} finally {
+		document.createElement = createElement;
+		document.createElementNS = createElementNS;
+	}
+	check("dropdown six selection moves create zero DOM elements", created === 0, `${created} elements created`);
+	check("dropdown selection preserves row and favorite button identity", rows.every((row, index) =>
+		dropdown.querySelectorAll(".dropdown-item")[index] === row && row.querySelector(".dropdown-star") === stars[index]));
+	check("dropdown navigation keeps search focused", document.activeElement === search);
+	check("dropdown navigation has exactly one selected row", dropdown.querySelectorAll(".dropdown-item.selected").length === 1);
+	search.value = "glm";
+	search.dispatchEvent(new window.Event("input", { bubbles: true }));
+	check("dropdown filtering still rebuilds and resets selection", dropdown.querySelectorAll(".dropdown-item").length === 1 &&
+		dropdown.querySelector(".dropdown-item.selected")?.textContent.includes("glm") && !dropdown.querySelector(".dropdown-section"));
+	search.value = "no-such-model";
+	search.dispatchEvent(new window.Event("input", { bubbles: true }));
+	key("ArrowDown");
+	check("dropdown empty filter remains open on arrow navigation", !!dropdown.querySelector(".dropdown-empty") && dropdown.isConnected);
+	search.value = "";
+	search.dispatchEvent(new window.Event("input", { bubbles: true }));
+	check("dropdown clearing search restores sections and first selection", dropdown.querySelectorAll(".dropdown-item").length === 3 &&
+		!!dropdown.querySelector(".dropdown-section") && dropdown.querySelector(".dropdown-item").classList.contains("selected"));
+}
 posted.length = 0;
 // toggle favorite on the gpt-5 row
 const gptRow = [...document.querySelectorAll(".dropdown-item")].find((r) => r.textContent.includes("gpt-5"));
@@ -622,7 +665,15 @@ check("closing the focused session clears selection", !document.querySelector(".
 hostMessage({ type: "setHistoryMode", enabled: false });
 
 // Context capacity is separate from session cost; cumulative tokens stay in the details.
-hostMessage({ type: "status", status: { ...baseStatus, compactDefaultPercent: 94 } });
+{
+	const label = document.querySelector(".context-label");
+	const observer = new window.MutationObserver(() => {});
+	observer.observe(label, { childList: true });
+	hostMessage({ type: "status", status: { ...baseStatus, compactDefaultPercent: 94 } });
+	const addedTextNodes = observer.takeRecords().reduce((count, record) => count + record.addedNodes.length, 0);
+	observer.disconnect();
+	check("status renders context label once", addedTextNodes === 1, `${addedTextNodes} text replacements per status`);
+}
 check("context label names estimated capacity", document.querySelector(".context-label").textContent === "Context ~23%");
 check("context shows used and total tokens", document.querySelector(".context-tokens").textContent === "~60,000 / 262,144 tokens");
 const sessionUsage = document.querySelector("details.stats-label");
@@ -1209,6 +1260,24 @@ hostMessage({ type: "status", status: { ...baseStatus, modelLabel: "chutes/Qwen/
 const pillLabel = document.querySelector(".rail-pill.model .pill-label");
 check("model pill truncates tastefully mid-path", pillLabel.textContent === "chutes/…/Qwen3-235B-A22B-Thinking-2507-TEE", pillLabel.textContent);
 check("model pill full name on hover", document.querySelector(".rail-pill.model").title.includes("chutes/Qwen/Qwen3-235B-A22B-Thinking-2507-TEE"));
+{
+	const observer = new window.MutationObserver(() => {});
+	observer.observe(pillLabel, { childList: true });
+	const originalText = pillLabel.firstChild;
+	for (let i = 0; i < 3; i++) {
+		hostMessage({ type: "status", status: { ...baseStatus, modelLabel: "chutes/Qwen/Qwen3-235B-A22B-Thinking-2507-TEE" } });
+	}
+	const addedTextNodes = observer.takeRecords().reduce((count, record) => count + record.addedNodes.length, 0);
+	observer.disconnect();
+	check("identical long model labels cause zero text replacements", addedTextNodes === 0, `${addedTextNodes} replacements for 3 status updates`);
+	check("identical long model labels preserve text node identity", pillLabel.firstChild === originalText);
+	hostMessage({ type: "status", status: { ...baseStatus, modelLabel: "renamed-model" } });
+	check("changed label with same model identity still updates", pillLabel.textContent === "renamed-model" && document.querySelector(".rail-pill.model").title.includes("renamed-model"));
+	hostMessage({ type: "status", status: { ...baseStatus, modelProvider: "chutes", modelId: "glm", modelLabel: "renamed-model" } });
+	check("changed model identity with same label refreshes capabilities", document.querySelector(".rail-pill.brain").disabled);
+	hostMessage({ type: "status", status: baseStatus });
+}
+
 
 // --- history search ranking: exact beats tokens beats fuzzy; recency breaks ties ---
 hostMessage({

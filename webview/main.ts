@@ -413,7 +413,10 @@ function applyStatus(incomingStatus: StatusSnapshot): void {
 	adoptAuthoritativeSession(incomingStatus.sessionId);
 	if (incomingStatus.sessionId && incomingStatus.sessionFile) {
 		const saved = (vscode.getState() as Record<string, unknown> | undefined) ?? {};
-		vscode.setState({ ...saved, session: { sessionId: incomingStatus.sessionId, sessionFile: incomingStatus.sessionFile } });
+		const session = saved.session as { sessionId?: string; sessionFile?: string } | undefined;
+		if (session?.sessionId !== incomingStatus.sessionId || session?.sessionFile !== incomingStatus.sessionFile) {
+			vscode.setState({ ...saved, session: { sessionId: incomingStatus.sessionId, sessionFile: incomingStatus.sessionFile } });
+		}
 	}
 	const previousSessionId = currentStatus?.sessionId;
 	// A title can arrive before the first snapshot. It is useful to paint then,
@@ -483,10 +486,10 @@ function applyStatus(incomingStatus: StatusSnapshot): void {
 				? null
 				: "Not connected — the agent runtime isn't answering",
 	);
-	composer.setContext(status.contextPercent, status.contextTokens, status.contextWindow);
-	// Unconditional: skipping this on a status that carries no override left the
-	// previous session's tick painted on the bar of the session now on screen.
-	composer.setCompactThreshold(status.compactThresholdPercent ?? null, status.compactDefaultPercent ?? null);
+	// Apply capacity and thresholds together so each status paints the meter once.
+	// Missing overrides must clear the previous session's threshold.
+	composer.setContext(status.contextPercent, status.contextTokens, status.contextWindow,
+		status.compactThresholdPercent ?? null, status.compactDefaultPercent ?? null);
 	setObserving(!!status.observingId);
 }
 

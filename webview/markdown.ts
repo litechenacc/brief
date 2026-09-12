@@ -3,12 +3,7 @@
  * innerHTML anywhere — so agent output can't inject markup into the webview.
  */
 
-function el(tag: string, className?: string, text?: string): HTMLElement {
-	const node = document.createElement(tag);
-	if (className) node.className = className;
-	if (text !== undefined) node.textContent = text;
-	return node;
-}
+import { el } from "./dom.js";
 
 export function copyToClipboard(text: string, onDone?: () => void): void {
 	const fallback = () => {

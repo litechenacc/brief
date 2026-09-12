@@ -228,9 +228,6 @@ export class Transcript {
 		this.scrollToBottom();
 	}
 
-	private stickToBottomFieldsPlaceholder = false;
-
-	private stickToBottomUnused = false;
 	private jumpBtn: HTMLElement | null = null;
 	/**
 	 * The selection as it stood the instant before a collapsible was toggled.

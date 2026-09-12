@@ -180,17 +180,19 @@ export class Dropdown {
 				if ((event.target as HTMLElement | null)?.closest("button")) return;
 				activate();
 			});
-			row.addEventListener("mousemove", () => {
-				if (this.selected !== index) {
-					this.selected = index;
-					this.renderList(suppressSections);
-				}
-			});
+			row.addEventListener("mousemove", () => this.selectIndex(index));
 			this.list.appendChild(row);
 		});
 		if (this.filtered.length === 0) {
 			this.list.appendChild(el("div", "dropdown-empty", "No matches"));
 		}
+	}
+
+	private selectIndex(index: number): void {
+		if (this.selected === index) return;
+		this.list.querySelector(".dropdown-item.selected")?.classList.remove("selected");
+		this.selected = index;
+		this.list.querySelectorAll(".dropdown-item")[index]?.classList.add("selected");
 	}
 
 	private onKey(event: KeyboardEvent): void {
@@ -212,8 +214,7 @@ export class Dropdown {
 				next = (next + delta + n) % n;
 				if (!this.filtered[next].disabled) break;
 			}
-			this.selected = next;
-			this.renderList((this.input?.value ?? "").trim().length > 0);
+			this.selectIndex(next);
 			this.list.querySelector(".dropdown-item.selected")?.scrollIntoView({ block: "nearest" });
 			return;
 		}

@@ -34,7 +34,6 @@ type ChatView = {
 	closed: boolean;
 	missedMessages: boolean;
 	markReady: () => void;
-	rendered: boolean;
 	transferring: boolean;
 	disposeBinding: () => void;
 	pending: Map<string, { sessionId: string; resolve: (message: WebviewToHost) => void; reject: (error: Error) => void }>;
@@ -83,12 +82,8 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 		await this.enqueue(async () => { await this.move(this.create(), this.location()); });
 	}
 
-	private active(): ChatTab | undefined {
-		return this.lastActive;
-	}
-
 	async focus(): Promise<void> {
-		const selected = this.active();
+		const selected = this.lastActive;
 		await this.enqueue(async () => {
 			const tab = selected && !selected.closed ? selected : this.create();
 			await this.move(tab, this.location());
@@ -98,7 +93,7 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 	}
 
 	async useLocation(location: ChatLocation): Promise<void> {
-		const selected = this.active();
+		const selected = this.lastActive;
 		await this.enqueue(async () => {
 			await this.move(selected && !selected.closed ? selected : this.create(), location);
 			await vscode.workspace.getConfiguration("brief").update("chatLocation", location, vscode.ConfigurationTarget.Workspace);
@@ -106,7 +101,7 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 	}
 
 	async toggleLocation(): Promise<void> {
-		const current = this.active()?.view;
+		const current = this.lastActive?.view;
 		await this.useLocation((current ? current.panel ? "editor" : "sidebar" : this.location()) === "editor" ? "sidebar" : "editor");
 	}
 
@@ -117,7 +112,7 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 	}
 
 	async run(action: (controller: SessionController) => Promise<void> | void, reveal = false): Promise<void> {
-		const selected = this.active();
+		const selected = this.lastActive;
 		const target = await this.enqueue(async () => {
 			const target = selected && !selected.closed ? selected : this.create();
 			if (!target.view) await this.move(target, this.location());
@@ -239,7 +234,7 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 		if (sidebar) sidebar.title = "Brief";
 		webview.options = { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, "media")] };
 		let ready!: () => void;
-		const view: ChatView = { panel, sidebar, webview, closed: false, missedMessages: false, pending: new Map(), markReady: () => ready(), rendered: true, transferring: false, disposeBinding: () => {}, ready: new Promise((resolve) => { ready = resolve; }) };
+		const view: ChatView = { panel, sidebar, webview, closed: false, missedMessages: false, pending: new Map(), markReady: () => ready(), transferring: false, disposeBinding: () => {}, ready: new Promise((resolve) => { ready = resolve; }) };
 		const receiver = webview.onDidReceiveMessage((raw: unknown) => {
 			const message = parseWebviewMessage(raw);
 			if (!message) { view.tab?.controller.showErrorNotice("Ignored an invalid webview message."); return; }
@@ -334,12 +329,6 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 			finally { this.sidebarResolved = undefined; }
 		}
 		if (!this.sidebar || this.sidebar.closed) throw new Error("Brief sidebar is unavailable.");
-		if (!this.sidebar.rendered) {
-			const view = this.sidebar;
-			view.ready = new Promise((resolve) => { view.markReady = resolve; });
-			view.rendered = true;
-			view.webview.html = buildHtml(view.webview, this.context.extensionUri);
-		}
 		await this.reveal(this.sidebar);
 		return this.sidebar;
 	}

@@ -52,40 +52,20 @@ const webviewConfig = {
 	define: { BRIEF_BUILD_REV: JSON.stringify(buildRev) },
 };
 
-const controllerConfig = {
+// Test harness bundles are built together and never shipped.
+const testConfig = {
 	...shared,
-	entryPoints: ["src/session-controller.ts"],
+	entryPoints: {
+		controller: "src/session-controller.ts",
+		"session-actions": "src/session-actions.ts",
+		"daemon-sidecar": "src/daemon-sidecar.ts",
+	},
 	bundle: true,
 	format: "cjs",
 	platform: "node",
 	target: "node18",
-	outfile: "dist/controller.cjs",
-	external: ["vscode"],
-};
-
-// test/attach-lifecycle.test.mjs drives the lease helpers directly; like the
-// sidecar bundle below it is gitignored, so a clean checkout must build it.
-const sessionActionsConfig = {
-	...shared,
-	entryPoints: ["src/session-actions.ts"],
-	bundle: true,
-	format: "cjs",
-	platform: "node",
-	target: "node18",
-	outfile: "dist/session-actions.cjs",
-	external: ["vscode"],
-};
-
-// test/host-e2e.mjs requires this bundle directly. It is gitignored with the
-// rest of dist/, so a clean checkout has to build it or that gate cannot run.
-const daemonSidecarConfig = {
-	...shared,
-	entryPoints: ["src/daemon-sidecar.ts"],
-	bundle: true,
-	format: "cjs",
-	platform: "node",
-	target: "node18",
-	outfile: "dist/daemon-sidecar.cjs",
+	outdir: "dist",
+	outExtension: { ".js": ".cjs" },
 	external: ["vscode"],
 };
 
@@ -107,8 +87,8 @@ if (watch) {
 } else {
 	await esbuild.build(extensionConfig);
 	await esbuild.build(webviewConfig);
-	await esbuild.build(smokeConfig);
-	await esbuild.build(controllerConfig);
-	await esbuild.build(daemonSidecarConfig);
-	await esbuild.build(sessionActionsConfig);
+	if (!production) {
+		await esbuild.build(smokeConfig);
+		await esbuild.build(testConfig);
+	}
 }

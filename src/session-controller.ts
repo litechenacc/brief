@@ -11,7 +11,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import * as vscode from "vscode";
-import { locateAgent, type LocatedAgent } from "./agent-locator.js";
+import { locateAgent } from "./agent-locator.js";
 import { DaemonSidecar } from "./daemon-sidecar.js";
 import { resolveOwnerClientId, resolveWorkerDescriptor } from "./daemon-owner.js";
 import type { AttachSnapshot, DaemonServerMessage, RosterEntry, SavedSessionInfo, SessionSummaryRef } from "./daemon-sidecar.js";
@@ -98,7 +98,6 @@ export interface SessionController {
 	detachFromDaemon(expected?: AttachRef | null): Promise<boolean>;
 	ownedRosterClientId(): string | undefined;
 	listSessions(sidecar: import("./daemon-sidecar.js").DaemonSidecar): Promise<import("./daemon-sidecar.js").SessionSummaryRef[]>;
-	promoteOwnRpcSession(): Promise<void>;
 	releaseOwnerIdentity(): void;
 	scheduleChildrenRefresh(): void;
 	runChildrenRefresh(): Promise<void>;
@@ -149,20 +148,6 @@ export class SessionController implements vscode.Disposable {
 	 */
 	reachable = false;
 	/**
-	 * The RPC subprocess starts as a client-owned worker. Once promoted to
-	 * resident, other prime-agent clients can see it and RPC disconnect no
-	 * longer reaps the agent.
-	 */
-	rpcSessionPromoted = false;
-	/** Result of the last CLI lookup, for the install card's explanation. */
-	locatedAgent: LocatedAgent | null = null;
-	/**
-	 * One error toast per unreachable CLI, not one per action. Seventeen call
-	 * sites reach ensureStarted(), and before this a missing binary stacked an
-	 * identical notice for every one of them.
-	 */
-	spawnErrorNotified = false;
-	/**
 	 * Bumped by every stop(). The CLI lookup can take a few seconds when the agent
 	 * is not on the inherited PATH, and a stop landing inside that window must not
 	 * be undone by the attempt it interrupted spawning a process nothing owns.
@@ -180,7 +165,6 @@ export class SessionController implements vscode.Disposable {
 	retrying = false;
 	debugLog = new DebugFileLog();
 	startingPromise: Promise<void> | null = null;
-	intentionalStop = false;
 	observingId: string | null = null;
 	/** Identity of the read-only session, kept separately from the hidden RPC state. */
 	observedSession: { activeSessionId: string; sessionId?: string; sessionPath?: string } | null = null;
@@ -343,10 +327,6 @@ export class SessionController implements vscode.Disposable {
 		}
 	}
 
-	debugPostFailure(message: HostToWebview): void {
-		this.debugLog.append(`postMessage returned FALSE for type=${message.type}`);
-	}
-
 	showErrorNotice(text: string): void {
 		this.broadcast({ type: "notice", level: "error", text });
 	}
@@ -438,7 +418,6 @@ export class SessionController implements vscode.Disposable {
 		const command = typeof configured === "string" && configured.trim() ? configured.trim() : "prime-agent";
 		if (command.includes("\0")) throw new Error("brief.command contains an invalid character");
 		const located = await locateAgent(command, (line) => this.output.appendLine(line));
-		this.locatedAgent = located;
 		const env: NodeJS.ProcessEnv = { ...process.env, ...(located.envPath ? { PATH: located.envPath } : {}) };
 		delete env.ELECTRON_RUN_AS_NODE;
 		await new Promise<void>((resolve, reject) => {
@@ -534,18 +513,12 @@ export class SessionController implements vscode.Disposable {
 	}
 
 	stop(): void {
-		this.intentionalStop = true;
 		this.startGeneration += 1;
-		// An explicit stop/restart is a deliberate act; the next failure is news
-		// again even if it is the same failure.
-		this.spawnErrorNotified = false;
-		// Kill the RPC client process only. After promote, the daemon worker is
-		// resident and survives this disconnect — same as closing a TUI.
+		// Stop the RPC client only; resident daemon sessions survive disconnect.
 		this.client?.stop();
 		this.client = null;
 		this.state = null;
 		this.reachable = false;
-		this.rpcSessionPromoted = false;
 		this.clearRunFlags();
 		if (this.installWatchdog) {
 			clearTimeout(this.installWatchdog);
@@ -662,34 +635,6 @@ export class SessionController implements vscode.Disposable {
 			this.pushStatus();
 		} else {
 			this.pushStatusLight();
-		}
-	}
-
-	onOtherMessage(client: RpcClient, raw: Record<string, unknown>): void {
-		// Non-response, non-event messages (e.g. extension_bus events). Surface notable ones.
-		const type = raw.type as string;
-		if (type === "extension_error") {
-			if (this.isForegroundRpcClient(client)) {
-				this.broadcast({ type: "notice", level: "error", text: `Extension error: ${JSON.stringify(raw.error ?? raw)}` });
-			}
-		} else if (type === "observed_session_event") {
-			const sessionId = raw.activeSessionId as string;
-			if (sessionId === this.observingId) {
-				this.broadcast({ type: "observedEvent", sessionId, event: raw.event as AgentEvent });
-			}
-		} else if (type === "observed_session_closed") {
-			const sessionId = raw.activeSessionId as string;
-			if (sessionId === this.observingId) {
-				this.observingId = null;
-				this.observedSession = null;
-				this.observationRestoring = true;
-				const epoch = ++this.viewEpoch;
-				this.broadcast({ type: "observedClosed", sessionId });
-				this.pushStatus();
-				// The observed transcript is still on screen. Keep the composer disabled
-				// until a fresh snapshot of this window's session has replaced it.
-				void this.restoreAfterObservationClosed(epoch);
-			}
 		}
 	}
 
@@ -885,19 +830,6 @@ export class SessionController implements vscode.Disposable {
 		this.attached = { ...attached };
 		this.attachedEpoch = epoch;
 		this.pushStatus();
-	}
-
-	/** Whether the subprocess is the session currently represented by this window. */
-	isForegroundRpcClient(client: RpcClient): boolean {
-		return (
-			this.client === client &&
-			!this.disposed &&
-			this.attached === null &&
-			this.observingId === null &&
-			!this.observationRestoring &&
-			!this.isCreatingSession() &&
-			!this.isReattaching()
-		);
 	}
 
 	/** A background-RPC reply may only update the same un-attached view that asked. */

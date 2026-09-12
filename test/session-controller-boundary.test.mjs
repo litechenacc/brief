@@ -903,7 +903,7 @@ controller.scheduleChildrenRefresh = originalIdentityChildrenRefresh;
 		controller.attached = { activeSessionId: "next-archive-live", sessionPath, sessionId };
 	};
 	await controller.archiveSession(currentPath, "hist-current-archive");
-	check("current archive stops its worker then opens the newest remaining session",
+	check("current archive opens the newest remaining session and stops the archived worker",
 		killed && switched?.sessionPath === nextPath && switched?.sessionId === "hist-next-archive", JSON.stringify({ killed, switched }));
 
 	const emptyPath = path.join(workdir, "hist-current-archive-empty.jsonl");

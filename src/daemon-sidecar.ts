@@ -491,14 +491,6 @@ export class DaemonSidecar {
 		return data?.roster ?? [];
 	}
 
-	async rosterUnsubscribe(): Promise<void> {
-		try {
-			await this.request({ type: "roster_unsubscribe" }, 15_000);
-		} catch {
-			// An older daemon or a dying socket need no unsubscribe ceremony.
-		}
-	}
-
 	async list(all = false, options: { includeClientOwned?: boolean } = {}): Promise<SessionSummaryRef[]> {
 		// `data` is optional in the envelope: a success with no payload must read as
 		// "no rows", not as a TypeError thrown from inside a caller's try block.
@@ -529,15 +521,6 @@ export class DaemonSidecar {
 			throw new Error("daemon create returned no activeSessionId");
 		}
 		return data;
-	}
-
-	/**
-	 * Turn a client-owned RPC worker into a resident session so other
-	 * prime-agent clients can list/attach to it, and so RPC EOF does not
-	 * reap the worker.
-	 */
-	async promoteOwnedSession(activeSessionId: string): Promise<void> {
-		await this.request({ type: "promote_owned_session", activeSessionId }, 15_000);
 	}
 
 	/**

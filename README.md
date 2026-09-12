@@ -85,11 +85,14 @@ See origin's README for the current chat-UI feature list; this tree still has th
 
 ```bash
 npm install
+npx playwright install chromium
 npm run compile
 npm run typecheck
 npm run test
 npm run package
 ```
+
+`npm test` 包含 Chromium 版面與動畫測試；首次執行前需安裝上述瀏覽器。
 
 Open this folder and press `F5` for an Extension Development Host.
 

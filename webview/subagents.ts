@@ -49,10 +49,6 @@ export class SubagentsStrip {
 		return this.children.filter((child) => childStatus(child) === "running").length;
 	}
 
-	setChatVisible(visible: boolean): void {
-		this.root.style.display = visible ? "" : "none";
-	}
-
 	/** New thread: no operator instruction about this strip yet. */
 	resetForNewThread(): void {
 		this.expanded = false;
