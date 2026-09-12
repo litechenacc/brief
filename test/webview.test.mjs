@@ -202,6 +202,18 @@ check("edit copy emits the output once, not twice", clipboard.split("edited src/
 	hostMessage({ type: "event", event: { type: "agent_end", messages: [] } });
 }
 
+// A websocket can lose tool_execution_end while agent_end still carries the durable result.
+{
+	const id = "tool-end-recovery";
+	hostMessage({ type: "event", event: { type: "agent_start" } });
+	hostMessage({ type: "event", event: { type: "tool_execution_start", toolCallId: id, toolName: "ipython", args: { code: "print('done')" } } });
+	hostMessage({ type: "event", event: { type: "agent_end", messages: [
+		{ role: "toolResult", toolCallId: id, toolName: "ipython", content: [{ type: "text", text: "done" }] },
+	] } });
+	const recovered = scroller.querySelector(`[data-part="tool-${id}"]`);
+	check("agent_end settles a tool whose end event was lost", recovered?.querySelector(".tool-dot")?.classList.contains("done") && recovered.textContent.includes("done"));
+}
+
 {
 	hostMessage({ type: "status", status: { ...baseStatus, liveTranscript: true } });
 	const partial = { role: "assistant", content: [{ type: "toolCall", id: "stream-live-1", name: "ipython", arguments: {} }] };
@@ -876,8 +888,8 @@ check("session chrome actions stay in the webview for tests and welcome",
 	check("it starts collapsed, since it is long", compaction && !compaction.open);
 
 	// Subagent replies are compact conversations, not transport notes.
-	const reply = document.querySelector(".subagent-message");
-	const bubble = reply?.querySelector(".subagent-bubble");
+	const reply = document.querySelector(".conversation-message");
+	const bubble = reply?.querySelector(".conversation-bubble");
 	check("a subagent reply is shown as a conversation bubble", !!reply && !!bubble);
 	check("the sender and model are visible", /auditor/.test(reply?.textContent ?? "") && /claude-sonnet/.test(reply?.textContent ?? ""));
 	check("the transport envelope is not shown", !reply?.textContent.includes("Agent-to-agent message received"));
@@ -885,6 +897,21 @@ check("session chrome actions stay in the webview for tests and welcome",
 	bubble.open = true;
 	check("the expanded reply renders markdown", bubble.querySelector("strong")?.textContent === "budgets drifted");
 	check("an entry marked display:false stays hidden", !document.body.textContent.includes("should never be shown"));
+}
+
+// Async shell completions and background-task wake prompts use the same folded conversation bubble.
+{
+	hostMessage({ type: "snapshot", state: null, status: baseStatus, messages: [
+		{ role: "custom", customType: "async_bash_completion", display: true,
+			content: "Shell message received.\nSource: bash\nCommand completed (pid 321, exit code 0).\nCommand: \"npm test\"",
+			details: { pid: 321, command: "npm test", exitCode: 0 } },
+		{ role: "user", content: "Background task 'tests' (12345678-1234-1234-1234-123456789abc) completed with exit code 0. Inspect receipt /tmp/task/state.json and logs." },
+	] });
+	const conversations = [...document.querySelectorAll(".conversation-message")];
+	const bash = conversations.find((row) => row.textContent.includes("npm test"));
+	const task = conversations.find((row) => row.textContent.includes("Background task 'tests'"));
+	check("async bash completion is a conversation bubble", !!bash?.querySelector(".conversation-bubble") && bash.textContent.includes("completed"));
+	check("background task completion is a conversation bubble", !!task?.querySelector(".conversation-bubble") && task.textContent.includes("completed"));
 }
 
 // --- the usage line must not appear under a reply still being written --------

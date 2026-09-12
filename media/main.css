@@ -2561,16 +2561,16 @@ pre.term {
 	overflow-x: auto;
 }
 
-/* ---------- subagent replies ---------- */
+/* ---------- conversation messages ---------- */
 
-.subagent-message {
+.conversation-message {
 	display: flex;
 	align-items: flex-start;
 	gap: 8px;
 	max-width: 92%;
 }
 
-.subagent-avatar {
+.conversation-avatar {
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -2579,8 +2579,8 @@ pre.term {
 	margin-top: 4px;
 	border-radius: 50%;
 	background: linear-gradient(135deg,
-		hsl(var(--subagent-hue) 78% 64%),
-		hsl(calc(var(--subagent-hue) + 55) 74% 46%));
+		hsl(var(--conversation-hue) 78% 64%),
+		hsl(calc(var(--conversation-hue) + 55) 74% 46%));
 	box-shadow: inset 0 0 0 1px color-mix(in srgb, white 20%, transparent);
 	color: white;
 	font-size: 8px;
@@ -2590,7 +2590,7 @@ pre.term {
 	flex: 0 0 24px;
 }
 
-.subagent-bubble {
+.conversation-bubble {
 	min-width: 0;
 	flex: 1;
 	border: 1px solid var(--pa-border);
@@ -2600,7 +2600,7 @@ pre.term {
 	overflow: hidden;
 }
 
-.subagent-summary {
+.conversation-summary {
 	display: flex;
 	align-items: center;
 	gap: 6px;
@@ -2610,14 +2610,14 @@ pre.term {
 	cursor: pointer;
 }
 
-.subagent-summary::-webkit-details-marker { display: none; }
+.conversation-summary::-webkit-details-marker { display: none; }
 
-.subagent-summary:focus-visible {
+.conversation-summary:focus-visible {
 	outline: 1px solid var(--vscode-focusBorder, var(--pa-accent));
 	outline-offset: -2px;
 }
 
-.subagent-summary::after {
+.conversation-summary::after {
 	content: "›";
 	color: var(--pa-faint);
 	font-size: 14px;
@@ -2625,11 +2625,11 @@ pre.term {
 	transition: transform 0.12s ease;
 }
 
-.subagent-bubble[open] > .subagent-summary::after {
+.conversation-bubble[open] > .conversation-summary::after {
 	transform: rotate(90deg);
 }
 
-.subagent-sender {
+.conversation-sender {
 	flex: none;
 	max-width: 30%;
 	overflow: hidden;
@@ -2640,7 +2640,7 @@ pre.term {
 	color: var(--pa-text);
 }
 
-.subagent-model {
+.conversation-detail {
 	max-width: 28%;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -2649,7 +2649,7 @@ pre.term {
 	color: var(--pa-faint);
 }
 
-.subagent-preview {
+.conversation-preview {
 	min-width: 0;
 	flex: 1;
 	overflow: hidden;
@@ -2659,17 +2659,17 @@ pre.term {
 	color: var(--pa-dim);
 }
 
-.subagent-bubble[open] .subagent-preview { display: none; }
+.conversation-bubble[open] .conversation-preview { display: none; }
 
-.subagent-body {
+.conversation-body {
 	padding: 3px 10px 9px;
 	border-top: 1px solid var(--pa-border-faint);
 	color: var(--pa-text);
 	overflow-x: auto;
 }
 
-.subagent-body > :first-child { margin-top: 0; }
-.subagent-body > :last-child { margin-bottom: 0; }
+.conversation-body > :first-child { margin-top: 0; }
+.conversation-body > :last-child { margin-bottom: 0; }
 
 .custom-note {
 	margin: 6px 10px;

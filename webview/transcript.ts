@@ -685,12 +685,21 @@ export class Transcript {
 	handleEvent(event: AgentEvent): void {
 		switch (event.type) {
 			case "agent_start":
+				// Tool executions cannot outlive a turn. A dropped end frame must not
+				// leave the previous turn's card running into this one.
+				this.finishRunningTools();
 				this.dismissWelcome();
 				this.streaming = true;
 				this.startWorking();
 				break;
 			case "agent_end": {
 				this.streaming = false;
+				for (const message of event.messages ?? []) {
+					if (message.role === "toolResult" && this.toolBlocks.has((message as ToolResultMessage).toolCallId)) {
+						this.renderToolResult(message as ToolResultMessage);
+					}
+				}
+				this.finishRunningTools();
 				const lastAssistant =
 					([...((event.messages ?? []) as AgentMessage[])].reverse().find((message) => message.role === "assistant") as AssistantMessage | undefined) ??
 					this.lastPartialAssistant ??
@@ -990,6 +999,11 @@ export class Transcript {
 		const role = message.role;
 		if (role === "user") {
 			const userMessage = message as UserMessage;
+			const backgroundTaskStatus = this.backgroundTaskStatus(this.userMessageText(userMessage));
+			if (backgroundTaskStatus) {
+				this.place(this.buildConversationMessage("background task", backgroundTaskStatus, this.userMessageText(userMessage)));
+				return;
+			}
 			const ordinal = this.userMessageOrdinal(userMessage);
 			const pending = this.matchingOptimistic(userMessage);
 			if (pending) {
@@ -1007,8 +1021,9 @@ export class Transcript {
 		} else if (role === "toolResult") {
 			this.renderToolResult(message as ToolResultMessage);
 		} else if (role === ("bashExecution" as string)) {
-			const m = message as unknown as { command?: string };
-			this.systemNote(`! ${m.command ?? "bash command"}`);
+			const m = message as unknown as { command?: string; output?: string; exitCode?: number; cancelled?: boolean };
+			const status = m.cancelled ? "cancelled" : m.exitCode === 0 ? "completed" : `exit ${m.exitCode ?? "unknown"}`;
+			this.place(this.buildConversationMessage("bash", status, [m.command, m.output].filter((part): part is string => typeof part === "string" && Boolean(part.trim())).join("\n\n") || "bash command"));
 		} else if (role === ("compactionSummary" as string)) {
 			this.place(this.buildCompactionSummary(message as unknown as CompactionSummaryMessage));
 			this.hasContent = true;
@@ -1050,28 +1065,17 @@ export class Transcript {
 	private buildCustomNote(message: CustomDisplayMessage): HTMLElement {
 		const sender = message.details?.from;
 		const reply = message.details?.message?.trim();
+		const content = typeof message.content === "string" ? message.content.trim() : "";
 		if (message.customType === "agent_message" && sender?.sessionName && reply) {
-			const row = el("div", "subagent-message");
-			const avatar = el("div", "subagent-avatar");
-			const initials = sender.sessionName.split(/[\s_-]+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
-			avatar.textContent = initials || sender.sessionName.slice(0, 2).toUpperCase();
-			avatar.title = `${sender.sessionName}${sender.model ? ` · ${sender.model}` : ""}`;
-			const seed = sender.model ?? sender.sessionId ?? sender.sessionName;
-			let hash = 0;
-			for (const char of seed) hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0;
-			avatar.style.setProperty("--subagent-hue", String(Math.abs(hash) % 360));
-
-			const bubble = el("details", "subagent-bubble") as HTMLDetailsElement;
-			const summary = el("summary", "subagent-summary");
-			summary.appendChild(el("span", "subagent-sender", sender.sessionName));
-			if (sender.model) summary.appendChild(el("span", "subagent-model", sender.model));
-			summary.appendChild(el("span", "subagent-preview", reply.replace(/\s+/g, " ")));
-			const body = el("div", "subagent-body");
-			renderMarkdown(reply, body, this.deps.onOpenLink);
-			bubble.append(summary, body);
-			row.append(avatar, bubble);
-			return row;
+			return this.buildConversationMessage(sender.sessionName, sender.model, reply, sender.model ?? sender.sessionId);
 		}
+		if (message.customType === "async_bash_completion" && content) {
+			const details = message.details as { pid?: number; exitCode?: number } | undefined;
+			const detail = [details?.pid != null ? `pid ${details.pid}` : "", details?.exitCode != null ? `exit ${details.exitCode}` : ""].filter(Boolean).join(" · ");
+			return this.buildConversationMessage("bash", detail || undefined, content);
+		}
+		const backgroundTaskStatus = this.backgroundTaskStatus(content);
+		if (backgroundTaskStatus) return this.buildConversationMessage("background task", backgroundTaskStatus, content);
 
 		const note = el("div", "custom-note");
 		const label = el("div", "custom-note-kind", (message.customType ?? "note").replace(/_/g, " "));
@@ -1079,6 +1083,34 @@ export class Transcript {
 		body.textContent = message.content ?? "";
 		note.append(label, body);
 		return note;
+	}
+
+	/** A compact, foldable event sent by another agent or an asynchronous task. */
+	private buildConversationMessage(sender: string, detail: string | undefined, reply: string, seed = sender): HTMLElement {
+		const row = el("div", "conversation-message");
+		const avatar = el("div", "conversation-avatar");
+		const initials = sender.split(/[\s_-]+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
+		avatar.textContent = initials || sender.slice(0, 2).toUpperCase();
+		avatar.title = detail ? `${sender} · ${detail}` : sender;
+		let hash = 0;
+		for (const char of seed) hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0;
+		avatar.style.setProperty("--conversation-hue", String(Math.abs(hash) % 360));
+
+		const bubble = el("details", "conversation-bubble") as HTMLDetailsElement;
+		const summary = el("summary", "conversation-summary");
+		summary.appendChild(el("span", "conversation-sender", sender));
+		if (detail) summary.appendChild(el("span", "conversation-detail", detail));
+		summary.appendChild(el("span", "conversation-preview", reply.replace(/\s+/g, " ")));
+		const body = el("div", "conversation-body");
+		renderMarkdown(reply, body, this.deps.onOpenLink);
+		bubble.append(summary, body);
+		row.append(avatar, bubble);
+		return row;
+	}
+
+	private backgroundTaskStatus(text: string): string | null {
+		return /^Background task .+? \([0-9a-f-]{36}\) (completed|failed|cancelled|launch_failed) with exit code /i.exec(text)?.[1]
+			?? (/^Check background task [0-9a-f-]{36} /i.test(text) ? "check" : null);
 	}
 
 	private renderUserTextWithMentions(text: string): HTMLElement {
@@ -1743,6 +1775,13 @@ export class Transcript {
 			wrapper.appendChild(editBox);
 		}
 		inputSection.appendChild(wrapper);
+	}
+
+	/** A completed turn is authoritative when a websocket dropped a tool end frame. */
+	private finishRunningTools(): void {
+		for (const [id, block] of this.toolBlocks) {
+			if (block.state === "running") this.setToolState(id, "done");
+		}
 	}
 
 	private setToolState(id: string, state: "running" | "done" | "error"): void {
