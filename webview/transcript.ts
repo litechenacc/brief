@@ -103,6 +103,14 @@ interface CustomDisplayMessage {
 	customType?: string;
 	content?: string;
 	display?: boolean;
+	details?: {
+		message?: string;
+		from?: {
+			sessionId?: string;
+			sessionName?: string;
+			model?: string;
+		};
+	};
 	timestamp?: number;
 }
 
@@ -1038,8 +1046,33 @@ export class Transcript {
 		return details;
 	}
 
-	/** An agent-authored note the agent asked to be shown — subagent replies land here. */
+	/** An agent-authored note the agent asked to be shown. */
 	private buildCustomNote(message: CustomDisplayMessage): HTMLElement {
+		const sender = message.details?.from;
+		const reply = message.details?.message?.trim();
+		if (message.customType === "agent_message" && sender?.sessionName && reply) {
+			const row = el("div", "subagent-message");
+			const avatar = el("div", "subagent-avatar");
+			const initials = sender.sessionName.split(/[\s_-]+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
+			avatar.textContent = initials || sender.sessionName.slice(0, 2).toUpperCase();
+			avatar.title = `${sender.sessionName}${sender.model ? ` · ${sender.model}` : ""}`;
+			const seed = sender.model ?? sender.sessionId ?? sender.sessionName;
+			let hash = 0;
+			for (const char of seed) hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0;
+			avatar.style.setProperty("--subagent-hue", String(Math.abs(hash) % 360));
+
+			const bubble = el("details", "subagent-bubble") as HTMLDetailsElement;
+			const summary = el("summary", "subagent-summary");
+			summary.appendChild(el("span", "subagent-sender", sender.sessionName));
+			if (sender.model) summary.appendChild(el("span", "subagent-model", sender.model));
+			summary.appendChild(el("span", "subagent-preview", reply.replace(/\s+/g, " ")));
+			const body = el("div", "subagent-body");
+			renderMarkdown(reply, body, this.deps.onOpenLink);
+			bubble.append(summary, body);
+			row.append(avatar, bubble);
+			return row;
+		}
+
 		const note = el("div", "custom-note");
 		const label = el("div", "custom-note-kind", (message.customType ?? "note").replace(/_/g, " "));
 		const body = el("div", "custom-note-body");

@@ -833,7 +833,9 @@ check("session chrome actions stay in the webview for tests and welcome",
 	hostMessage({ type: "snapshot", state: null, status: baseStatus, messages: [
 		{ role: "compactionSummary", summary: "## Goal\n- keep the workbench provider-neutral", tokensBefore: 255756, retainedMessageCount: 84 },
 		{ role: "user", content: "carry on" },
-		{ role: "custom", customType: "agent_message", display: true, content: "[from child:auditor] finding: budgets drifted" },
+		{ role: "custom", customType: "agent_message", display: true,
+			content: "Agent-to-agent message received.\n\nfinding: budgets drifted",
+			details: { message: "finding: **budgets drifted**", from: { sessionId: "child-1", sessionName: "auditor", model: "claude-sonnet" } } },
 		{ role: "custom", customType: "internal_bookkeeping", display: false, content: "should never be shown" },
 	] });
 	const compaction = document.querySelector(".compaction-summary");
@@ -846,11 +848,15 @@ check("session chrome actions stay in the webview for tests and welcome",
 		/provider-neutral/.test(compaction?.querySelector(".compaction-summary-body")?.textContent ?? ""));
 	check("it starts collapsed, since it is long", compaction && !compaction.open);
 
-	// Agent-authored notes — this is how a subagent's reply reaches the operator.
-	const notes = [...document.querySelectorAll(".custom-note")];
-	check("an agent message is shown, not dropped", notes.some((n) => n.textContent.includes("budgets drifted")),
-		JSON.stringify(notes.map((n) => n.textContent.slice(0, 40))));
-	check("its kind is labelled", notes.some((n) => n.querySelector(".custom-note-kind")?.textContent === "agent message"));
+	// Subagent replies are compact conversations, not transport notes.
+	const reply = document.querySelector(".subagent-message");
+	const bubble = reply?.querySelector(".subagent-bubble");
+	check("a subagent reply is shown as a conversation bubble", !!reply && !!bubble);
+	check("the sender and model are visible", /auditor/.test(reply?.textContent ?? "") && /claude-sonnet/.test(reply?.textContent ?? ""));
+	check("the transport envelope is not shown", !reply?.textContent.includes("Agent-to-agent message received"));
+	check("the reply starts folded", bubble && !bubble.open);
+	bubble.open = true;
+	check("the expanded reply renders markdown", bubble.querySelector("strong")?.textContent === "budgets drifted");
 	check("an entry marked display:false stays hidden", !document.body.textContent.includes("should never be shown"));
 }
 
@@ -1286,7 +1292,7 @@ const slashItems = () => {
 };
 const listed = slashItems();
 check("slash menu lists UI commands before the agent's catalog",
-	listed[0]?.startsWith("/model") && listed.some((item) => item.startsWith("/effort")) && listed.some((item) => item.startsWith("/stash")),
+	listed[0]?.startsWith("/model") && listed.some((item) => item.startsWith("/effort")) && listed.some((item) => item.startsWith("/stash")) && listed.some((item) => item.startsWith("/new")),
 	JSON.stringify(listed));
 check("slash menu still lists the agent's commands", listed.some((item) => item.startsWith("/compact")) && listed.some((item) => item.includes("security-pipeline")), JSON.stringify(listed));
 posted.length = 0;
@@ -1376,6 +1382,21 @@ textarea.value = "/effort medium";
 posted.length = 0;
 textarea.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
 check("/effort medium sets the level without a picker", posted.some((m) => m.type === "setThinkingLevel" && m.level === "medium") && !document.querySelector(".dropdown"), JSON.stringify(posted));
+
+textarea.value = "keep for next thread";
+textarea.dispatchEvent(new window.Event("input", { bubbles: true }));
+textarea.value = "/new";
+textarea.dispatchEvent(new window.Event("input", { bubbles: true }));
+posted.length = 0;
+textarea.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+check("/new posts newSession instead of a prompt", posted.some((m) => m.type === "newSession") && !posted.some((m) => m.type === "prompt"), JSON.stringify(posted.map((m) => m.type)));
+check("/new does not persist the slash as the outgoing draft", !posted.some((m) => m.type === "draftChanged" && m.text === "/new"), JSON.stringify(posted.filter((m) => m.type === "draftChanged")));
+check("/new leaves the composer empty for the new thread", textarea.value === "", JSON.stringify(textarea.value));
+
+textarea.value = "/new extra args";
+posted.length = 0;
+textarea.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+check("/new ignores extra args and still starts a session", posted.some((m) => m.type === "newSession") && !posted.some((m) => m.type === "prompt"), JSON.stringify(posted.map((m) => m.type)));
 
 // --- paste image on a text-only model shows a composer hint ---
 hostMessage({ type: "status", status: { ...baseStatus, modelProvider: "chutes", modelId: "glm", modelLabel: "chutes/glm" } });
