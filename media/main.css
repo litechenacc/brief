@@ -391,18 +391,46 @@ textarea::-webkit-scrollbar {
 }
 
 .working-mark {
-	color: var(--pa-accent);
-	animation: pa-pulse 1.4s ease-in-out infinite;
+	color: var(--pa-dim, inherit);
+	flex-shrink: 0;
 }
 
-.working-spinner {
-	width: 10px;
-	height: 10px;
-	border: 1.5px solid var(--pa-accent);
-	border-right-color: transparent;
-	border-radius: 50%;
-	flex-shrink: 0;
-	animation: pa-spin 0.7s linear infinite;
+.working-label {
+	color: var(--pa-dim, inherit);
+	background: linear-gradient(100deg,
+		var(--pa-dim, inherit) 35%,
+		var(--pa-text, inherit) 50%,
+		var(--pa-dim, inherit) 65%);
+	background-size: 300% 100%;
+	background-position: 100% 0;
+	background-clip: text;
+	-webkit-text-fill-color: transparent;
+	animation: working-sheen 4s ease-in-out infinite;
+}
+
+.working-elapsed {
+	color: var(--pa-dim, inherit);
+	font-variant-numeric: tabular-nums;
+}
+
+@keyframes working-sheen {
+	0%, 15% { background-position: 100% 0; }
+	85%, 100% { background-position: 0% 0; }
+}
+
+@media (prefers-reduced-motion: reduce), (forced-colors: active) {
+	.working-label {
+		animation: none;
+		background: none;
+		-webkit-text-fill-color: currentColor;
+	}
+}
+
+body.vscode-high-contrast .working-label,
+body.vscode-high-contrast-light .working-label {
+	animation: none;
+	background: none;
+	-webkit-text-fill-color: currentColor;
 }
 
 @keyframes pa-pulse {

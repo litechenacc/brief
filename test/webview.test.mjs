@@ -1559,7 +1559,7 @@ check("separate sends carry separate client request ids",
 		firstOptimisticPrompt?.payload?.clientRequestId !== secondOptimisticPrompt?.payload?.clientRequestId,
 	JSON.stringify(posted.filter((m) => m.type === "prompt").map((m) => m.payload.clientRequestId)));
 check("two optimistic rows render before either verdict", scroller.querySelectorAll(".row-user").length === 2, String(scroller.querySelectorAll(".row-user").length));
-check("send paints a working spinner before the first token", !!scroller.querySelector(".working-row .working-spinner") && (scroller.querySelector(".working-label")?.textContent ?? "").length > 0 && !/Sending/.test(scroller.querySelector(".working-label")?.textContent ?? ""), scroller.querySelector(".working-label")?.textContent ?? "none");
+check("send paints a working indicator before the first token", !!scroller.querySelector(".working-row .working-mark") && (scroller.querySelector(".working-label")?.textContent ?? "").length > 0 && !/Sending/.test(scroller.querySelector(".working-label")?.textContent ?? ""), scroller.querySelector(".working-label")?.textContent ?? "none");
 hostMessage({ type: "promptRejected", error: "transport disconnected", clientRequestId: firstOptimisticPrompt?.payload?.clientRequestId });
 check("rejection removes the exact optimistic row", !scroller.textContent.includes("first optimistic prompt") && scroller.textContent.includes("second optimistic prompt"), scroller.textContent);
 check("rejection of one queued send keeps the working spinner", !!scroller.querySelector(".working-row") && !/Sending/.test(scroller.querySelector(".working-label")?.textContent ?? ""));
@@ -1823,8 +1823,29 @@ check("...while the reply itself still renders", /answer/.test(scroller.textCont
 // the content and must be the SAME node afterwards, or it would lose its
 // open/closed state on every frame.
 hostMessage({ type: "snapshot", status: { ...baseStatus, sessionId: "session-thinking-2" }, state: null, messages: [] });
+const realWorkingInterval = window.setInterval;
+const realWorkingNow = window.Date.now;
+let workingTick;
+let workingNow = realWorkingNow();
+window.Date.now = () => workingNow;
+window.setInterval = (callback, delay, ...args) => {
+	if (delay === 400) workingTick = callback;
+	return realWorkingInterval.call(window, callback, delay, ...args);
+};
 hostMessage({ type: "event", event: { type: "agent_start" } });
-check("agent_start paints a working row immediately", !!scroller.querySelector(".working-row .working-spinner"), scroller.querySelector(".working-row")?.textContent ?? "none");
+const initialWorkingLabel = scroller.querySelector(".working-label");
+const initialWorkingVerb = initialWorkingLabel.textContent;
+workingNow += 7_999;
+workingTick();
+check("working verb stays for eight seconds", initialWorkingLabel.textContent === initialWorkingVerb);
+check("elapsed time is separate from the animated verb", scroller.querySelector(".working-elapsed")?.textContent === "· 7s");
+workingNow += 1;
+workingTick();
+check("working verb changes after eight seconds without replacing its element", initialWorkingLabel === scroller.querySelector(".working-label") && initialWorkingLabel.textContent !== initialWorkingVerb);
+check("decorative updates do not announce each tick", initialWorkingLabel.getAttribute("aria-hidden") === "true" && scroller.querySelector(".working-row")?.getAttribute("aria-label") === "Working");
+window.setInterval = realWorkingInterval;
+window.Date.now = realWorkingNow;
+check("agent_start paints a working row immediately", !!scroller.querySelector(".working-row .working-mark"), scroller.querySelector(".working-row")?.textContent ?? "none");
 hostMessage({ type: "event", event: { type: "message_start", message: { role: "assistant", model: "kimi", content: [{ type: "thinking", thinking: "" }] } } });
 check("no box while the thinking slot is still empty", !scroller.querySelector("details.thinking"));
 check("empty message_start keeps the working spinner", !!scroller.querySelector(".working-row") && !scroller.querySelector(".row-assistant"), scroller.querySelector(".working-row")?.textContent ?? "none");

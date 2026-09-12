@@ -857,7 +857,7 @@ export class Transcript {
 	private startWorking(): void {
 		if (!this.workingRow) {
 			this.workingVerbBase = pickSpinnerVerb();
-			this.nextVerbAt = Date.now() + 2_500;
+			this.nextVerbAt = Date.now() + 8_000;
 		}
 		if (this.workingRow) {
 			this.paintWorkingLabel();
@@ -865,14 +865,17 @@ export class Transcript {
 		}
 		this.workingStartedAt = Date.now();
 		const row = el("div", "working-row");
-		row.setAttribute("aria-live", "polite");
+		row.setAttribute("role", "status");
+		row.setAttribute("aria-label", "Working");
 		row.setAttribute("aria-busy", "true");
 		const mark = brandMark(15, "working-mark");
 		row.appendChild(mark);
-		const spinner = el("span", "working-spinner");
-		spinner.setAttribute("aria-hidden", "true");
-		row.appendChild(spinner);
-		row.appendChild(el("span", "working-label", this.workingVerbBase));
+		const label = el("span", "working-label", this.workingVerbBase);
+		label.setAttribute("aria-hidden", "true");
+		row.appendChild(label);
+		const elapsed = el("span", "working-elapsed");
+		elapsed.setAttribute("aria-hidden", "true");
+		row.appendChild(elapsed);
 		this.place(row);
 		this.workingRow = row;
 		window.clearInterval(this.workingTimer);
@@ -884,7 +887,7 @@ export class Transcript {
 		if (!this.workingRow) return;
 		if (Date.now() >= this.nextVerbAt) {
 			this.workingVerbBase = pickSpinnerVerb(this.workingVerbBase);
-			this.nextVerbAt = Date.now() + 2_500;
+			this.nextVerbAt = Date.now() + 8_000;
 		}
 		this.paintWorkingLabel();
 	}
@@ -892,13 +895,12 @@ export class Transcript {
 	private paintWorkingLabel(): void {
 		const label = this.workingRow?.querySelector(".working-label");
 		if (!label) return;
-		const elapsed = Date.now() - this.workingStartedAt;
-		if (elapsed < 1000) {
-			label.textContent = this.workingVerbBase;
-			return;
-		}
-		const seconds = Math.max(1, Math.round(elapsed / 1000));
-		label.textContent = `${this.workingVerbBase} · ${seconds}s`;
+		if (label.textContent !== this.workingVerbBase) label.textContent = this.workingVerbBase;
+		const elapsed = this.workingRow?.querySelector(".working-elapsed");
+		if (!elapsed) return;
+		const seconds = Math.floor((Date.now() - this.workingStartedAt) / 1000);
+		const text = seconds < 1 ? "" : `· ${seconds}s`;
+		if (elapsed.textContent !== text) elapsed.textContent = text;
 	}
 
 	private hasRunningTool(): boolean {
