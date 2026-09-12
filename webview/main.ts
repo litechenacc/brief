@@ -15,6 +15,7 @@ import type {
 	ImageAttachment,
 	RpcModel,
 	SelectionAttachment,
+	SessionActionSnapshot,
 	StatusSnapshot,
 	WebviewToHost,
 } from "../src/protocol.js";
@@ -63,7 +64,33 @@ observeBanner.style.display = "none";
 
 const chatView = el("div", "chat-view");
 const scroller = el("div", "messages");
-chatView.append(scroller);
+const pendingInputs = el("details", "pending-inputs") as HTMLDetailsElement;
+pendingInputs.hidden = true;
+pendingInputs.open = true;
+const pendingInputsHeading = el("summary", "pending-inputs-heading");
+const pendingInputsList = el("div", "pending-inputs-list");
+pendingInputs.append(pendingInputsHeading, pendingInputsList);
+chatView.append(scroller, pendingInputs);
+
+/** Keep queue previews outside durable history. Preview text is not an identity. */
+function renderPendingInputs(actions?: SessionActionSnapshot): void {
+	pendingInputsList.replaceChildren();
+	const add = (label: string, text: string) => {
+		const row = el("div", "pending-input");
+		row.append(el("span", "pending-input-phase", label), el("span", "pending-input-preview", text));
+		row.title = text;
+		pendingInputsList.appendChild(row);
+	};
+	if (actions?.active?.kind === "turn" && actions.active.phase !== "running") {
+		add("Delivering", actions.active.label);
+	}
+	for (const text of actions?.steering ?? []) add("Next turn", text);
+	for (const text of actions?.followUps ?? []) add("After run", text);
+	const count = pendingInputsList.childElementCount;
+	pendingInputs.hidden = count === 0;
+	pendingInputsHeading.textContent = `Pending input · ${count}`;
+	pendingInputsHeading.title = "Waiting to enter the conversation. Shows the runtime's visible queue only; disappearance is not a model-read receipt.";
+}
 
 // Scope IDs to this webview instance: a late rejection from a panel that was
 // closed and reopened must never match a new panel's first `prompt-1` row.
@@ -277,6 +304,7 @@ function startNewThread(): void {
 	subagents.resetForNewThread();
 	pendingPrompts.clear();
 	authoritativeSessionId = undefined;
+	renderPendingInputs();
 	transcript.clearSpawnCards?.();
 	transcript.renderSnapshot([]);
 	composer.resetForSessionBoundary();
@@ -335,6 +363,7 @@ let extensionTitle: { sessionId?: string; title: string; provisional: boolean } 
 function adoptAuthoritativeSession(sessionId: string | undefined): boolean {
 	if (!sessionId || sessionId === authoritativeSessionId) return false;
 	authoritativeSessionId = sessionId;
+	renderPendingInputs();
 	pendingPrompts.clear();
 	pendingImageRequests.clear();
 	pendingFileSearches.clear();
@@ -618,6 +647,7 @@ function dispatchHostMessage(message: HostToWebview): void {
 			transcript.clearSpawnCards?.();
 			subagents.resetActivity();
 			transcript.renderSnapshot(message.messages ?? []);
+			renderPendingInputs(message.state?.sessionActions);
 			// Up/Down recall has to survive a reload or a resume, so it is seeded
 			// from the thread itself rather than only from what this panel sent.
 			composer.setPromptHistory(userPromptsOf(message.messages ?? []));
@@ -628,6 +658,7 @@ function dispatchHostMessage(message: HostToWebview): void {
 			if (message.steerDefault) composer.setSteerDefault(message.steerDefault);
 			break;
 		case "event":
+			if (message.event.type === "session_action_update") renderPendingInputs(message.event.actions);
 			transcript.handleEvent(message.event);
 			if (message.event.type === "agent_start" || message.event.type === "agent_end") {
 				composer.setStreaming(message.event.type === "agent_start");
@@ -682,9 +713,12 @@ function dispatchHostMessage(message: HostToWebview): void {
 			transcript.clearSpawnCards?.();
 			subagents.resetActivity();
 			transcript.renderSnapshot(message.messages);
+			renderPendingInputs();
 			showView("chat");
 			break;
 		case "observedEvent":
+			if (message.sessionId !== authoritativeSessionId) break;
+			if (message.event.type === "session_action_update") renderPendingInputs(message.event.actions);
 			transcript.handleEvent(message.event);
 			break;
 		case "observedClosed":

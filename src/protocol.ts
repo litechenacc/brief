@@ -99,7 +99,7 @@ export type AgentEvent =
 	| { type: "compaction_end"; reason: string; aborted?: boolean; errorMessage?: string }
 	| { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage?: string }
 	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
-	| { type: "session_action_update"; actions?: unknown }
+	| { type: "session_action_update"; actions?: SessionActionSnapshot }
 	| { type: "thinking_level_changed"; level: string }
 	| { type: "session_info_changed"; name?: string };
 
@@ -120,7 +120,20 @@ export interface RpcModel {
 	thinkingLevelMap?: Record<string, string | null> | null;
 }
 
+/** Runtime's visible queue projection; not a per-message model-read receipt. */
+export interface SessionActionSnapshot {
+	queuedCount: number;
+	steering: string[];
+	followUps: string[];
+	active?: {
+		kind: "turn" | "session_command";
+		phase: "preparing" | "committing" | "running";
+		label: string;
+	};
+}
+
 export interface RpcSessionState {
+	sessionActions?: SessionActionSnapshot;
 	model?: RpcModel | null;
 	thinkingLevel?: string;
 	isStreaming?: boolean;

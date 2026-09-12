@@ -918,6 +918,41 @@ check("session chrome actions stay in the webview for tests and welcome",
 	check("background task completion is a conversation bubble", !!task?.querySelector(".conversation-bubble") && task.textContent.includes("completed"));
 }
 
+// Runtime queue previews stay separate from inputs already in the conversation.
+{
+	const actions = { queuedCount: 2, steering: ["review <script>unsafe</script>"], followUps: ["run final tests"] };
+	hostMessage({ type: "snapshot", messages: [], state: { sessionActions: actions }, status: baseStatus });
+	const queue = document.querySelector(".pending-inputs");
+	check("snapshot restores pending inputs outside durable transcript", !queue.hidden && queue.querySelectorAll(".pending-input").length === 2 && !queue.closest(".messages"));
+	check("pending inputs distinguish next-turn from after-run delivery", queue.textContent.includes("Next turn") && queue.textContent.includes("After run"));
+	check("queue previews are plain text", !queue.querySelector("script") && queue.textContent.includes("<script>unsafe</script>"));
+	queue.open = false;
+	hostMessage({ type: "event", event: { type: "session_action_update", actions } });
+	check("queue updates replace previews without duplicating or reopening", queue.querySelectorAll(".pending-input").length === 2 && !queue.open);
+	hostMessage({ type: "event", event: { type: "session_action_update", actions: { queuedCount: 0, steering: [], followUps: [], active: { kind: "turn", phase: "preparing", label: "run final tests" } } } });
+	check("selected input remains visible as Delivering, not read", !queue.hidden && queue.textContent.includes("Delivering"));
+	hostMessage({ type: "event", event: { type: "message_start", message: { role: "user", content: "run final tests" } } });
+	check("conversation arrival does not guess queue identity from text", !queue.hidden && document.querySelector(".row-user")?.textContent.includes("run final tests"));
+	hostMessage({ type: "event", event: { type: "session_action_update", actions: { queuedCount: 0, steering: [], followUps: [], active: { kind: "turn", phase: "running", label: "run final tests" } } } });
+	check("runtime running phase retires pending strip and keeps conversation", queue.hidden && document.querySelector(".row-user")?.textContent.includes("run final tests"));
+	hostMessage({ type: "event", event: { type: "session_action_update", actions } });
+	hostMessage({ type: "event", event: { type: "agent_end", messages: [] } });
+	check("agent_end does not falsely consume queued follow-ups", !queue.hidden);
+	hostMessage({ type: "snapshot", messages: [], state: null, status: baseStatus });
+	check("resync replaces stale queue even in the same session", queue.hidden);
+	hostMessage({ type: "event", event: { type: "session_action_update", actions } });
+	hostMessage({ type: "status", status: { ...baseStatus, sessionId: "queue-other" } });
+	check("session switch clears pending inputs", queue.hidden);
+	hostMessage({ type: "observedSession", sessionId: "watched", messages: [] });
+	hostMessage({ type: "observedEvent", sessionId: "watched", event: { type: "session_action_update", actions } });
+	check("observed session receives its own queue updates", !queue.hidden);
+	hostMessage({ type: "observedEvent", sessionId: "old-watched", event: { type: "session_action_update" } });
+	check("late observed queue event cannot change the current view", !queue.hidden);
+	hostMessage({ type: "newThread" });
+	check("new thread clears pending inputs", queue.hidden);
+	hostMessage({ type: "snapshot", messages: [], state: null, status: baseStatus });
+}
+
 // --- the usage line must not appear under a reply still being written --------
 // renderSnapshot repaints EVERY message as non-partial, so a snapshot arriving
 // mid-turn used to stamp a token/cost line under the live reply, which its next

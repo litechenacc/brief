@@ -2589,6 +2589,43 @@ pre.term {
 	overflow-x: auto;
 }
 
+/* Queue previews are not transcript messages or model-read receipts. */
+.pending-inputs {
+	flex: none;
+	margin: 0 10px 6px;
+	border-top: 1px dashed var(--pa-border-faint);
+	color: var(--pa-dim);
+	font-size: 11px;
+}
+
+.pending-inputs-heading {
+	padding: 7px 0;
+	cursor: pointer;
+}
+
+.pending-inputs-list {
+	max-height: 108px;
+	overflow-y: auto;
+}
+
+.pending-input {
+	display: flex;
+	gap: 9px;
+	padding: 3px 0;
+}
+
+.pending-input-phase {
+	flex: 0 0 64px;
+	font-size: 10px;
+}
+
+.pending-input-preview {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
 /* ---------- conversation messages ---------- */
 
 .conversation-message {
