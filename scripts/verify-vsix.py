@@ -13,13 +13,16 @@ if "extension/media/icon.png" not in names:
     raise SystemExit("vsix missing: extension/media/icon.png")
 if pkg.get("icon") != "media/icon.png":
     raise SystemExit(f"package.json icon={pkg.get('icon')!r}")
-activity = pkg["contributes"]["viewsContainers"]["activitybar"][0]["icon"]
-if activity != "$(comment-discussion)":
-    raise SystemExit(f"activitybar icon={activity!r}")
+if not any(view.get("id") == "brief.chat" for view in pkg["contributes"].get("views", {}).get("brief", [])):
+    raise SystemExit("package missing Brief sidebar view")
+if pkg["contributes"]["configuration"]["properties"]["brief.chatLocation"]["enum"] != ["editor", "sidebar"]:
+    raise SystemExit("package missing editor/sidebar location setting")
+if "onWebviewPanel:brief.chatPanel" not in pkg.get("activationEvents", []):
+    raise SystemExit("package missing editor panel restore activation")
 if "Microsoft.VisualStudio.Services.Icons.Default" not in manifest:
     raise SystemExit("vsixmanifest missing Icons.Default")
 if "extension/media/icon.png" not in manifest:
     raise SystemExit("vsixmanifest missing icon.png path")
 print(f"vsix ok: {vsix}")
 print(f" marketplace icon: {pkg.get('icon')}")
-print(f" activitybar icon: {activity}")
+print(" chat layout: native editor tabs + sidebar")

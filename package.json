@@ -38,26 +38,10 @@
     "Chat"
   ],
   "main": "./dist/extension.js",
-  "activationEvents": [],
+  "activationEvents": [
+    "onWebviewPanel:brief.chatPanel"
+  ],
   "contributes": {
-    "viewsContainers": {
-      "activitybar": [
-        {
-          "id": "brief",
-          "title": "Brief",
-          "icon": "$(comment-discussion)"
-        }
-      ]
-    },
-    "views": {
-      "brief": [
-        {
-          "id": "brief.chat",
-          "type": "webview",
-          "name": "Brief"
-        }
-      ]
-    },
     "commands": [
       {
         "command": "brief.openChat",
@@ -91,7 +75,7 @@
       },
       {
         "command": "brief.exportChat",
-        "title": "Export Chat…",
+        "title": "Export Chat\u2026",
         "icon": "$(export)",
         "category": "Brief"
       },
@@ -124,6 +108,30 @@
         "title": "Add Active File to Chat",
         "icon": "$(file)",
         "category": "Brief"
+      },
+      {
+        "command": "brief.useEditor",
+        "title": "Use Editor",
+        "category": "Brief",
+        "icon": "$(open-preview)"
+      },
+      {
+        "command": "brief.useSidebar",
+        "title": "Use Sidebar",
+        "category": "Brief",
+        "icon": "$(layout-sidebar-right)"
+      },
+      {
+        "command": "brief.toggleChatLocation",
+        "title": "Toggle Chat Location",
+        "category": "Brief",
+        "icon": "$(arrow-swap)"
+      },
+      {
+        "command": "brief.switchSession",
+        "title": "Switch Session",
+        "category": "Brief",
+        "icon": "$(list-selection)"
       }
     ],
     "menus": {
@@ -139,38 +147,6 @@
           "group": "9_brief@2"
         }
       ],
-      "view/title": [
-        {
-          "command": "brief.newSession",
-          "when": "view == brief.chat",
-          "group": "navigation@1"
-        },
-        {
-          "command": "brief.history",
-          "when": "view == brief.chat",
-          "group": "navigation@2"
-        },
-        {
-          "command": "brief.renameSession",
-          "when": "view == brief.chat",
-          "group": "navigation@3"
-        },
-        {
-          "command": "brief.compact",
-          "when": "view == brief.chat",
-          "group": "1_session@2"
-        },
-        {
-          "command": "brief.exportChat",
-          "when": "view == brief.chat",
-          "group": "1_session@3"
-        },
-        {
-          "command": "brief.restart",
-          "when": "view == brief.chat",
-          "group": "1_session@4"
-        }
-      ],
       "editor/title": [
         {
           "command": "brief.focusChat",
@@ -183,15 +159,67 @@
           "group": "navigation@1"
         },
         {
-          "command": "brief.history",
+          "command": "brief.renameSession",
           "when": "activeWebviewPanelId == 'brief.chatPanel'",
-          "group": "navigation@2"
+          "group": "navigation@3"
+        },
+        {
+          "command": "brief.compact",
+          "when": "activeWebviewPanelId == 'brief.chatPanel'",
+          "group": "1_session@2"
+        },
+        {
+          "command": "brief.exportChat",
+          "when": "activeWebviewPanelId == 'brief.chatPanel'",
+          "group": "1_session@3"
+        },
+        {
+          "command": "brief.restart",
+          "when": "activeWebviewPanelId == 'brief.chatPanel'",
+          "group": "1_session@4"
         }
       ],
       "commandPalette": [
         {
           "command": "brief.addSelectionToChat",
           "when": "editorHasSelection"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "brief.newSession",
+          "when": "view == brief.chat",
+          "group": "navigation@1"
+        },
+        {
+          "command": "brief.switchSession",
+          "when": "view == brief.chat && config.brief.chatLocation == sidebar",
+          "group": "navigation@2"
+        },
+        {
+          "command": "brief.history",
+          "when": "view == brief.chat && config.brief.chatLocation == sidebar",
+          "group": "navigation@3"
+        },
+        {
+          "command": "brief.renameSession",
+          "when": "view == brief.chat && config.brief.chatLocation == sidebar",
+          "group": "1_session@1"
+        },
+        {
+          "command": "brief.compact",
+          "when": "view == brief.chat && config.brief.chatLocation == sidebar",
+          "group": "1_session@2"
+        },
+        {
+          "command": "brief.exportChat",
+          "when": "view == brief.chat && config.brief.chatLocation == sidebar",
+          "group": "1_session@3"
+        },
+        {
+          "command": "brief.restart",
+          "when": "view == brief.chat && config.brief.chatLocation == sidebar",
+          "group": "1_session@4"
         }
       ]
     },
@@ -272,8 +300,36 @@
           "type": "boolean",
           "default": false,
           "description": "Paint tool output as it arrives. Off (default) waits until the tool finishes. Independent of liveTranscript."
+        },
+        "brief.chatLocation": {
+          "type": "string",
+          "enum": [
+            "editor",
+            "sidebar"
+          ],
+          "default": "editor",
+          "scope": "window",
+          "description": "Default location for new sessions and Focus Chat. Use Brief: Use Editor or Use Sidebar to also move the current session."
         }
       }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "brief",
+          "title": "Brief",
+          "icon": "$(comment-discussion)"
+        }
+      ]
+    },
+    "views": {
+      "brief": [
+        {
+          "id": "brief.chat",
+          "type": "webview",
+          "name": "Brief"
+        }
+      ]
     }
   },
   "scripts": {
@@ -282,7 +338,7 @@
     "typecheck": "tsc --noEmit",
     "package": "node esbuild.config.mjs --production && npx @vscode/vsce package --no-dependencies",
     "smoke": "node test/smoke.mjs",
-    "test": "node test/agent-locator.test.mjs && node test/activate.test.mjs && node test/session-startup.test.mjs && node test/chat-view-message.test.mjs && node test/session-controller-boundary.test.mjs && node test/attach-lifecycle.test.mjs && node test/session-actions.test.mjs && node test/webview.test.mjs && node test/transcript-window.test.mjs && node test/export-md.test.mjs && node test/recent-sessions-tail.test.mjs && node test/roster-parity.test.mjs && node test/crosswire.test.mjs && node test/image-fit.test.mjs && node test/transport-regression.test.mjs && node test/owner-visibility.test.mjs",
+    "test": "node test/agent-locator.test.mjs && node test/activate.test.mjs && node test/editor-tabs.test.mjs && node test/session-startup.test.mjs && node test/chat-view-message.test.mjs && node test/session-controller-boundary.test.mjs && node test/attach-lifecycle.test.mjs && node test/session-actions.test.mjs && node test/webview.test.mjs && node test/view-state.test.mjs && node test/transcript-window.test.mjs && node test/export-md.test.mjs && node test/recent-sessions-tail.test.mjs && node test/roster-parity.test.mjs && node test/crosswire.test.mjs && node test/image-fit.test.mjs && node test/transport-regression.test.mjs && node test/owner-visibility.test.mjs",
     "test:live": "node esbuild.config.mjs && node test/daemon-parity.mjs --require-daemon && node test/owned-roster.mjs --require-daemon && node test/host-e2e.mjs && node test/smoke.mjs",
     "icon": "node test/render-icon.cjs",
     "pretest": "node esbuild.config.mjs",

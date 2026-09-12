@@ -58,12 +58,12 @@ check("a missing daemon socket starts the supervisor then reconnects", superviso
 const liveMemory = new Map([["brief-foreground-session", { sessionId: "remembered", sessionFile: livePath }]]);
 const live = controllerFor(liveMemory, [{ activeSessionId: "live-active", sessionId: "remembered", sessionFile: livePath }]);
 await live.controller.start();
-check("startup attaches the remembered live worker", live.actions.length === 1 && live.actions[0].type === "attach" && live.actions[0].activeSessionId === "live-active", JSON.stringify(live.actions));
+check("startup ignores the workspace singleton even when its worker is live", live.actions.length === 2 && live.actions[0].type === "create" && !live.actions[0].sessionPath && live.actions[1].activeSessionId === "created-active", JSON.stringify(live.actions));
 
 const deadMemory = new Map([["brief-foreground-session", { sessionId: "remembered", sessionFile: livePath }]]);
 const dead = controllerFor(deadMemory, []);
 await dead.controller.start();
-check("startup resumes an inactive remembered JSONL", dead.actions[0]?.type === "create" && dead.actions[0]?.sessionPath === livePath && dead.actions[1]?.type === "attach", JSON.stringify(dead.actions));
+check("startup does not resume an inactive workspace singleton", dead.actions[0]?.type === "create" && !dead.actions[0]?.sessionPath && dead.actions[1]?.type === "attach", JSON.stringify(dead.actions));
 
 const fresh = controllerFor(new Map(), []);
 await fresh.controller.start();
@@ -86,7 +86,83 @@ const persistedMemory = new Map();
 const persisted = new SessionController(context(persistedMemory), output);
 await persisted.persistForegroundSession("persisted-id", livePath);
 const restored = new SessionController(context(persistedMemory), output);
-check("workspaceState persists and restores the foreground identity", restored.rememberedSession?.sessionId === "persisted-id" && restored.rememberedSession?.sessionFile === livePath, JSON.stringify(restored.rememberedSession));
+check("session target stays panel-local rather than writing workspaceState", persisted.rememberedSession?.sessionId === "persisted-id" && restored.rememberedSession === null && !persistedMemory.has("brief-foreground-session"));
+
+const failedResume = controllerFor(new Map(), []);
+failedResume.controller.resolveHistorySession = async () => null;
+await failedResume.controller.switchSession(livePath, "missing-id");
+await failedResume.controller.ensureStarted();
+check("ready after failed history resume stays locked and does not create a blank session", failedResume.actions.length === 0 && failedResume.controller.observationRestoring && failedResume.controller.rememberedSession?.sessionId === "missing-id");
+failedResume.controller.dispose();
+
+const newTab = controllerFor(liveMemory, []);
+await newTab.controller.newSession();
+check("newSession on a fresh panel creates only one resident", newTab.actions.filter((action) => action.type === "create").length === 1 && newTab.actions.filter((action) => action.type === "attach").length === 1, JSON.stringify(newTab.actions));
+
+const beforeReady = historyActions.length;
+await history.ensureStarted();
+check("ready after history binding does not start or replace that session", historyActions.length === beforeReady && history.attached.activeSessionId === "history-active");
+
+const late = controllerFor(new Map(), []);
+let finishConnect;
+late.controller.connectDaemon = () => new Promise((resolve) => { finishConnect = resolve; });
+const lateStart = late.controller.start();
+late.controller.dispose();
+finishConnect({ createResident: async () => { late.actions.push({ type: "create" }); } });
+await lateStart;
+check("closing a panel during startup does not create a resident", late.actions.length === 0);
+
+const isolated = controllerFor(liveMemory, []);
+isolated.controller.attachViaDaemon = async () => {
+	isolated.controller.attached = { activeSessionId: "other-panel", sessionPath: livePath };
+	return true;
+};
+await isolated.controller.start();
+isolated.controller.sidecar = { connected: true, dispose: () => {} };
+isolated.controller.dispose();
+check("closing another panel leaves the first panel attachment intact", live.controller.attached?.activeSessionId === "created-active" && !live.controller.disposed);
+
+const sharedMemory = new Map();
+const sharedContext = context(sharedMemory);
+const panelA = new SessionController(sharedContext, output);
+const panelB = new SessionController(sharedContext, output);
+panelA.markHistoryArchived("/history/a.jsonl");
+panelB.markHistoryArchived("/history/b.jsonl");
+check("two panels preserve each other's archive overlays", sharedMemory.get("brief.historyUi").archived.length === 2 && panelB.historyArchived.has("/history/a.jsonl"));
+panelA.markHistoryWaitingForUser("/history/a.jsonl");
+panelB.markHistoryWaitingForUser("/history/b.jsonl");
+panelA.markHistorySessionOpened("/history/b.jsonl");
+panelB.persistHistoryUiState();
+const sharedHistory = sharedMemory.get("brief.historyUi");
+check("another panel cannot restore a cleared unread marker or lose rank times", sharedHistory.unread.includes("/history/a.jsonl") && !sharedHistory.unread.includes("/history/b.jsonl") && Object.keys(sharedHistory.sortMs).length === 2);
+panelA.lastHistory = [];
+panelA.forgetHistoryRow("/history/a.jsonl");
+panelB.persistHistoryUiState();
+check("forgetting a history overlay survives another panel's save", !sharedMemory.get("brief.historyUi").archived.includes("/history/a.jsonl") && !panelB.historySortMs.has("/history/a.jsonl"));
+panelA.state = { sessionId: "draft-a" };
+panelB.state = { sessionId: "draft-b" };
+panelA.persistDraft("draft A", "draft-a");
+panelB.persistDraft("draft B", "draft-b");
+panelA.persistDraft("", "draft-a");
+check("per-session draft keys do not overwrite another panel's draft", !sharedMemory.get("brief-draft:draft-a") && sharedMemory.get("brief-draft:draft-b") === "draft B");
+const otherWorkspace = new SessionController(context(new Map()), output);
+check("history overlays do not leak to another workspace", otherWorkspace.historyArchived.size === 0);
+const titlePosts = [];
+panelA.attach({ post: (message) => titlePosts.push(message) });
+panelA.cachedMessages = [];
+panelA.onAgentEvent({ type: "message_start", message: { role: "user", content: "# 修復登入流程\n請先檢查錯誤訊息" } });
+check("first accepted prompt immediately labels an empty session", titlePosts.filter((message) => message.type === "status").at(-1)?.status.sessionLabel === "修復登入流程");
+panelA.onAgentEvent({ type: "message_end", message: { role: "user", content: "第二個問題" } });
+check("later prompts do not replace the first-prompt title", panelA.sessionChromeLabel() === "修復登入流程");
+check("an explicit session name wins over the prompt-derived title", panelA.sessionChromeLabel("自訂名稱") === "自訂名稱");
+panelA.resetViewedSessionState();
+check("navigation clears the previous live prompt title", panelA.sessionChromeLabel() === "");
+panelA.cachedMessages = [{ role: "user", content: "歷史中的第一則prompt" }];
+panelA.onAgentEvent({ type: "message_start", message: { role: "user", content: "新追問" } });
+check("resumed sessions keep their historical first prompt title", panelA.sessionChromeLabel() === "歷史中的第一則prompt");
+panelA.dispose();
+panelB.dispose();
+otherWorkspace.dispose();
 
 let disposedSidecar = false;
 let daemonCommands = 0;

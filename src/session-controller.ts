@@ -172,6 +172,8 @@ export class SessionController implements vscode.Disposable {
 	disposables: vscode.Disposable[] = [];
 	state: RpcSessionState | null = null;
 	cachedMessages: AgentMessage[] = [];
+	/** First accepted prompt since the last snapshot/navigation, for live tab titles. */
+	firstPromptLabel = "";
 	extensionStatusText: string | undefined;
 	streaming = false;
 	compacting = false;
@@ -256,17 +258,13 @@ export class SessionController implements vscode.Disposable {
 	browseRefByActiveId = new Map<string, string>();
 	/** Invalidates child capabilities only when the displayed session actually changes. */
 	childrenContext = 0;
-	/** Last foreground daemon session for Extension Host / Reload Window recovery. */
+	/** This panel's session target; editor panel persistence owns reload recovery. */
 	rememberedSession: { sessionId: string; sessionFile: string } | null = null;
 
 	constructor(
 		readonly context: vscode.ExtensionContext,
 		readonly output: vscode.OutputChannel,
 	) {
-		const remembered = this.context.workspaceState.get<{ sessionId?: unknown; sessionFile?: unknown }>("brief-foreground-session");
-		if (typeof remembered?.sessionId === "string" && typeof remembered.sessionFile === "string") {
-			this.rememberedSession = { sessionId: remembered.sessionId, sessionFile: remembered.sessionFile };
-		}
 		this.restoreHistoryUiState();
 		this.disposables.push(
 			vscode.workspace.onDidChangeConfiguration((event) => {
@@ -372,7 +370,7 @@ export class SessionController implements vscode.Disposable {
 			return;
 		}
 		this.debugLog.append("ensureStarted");
-		if (this.client?.running) return;
+		if (this.attached || this.observingId || this.client?.running) return;
 		if (this.startingPromise) return this.startingPromise;
 		this.armInstallWatchdog();
 		this.startingPromise = this.start()
@@ -432,7 +430,6 @@ export class SessionController implements vscode.Disposable {
 	async persistForegroundSession(sessionId: string, sessionFile: string): Promise<void> {
 		if (!sessionId || !sessionFile) return;
 		this.rememberedSession = { sessionId, sessionFile };
-		await this.context.workspaceState.update("brief-foreground-session", this.rememberedSession);
 	}
 
 	private async startDaemonSupervisor(): Promise<void> {
@@ -483,37 +480,23 @@ export class SessionController implements vscode.Disposable {
 
 	async start(): Promise<void> {
 		if (!this.workspaceRoot) throw new Error("Open a workspace folder before starting Brief.");
-		const sidecar = await this.connectDaemon();
-		if (this.disposed || this.attached) return;
-		const remembered = this.rememberedSession;
-		const sessions = await this.listSessions(sidecar);
-		const live = remembered
-			? sessions.find((row) =>
-				row.activeSessionId &&
-				(row.sessionId === remembered.sessionId || row.id === remembered.sessionId ||
-					(row.sessionFile ? normalizeFsPath(row.sessionFile) === normalizeFsPath(remembered.sessionFile) : false)),
-			)
-			: undefined;
-		let target = live;
-		if (!target) {
-			let sessionPath: string | undefined;
-			if (remembered) {
-				try {
-					await fs.access(remembered.sessionFile);
-					sessionPath = remembered.sessionFile;
-				} catch {
-					// The remembered transcript was removed; create a fresh session.
-				}
-			}
-			target = await sidecar.createResident({ cwd: this.workspaceRoot, ...(sessionPath ? { sessionPath } : {}) });
+		if (this.disposed || this.attached || this.observingId) return;
+		// A failed history resume must retry its own target, never open a blank session.
+		if (this.rememberedSession) {
+			await this.switchSession(this.rememberedSession.sessionFile, this.rememberedSession.sessionId);
+			return;
 		}
+		const epoch = this.viewEpoch;
+		const generation = this.startGeneration;
+		const sidecar = await this.connectDaemon();
+		if (this.disposed || this.attached || epoch !== this.viewEpoch || generation !== this.startGeneration) return;
+		const target = await sidecar.createResident({ cwd: this.workspaceRoot });
+		if (this.disposed || epoch !== this.viewEpoch || generation !== this.startGeneration) return;
 		const activeSessionId = target.activeSessionId;
 		if (!activeSessionId) throw new Error("daemon returned no activeSessionId");
-		const sessionFile = target.sessionFile ?? remembered?.sessionFile ?? "";
-		if (!(await this.attachViaDaemon(activeSessionId, sessionFile, this.viewEpoch))) {
+		if (!(await this.attachViaDaemon(activeSessionId, target.sessionFile ?? "", epoch))) {
 			throw new Error(this.lastDaemonAttachError ?? "could not attach to daemon session");
 		}
-		// A successful daemon attach is a completed runtime round-trip too.
 		this.reachable = true;
 	}
 
@@ -620,6 +603,9 @@ export class SessionController implements vscode.Disposable {
 			if (event.type === "tool_execution_end" || event.type === "agent_start" || event.type === "agent_end" || event.type === "turn_end") {
 				this.scheduleChildrenRefresh();
 			}
+		}
+		if ((event.type === "message_start" || event.type === "message_end") && event.message.role === "user" && !this.firstPromptLabel) {
+			this.firstPromptLabel = deriveSessionLabel({ firstPrompt: firstUserPrompt([event.message]) });
 		}
 		switch (event.type) {
 			case "agent_start":
@@ -929,6 +915,7 @@ export class SessionController implements vscode.Disposable {
 	}
 
 	resetViewedSessionState(): void {
+		this.firstPromptLabel = "";
 		this.extensionStatusText = undefined;
 		this.lastStatsText = "";
 		this.lastUsage = {};
@@ -1168,14 +1155,10 @@ export class SessionController implements vscode.Disposable {
 		const epoch = this.beginNavigation();
 		const observedAtStart = this.observingId;
 		this.beginCreatingSession();
-		await this.ensureStarted();
-		if (this.disposed || epoch !== this.viewEpoch) {
-			this.abortCreatingSession(previousAttachment, previousMessages, epoch);
-			return;
-		}
 		// Create a separate resident worker so the previous session keeps running.
 		try {
-			const sidecar = await this.ensureSidecar({ reattach: false });
+			if (!this.workspaceRoot) throw new Error("Open a workspace folder before starting Brief.");
+			const sidecar = await this.connectDaemon();
 			if (this.disposed || epoch !== this.viewEpoch) {
 				this.abortCreatingSession(previousAttachment, previousMessages, epoch);
 				return;
@@ -2193,7 +2176,7 @@ export class SessionController implements vscode.Disposable {
 	}
 
 	sessionChromeLabel(sessionName?: string): string {
-		return deriveSessionLabel({ name: sessionName, firstPrompt: firstUserPrompt(this.cachedMessages) });
+		return deriveSessionLabel({ name: sessionName, firstPrompt: firstUserPrompt(this.cachedMessages) }) || this.firstPromptLabel;
 	}
 
 	buildStatus(statsText = this.lastStatsText): StatusSnapshot {

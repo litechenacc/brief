@@ -238,8 +238,31 @@ export interface PromptPayload {
 	sessionId?: string;
 }
 
+export interface ComposerDraft {
+	text: string;
+	images: ImageAttachment[];
+	selections: SelectionAttachment[];
+	accepted: string[];
+}
+
+export interface ChatViewState {
+	composer: {
+		draft: ComposerDraft;
+		stash: ComposerDraft | null;
+		lastNonSlashDraft: ComposerDraft;
+		selectionStart: number;
+		selectionEnd: number;
+		behavior: "steer" | "followUp";
+	};
+	transcript: { olderCount: number; scrollTop: number; stickToBottom: boolean; anchorIndex: number; anchorOffset: number; expandedBlocks: number[] };
+}
+
 export type WebviewToHost =
+	| { type: "viewStateCaptured"; requestId: string; sessionId: string; state: ChatViewState }
+	| { type: "viewStateRestored"; requestId: string; sessionId: string }
+	| { type: "viewStateFailed"; requestId: string; sessionId: string; error: string }
 	| { type: "ready" }
+	| { type: "viewFocused" }
 	| { type: "prompt"; payload: PromptPayload }
 	| { type: "abort" }
 	| { type: "newSession" }
@@ -371,6 +394,11 @@ export interface RecentSession {
 }
 
 export type HostToWebview =
+	| { type: "setHistoryMode"; enabled: boolean }
+	| { type: "setViewMoving"; moving: boolean }
+	| { type: "captureViewState"; requestId: string; sessionId: string }
+	| { type: "restoreViewState"; requestId: string; sessionId: string; state: ChatViewState }
+	| { type: "releaseViewState"; requestId: string; sessionId: string }
 	| {
 			type: "snapshot";
 			messages: AgentMessage[];

@@ -2,6 +2,7 @@
  * Brief chat webview: layout, host message dispatch, view switching.
  */
 
+import { parseChatViewState } from "../src/webview-message.js";
 import { Composer } from "./composer.js";
 import { brandMark, el, icon } from "./dom.js";
 import { HistoryView } from "./history.js";
@@ -24,8 +25,10 @@ function post(message: WebviewToHost): void {
 	vscode.postMessage(message);
 }
 
+let historyOnly = false;
 const app = document.getElementById("app") as HTMLDivElement;
 app.classList.add("chat-root");
+app.addEventListener("focusin", () => post({ type: "viewFocused" }));
 
 // Session actions live in the VS Code view title bar (same row as maximize).
 
@@ -70,8 +73,8 @@ const promptClientScope =
 		: `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 let nextPromptClientRequestId = 0;
 const pendingPrompts = new Map<string, { text: string; images: ImageAttachment[]; selections: SelectionAttachment[] }>();
-// Native image pickers resolve later and the controller is shared by sidebar
-// and editor panels, so replies need a per-document correlation id.
+// Native image pickers resolve later; replies must stay with the requesting
+// document, including when an editor tab is closed and reopened.
 const imageRequestScope = Math.floor(Math.random() * 4_000_000_000);
 let nextImageRequestId = 0;
 const pendingImageRequests = new Set<number>();
@@ -253,6 +256,7 @@ app.append(installBanner, observeBanner, noticesDock, chatView, historyView.root
 historyView.root.style.display = "none";
 
 function showView(view: "chat" | "history"): void {
+	if (historyOnly && view === "chat") return;
 	chatView.style.display = view === "chat" ? "" : "none";
 	composer.root.style.display = view === "chat" ? "" : "none";
 	historyView.root.style.display = view === "history" ? "" : "none";
@@ -265,7 +269,6 @@ function showView(view: "chat" | "history"): void {
 
 function requestNewSession(): void {
 	composer.flushDraft();
-	startNewThread();
 	post({ type: "newSession" });
 }
 
@@ -379,6 +382,10 @@ setTimeout(retireBootSplash, 18_000);
 
 function applyStatus(incomingStatus: StatusSnapshot): void {
 	adoptAuthoritativeSession(incomingStatus.sessionId);
+	if (incomingStatus.sessionId && incomingStatus.sessionFile) {
+		const saved = (vscode.getState() as Record<string, unknown> | undefined) ?? {};
+		vscode.setState({ ...saved, session: { sessionId: incomingStatus.sessionId, sessionFile: incomingStatus.sessionFile } });
+	}
 	const previousSessionId = currentStatus?.sessionId;
 	// A title can arrive before the first snapshot. It is useful to paint then,
 	// but the snapshot's own non-empty title is the first authoritative session
@@ -553,9 +560,59 @@ window.addEventListener("message", (messageEvent) => {
 	}
 });
 
+let viewMoving = false;
+let capturedViewRequest: string | undefined;
+let capturedViewSessionId: string | undefined;
+let snapshotSessionId: string | undefined;
+
 function dispatchHostMessage(message: HostToWebview): void {
 	switch (message.type) {
+		case "setHistoryMode":
+			historyOnly = message.enabled;
+			app.classList.toggle("history-only", historyOnly);
+			statusStrip.style.display = historyOnly ? "none" : "";
+			if (historyOnly) retireBootSplash();
+			showView(historyOnly ? "history" : "chat");
+			break;
+		case "setViewMoving":
+			viewMoving = message.moving;
+			app.inert = viewMoving || Boolean(capturedViewRequest);
+			break;
+		case "captureViewState":
+		case "restoreViewState": {
+			try {
+				if (message.sessionId !== (authoritativeSessionId ?? "")) throw new Error("The displayed session changed. Try moving it again.");
+				if (message.type === "captureViewState") {
+					if (capturedViewRequest || pendingPrompts.size || pendingImageRequests.size) throw new Error("Wait for pending messages or image requests before moving this chat.");
+					const state = parseChatViewState({ composer: composer.captureViewState(), transcript: transcript.captureViewState() });
+					if (!state) throw new Error("This draft exceeds the transfer limits. The original chat has been kept.");
+					capturedViewRequest = message.requestId;
+					capturedViewSessionId = message.sessionId;
+					app.inert = viewMoving || Boolean(capturedViewRequest);
+					post({ type: "viewStateCaptured", requestId: message.requestId, sessionId: message.sessionId, state });
+				} else {
+					if (message.sessionId && snapshotSessionId !== message.sessionId) throw new Error("Wait for the session snapshot before restoring this chat.");
+					const state = parseChatViewState(message.state);
+					if (!state) throw new Error("Invalid chat transfer state.");
+					composer.restoreViewState(state.composer);
+					showView("chat");
+					transcript.restoreViewState(state.transcript);
+					post({ type: "viewStateRestored", requestId: message.requestId, sessionId: message.sessionId });
+				}
+			} catch (error) {
+				post({ type: "viewStateFailed", requestId: message.requestId, sessionId: message.sessionId, error: String(error).slice(0, 1024) });
+			}
+			break;
+		}
+		case "releaseViewState":
+			if (capturedViewRequest === message.requestId && message.sessionId === capturedViewSessionId) {
+				capturedViewRequest = undefined;
+				capturedViewSessionId = undefined;
+				app.inert = viewMoving || Boolean(capturedViewRequest);
+			}
+			break;
 		case "snapshot":
+			snapshotSessionId = message.status.sessionId;
 			adoptAuthoritativeSession(message.status.sessionId);
 			pendingPrompts.clear();
 			transcript.clearSpawnCards?.();
@@ -671,6 +728,7 @@ function dispatchHostMessage(message: HostToWebview): void {
 			if (message.images.length > 0) void composer.addImages(message.images);
 			break;
 		case "insertSelection":
+			showView("chat");
 			composer.addSelection(message.selection);
 			break;
 		case "insertMention":
@@ -690,6 +748,7 @@ function dispatchHostMessage(message: HostToWebview): void {
 			composer.setText(message.text);
 			break;
 		case "focusComposer":
+			showView("chat");
 			composer.focus();
 			break;
 		case "promptRejected":

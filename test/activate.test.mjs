@@ -4,15 +4,22 @@
  */
 
 import { createRequire } from "node:module";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 const require = createRequire(process.cwd() + "/");
 
 const disposables = [];
 const registeredCommands = [];
 const registeredViews = [];
+const registeredSerializers = [];
 
 const vscodeStub = {
 	window: {
+		registerWebviewPanelSerializer: (id, serializer) => {
+			registeredSerializers.push({ id, serializer });
+			return { dispose: () => {} };
+		},
 		createOutputChannel: () => ({ append: () => {}, appendLine: () => {}, dispose: () => {} }),
 		registerWebviewViewProvider: (id) => {
 			registeredViews.push(id);
@@ -95,6 +102,10 @@ const extension = require("./dist/extension.js");
 const expectedCommands = [
 	"brief.focusChat",
 	"brief.openChat",
+	"brief.useEditor",
+	"brief.useSidebar",
+	"brief.toggleChatLocation",
+	"brief.switchSession",
 	"brief.newSession",
 	"brief.abort",
 	"brief.compact",
@@ -122,11 +133,31 @@ if (missing.length > 0) {
 	console.error("MISSING COMMANDS:", missing);
 	process.exit(1);
 }
-if (!registeredViews.includes("brief.chat")) {
-	console.error("MISSING VIEW brief.chat");
+if (registeredViews.length !== 1 || registeredViews[0] !== "brief.chat" || registeredSerializers.length !== 1 ||
+	registeredSerializers[0].id !== "brief.chatPanel" ||
+	typeof registeredSerializers[0].serializer.deserializeWebviewPanel !== "function") {
+	console.error("Expected editor panel serializer and Brief sidebar provider");
 	process.exit(1);
 }
 console.log(`commands registered: ${registeredCommands.length}/${expectedCommands.length}`);
 extension.deactivate();
 console.log("deactivate() OK");
 console.log("PASS activation harness");
+
+const { contributes: { menus } } = JSON.parse(readFileSync("package.json", "utf8"));
+for (const title of ["editor/title", "view/title"]) {
+	assert.ok(menus[title].every(({ command }) => !["brief.useEditor", "brief.useSidebar"].includes(command)),
+		"location switching commands must not appear as title buttons");
+}
+assert.ok(menus["editor/title"].every(({ command }) => command !== "brief.history"));
+assert.equal(menus["view/title"].find(({ command }) => command === "brief.history").when,
+	"view == brief.chat && config.brief.chatLocation == sidebar",
+	"workspace sessions button is only available in sidebar chat mode");
+for (const command of ["brief.switchSession", "brief.renameSession", "brief.compact", "brief.exportChat", "brief.restart"]) {
+	assert.equal(menus["view/title"].find((item) => item.command === command).when,
+		"view == brief.chat && config.brief.chatLocation == sidebar",
+		`${command} is only available in sidebar chat mode, not the editor session list`);
+}
+assert.equal(menus["view/title"].find(({ command }) => command === "brief.newSession").when,
+	"view == brief.chat", "new session remains available in both modes");
+console.log("PASS title button visibility");

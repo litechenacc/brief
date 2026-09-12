@@ -20,6 +20,12 @@ import {
 import type { ResolvedHistorySession } from "./session-types.js";
 import type { SessionController } from "./session-controller.js";
 
+// Editor panels have separate runtimes, but edit the same workspace history.
+// Share only these overlays so a panel cannot persist an older panel's snapshot.
+const workspaceHistory = new WeakMap<SessionController["context"]["workspaceState"], Pick<SessionController,
+	"historySortMs" | "historyArchived" | "historyUnreadComplete"
+>>();
+
 export const historyCatalogMethods = {
 scheduleHistoryRefresh(this: SessionController): void {
 	if (this.historyRefreshTimer) clearTimeout(this.historyRefreshTimer);
@@ -34,6 +40,20 @@ historyPathKey(this: SessionController, sessionPath: string): string {
 },
 
 restoreHistoryUiState(this: SessionController): void {
+	const workspaceState = this.context.workspaceState;
+	if (!workspaceState) return;
+	const shared = workspaceHistory.get(workspaceState);
+	if (shared) {
+		this.historySortMs = shared.historySortMs;
+		this.historyArchived = shared.historyArchived;
+		this.historyUnreadComplete = shared.historyUnreadComplete;
+		return;
+	}
+	workspaceHistory.set(workspaceState, {
+		historySortMs: this.historySortMs,
+		historyArchived: this.historyArchived,
+		historyUnreadComplete: this.historyUnreadComplete,
+	});
 	const saved = this.context.workspaceState?.get<{
 		sortMs?: Record<string, number>;
 		archived?: string[];

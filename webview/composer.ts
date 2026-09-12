@@ -10,7 +10,7 @@
 import { Dropdown, type DropdownItem } from "./dropdown.js";
 import { fitImageDataUrl, MAX_DECODED_IMAGE_BYTES, planImageFit } from "./image-fit.js";
 import { el, icon, iconButton, svgIcon } from "./dom.js";
-import type { ImageAttachment, ModelRef, RpcModel, RpcSlashCommand, SelectionAttachment } from "../src/protocol.js";
+import type { ChatViewState, ImageAttachment, ModelRef, RpcModel, RpcSlashCommand, SelectionAttachment } from "../src/protocol.js";
 
 /** Keys that move the caret without producing an input event. */
 const CARET_KEYS = new Set(["ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"]);
@@ -107,6 +107,7 @@ export class Composer {
 	private hintEl: HTMLElement | null = null;
 	private hintTimer: number | undefined;
 
+	private pendingImageReads = 0;
 	private images: ImageAttachment[] = [];
 	private selections: SelectionAttachment[] = [];
 	private commands: RpcSlashCommand[] = [];
@@ -283,6 +284,33 @@ export class Composer {
 	// ---------------------------------------------------------------
 	// Public API
 	// ---------------------------------------------------------------
+
+	captureViewState(): ChatViewState["composer"] {
+		if (this.composing || this.pendingImageReads > 0) throw new Error("Finish composing or attaching images before moving this chat.");
+		// Picker menus are portaled outside the inert app. Closing a slash picker
+		// also puts its parked draft back before we take the transfer snapshot.
+		this.attachMenu?.hide();
+		this.modelMenu?.hide();
+		this.thinkingMenu?.hide();
+		this.closeAutocomplete();
+		this.closeThresholdFlyout();
+		this.flushDraft();
+		return {
+			draft: this.snapshotComposer(), stash: this.promptStash ? cloneStash(this.promptStash) : null,
+			lastNonSlashDraft: cloneStash(this.lastNonSlashDraft),
+			selectionStart: this.textarea.selectionStart, selectionEnd: this.textarea.selectionEnd, behavior: this.behavior,
+		};
+	}
+
+	restoreViewState(state: ChatViewState["composer"]): void {
+		this.applyComposerSnapshot(state.draft);
+		this.promptStash = state.stash ? cloneStash(state.stash) : null;
+		this.lastNonSlashDraft = cloneStash(state.lastNonSlashDraft);
+		this.textarea.setSelectionRange(state.selectionStart, state.selectionEnd);
+		this.behavior = state.behavior;
+		this.updateBehaviorLabel();
+		this.flushDraft();
+	}
 
 	setCommands(commands: RpcSlashCommand[]): void {
 		this.commands = commands.filter((command) => !UI_SLASH_BY_NAME.has(command.name));
@@ -729,7 +757,10 @@ export class Composer {
 		}
 		if (accepted < images.length - oversized.length) this.showHint("Some images were skipped (maximum 8 images, 7 MiB each after resizing, 16 MiB total).");
 		this.renderChips();
-		if (oversized.length > 0) void this.fitAndAppendOversized(oversized);
+		if (oversized.length > 0) {
+			this.pendingImageReads++;
+			void this.fitAndAppendOversized(oversized).finally(() => { this.pendingImageReads--; });
+		}
 	}
 
 	/** Shrink what the provider would refuse, then append under the normal budget. */
@@ -1442,21 +1473,25 @@ export class Composer {
 				continue;
 			}
 			const reader = new FileReader();
+			this.pendingImageReads++;
+			reader.onerror = reader.onabort = () => { this.pendingImageReads--; };
 			reader.onload = async () => {
-				const dataUrl = reader.result as string;
-				const [header, data] = dataUrl.split(",");
-				const mimeType = header.replace("data:", "").replace(";base64", "");
-				if (!SUPPORTED_IMAGE_MIME_TYPES.has(mimeType)) return;
-				const fitted = planImageFit(base64Bytes(data)).action === "send" ? { data, mimeType, resized: false } : await fitImageDataUrl({ data, mimeType });
-				const candidate = fitted ?? { data, mimeType, resized: false };
-				const bytes = base64Bytes(candidate.data);
-				if (this.images.length >= MAX_IMAGES || bytes > MAX_IMAGE_BYTES || existingBytes() + bytes > MAX_TOTAL_IMAGE_BYTES) {
-					this.showHint("Some images were skipped (maximum 8 images, 7 MiB each after resizing, 16 MiB total).");
-					return;
-				}
-				this.images.push({ data: candidate.data, mimeType: candidate.mimeType, name: file.name || "image" });
-				if (candidate.resized) this.showHint("Image resized to fit provider limits.");
-				this.renderChips();
+				try {
+					const dataUrl = reader.result as string;
+					const [header, data] = dataUrl.split(",");
+					const mimeType = header.replace("data:", "").replace(";base64", "");
+					if (!SUPPORTED_IMAGE_MIME_TYPES.has(mimeType)) return;
+					const fitted = planImageFit(base64Bytes(data)).action === "send" ? { data, mimeType, resized: false } : await fitImageDataUrl({ data, mimeType });
+					const candidate = fitted ?? { data, mimeType, resized: false };
+					const bytes = base64Bytes(candidate.data);
+					if (this.images.length >= MAX_IMAGES || bytes > MAX_IMAGE_BYTES || existingBytes() + bytes > MAX_TOTAL_IMAGE_BYTES) {
+						this.showHint("Some images were skipped (maximum 8 images, 7 MiB each after resizing, 16 MiB total).");
+						return;
+					}
+					this.images.push({ data: candidate.data, mimeType: candidate.mimeType, name: file.name || "image" });
+					if (candidate.resized) this.showHint("Image resized to fit provider limits.");
+					this.renderChips();
+				} finally { this.pendingImageReads--; }
 			};
 			reader.readAsDataURL(file);
 		}

@@ -70,6 +70,7 @@ function buildContent(
 	return content;
 }
 import type {
+	ChatViewState,
 	AgentEvent,
 	AgentMessage,
 	AssistantMessage,
@@ -474,6 +475,41 @@ export class Transcript {
 	// Snapshot rebuild
 	// ---------------------------------------------------------------
 
+	captureViewState(): ChatViewState["transcript"] {
+		// Pruned rows cannot be reconstructed from the current DOM window alone.
+		// Refuse the move rather than silently moving the reader to a different row.
+		if (this.prunedCount > 0 && !this.stickToBottom) throw new Error("Jump to the latest message before moving this trimmed transcript.");
+		const rows = Array.from(this.scroller.querySelectorAll<HTMLElement>(":scope > .row"));
+		const top = this.scroller.getBoundingClientRect().top;
+		let anchorIndex = rows.findIndex((row) => row.getBoundingClientRect().bottom > top);
+		if (anchorIndex < 0) anchorIndex = 0;
+		return { olderCount: this.olderMessages.length, scrollTop: this.scroller.scrollTop, stickToBottom: this.stickToBottom,
+			anchorIndex, anchorOffset: rows[anchorIndex] ? rows[anchorIndex].getBoundingClientRect().top - top : 0,
+			expandedBlocks: Array.from(this.scroller.querySelectorAll<HTMLElement>("details, .tool")).flatMap((block, index) => isExpanded(block) ? [index] : []) };
+	}
+
+	restoreViewState(state: ChatViewState["transcript"]): void {
+		this.setStick(false);
+		// Rebuild the same historical window BEFORE restoring the reading anchor.
+		while (this.olderMessages.length > state.olderCount) this.loadEarlier(Math.min(LOAD_BATCH, this.olderMessages.length - state.olderCount));
+		const expanded = new Set(state.expandedBlocks);
+		this.scroller.querySelectorAll<HTMLElement>("details, .tool").forEach((block, index) => {
+			const open = expanded.has(index);
+			if (block instanceof HTMLDetailsElement) block.open = open;
+			else {
+				block.classList.toggle("open", open);
+				block.querySelector(".tool-toggle")?.setAttribute("aria-expanded", String(open));
+			}
+		});
+		const rows = this.scroller.querySelectorAll<HTMLElement>(":scope > .row");
+		const anchor = rows[state.anchorIndex];
+		this.scroller.scrollTop = anchor
+			? this.scroller.scrollTop + anchor.getBoundingClientRect().top - this.scroller.getBoundingClientRect().top - state.anchorOffset
+			: state.scrollTop;
+		this.setStick(state.stickToBottom);
+		this.scrollToBottom();
+	}
+
 	renderSnapshot(messages: AgentMessage[]): void {
 		this.scroller.textContent = "";
 		this.toolBlocks.clear();
@@ -575,9 +611,9 @@ export class Transcript {
 	private loadingEarlier = false;
 
 	/** Render the next batch of older messages above the current view, in place. */
-	loadEarlier(): void {
+	loadEarlier(count = LOAD_BATCH): void {
 		if (this.olderMessages.length === 0) return;
-		const batch = this.olderMessages.splice(Math.max(0, this.olderMessages.length - LOAD_BATCH), LOAD_BATCH);
+		const batch = this.olderMessages.splice(Math.max(0, this.olderMessages.length - count), count);
 		// Anchor on the first row that is already on screen: growing the transcript
 		// upward must leave what the operator is reading exactly where it is.
 		const heightBefore = this.scroller.scrollHeight;

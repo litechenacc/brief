@@ -1,7 +1,7 @@
 /**
  * Parse untrusted webview postMessage payloads into bounded protocol objects.
  */
-import type { ImageAttachment, PromptPayload, SelectionAttachment, WebviewToHost } from "./protocol.js";
+import type { ChatViewState, ComposerDraft, ImageAttachment, PromptPayload, SelectionAttachment, WebviewToHost } from "./protocol.js";
 
 const MAX_PROMPT_TEXT_CHARS = 200_000;
 // Keep this transport envelope aligned with the image picker and composer.
@@ -61,7 +61,7 @@ function base64ByteLength(value: string): number {
 	return (value.length / 4) * 3 - padding;
 }
 
-function parsePromptPayload(value: unknown): PromptPayload | undefined {
+function parsePromptPayload(value: unknown, allowEmpty = false): PromptPayload | undefined {
 	if (!isRecord(value)) return undefined;
 	if (!isBoundedString(value.text, MAX_PROMPT_TEXT_CHARS, true)) return undefined;
 	if (value.streamingBehavior !== "steer" && value.streamingBehavior !== "followUp") return undefined;
@@ -103,7 +103,7 @@ function parsePromptPayload(value: unknown): PromptPayload | undefined {
 		});
 	}
 
-	if (value.text.length === 0 && images.length === 0 && selections.length === 0) return undefined;
+	if (!allowEmpty && value.text.length === 0 && images.length === 0 && selections.length === 0) return undefined;
 	if (value.clientRequestId !== undefined && !isIdentifier(value.clientRequestId)) return undefined;
 	if (value.sessionId !== undefined && !isIdentifier(value.sessionId)) return undefined;
 	return {
@@ -121,10 +121,49 @@ function parsePromptPayload(value: unknown): PromptPayload | undefined {
  * object. This is intentionally stricter than TypeScript's compile-time union:
  * webview postMessage data can be supplied by a compromised page at runtime.
  */
+function parseComposerDraft(value: unknown): ComposerDraft | undefined {
+	if (!isRecord(value)) return undefined;
+	const payload = parsePromptPayload({ ...value, streamingBehavior: "steer" }, true);
+	if (!payload || !Array.isArray(value.accepted) || value.accepted.length > 256 || !value.accepted.every(isPath)) return undefined;
+	return { text: payload.text, images: payload.images, selections: payload.selections, accepted: [...value.accepted] };
+}
+
+export function parseChatViewState(value: unknown): ChatViewState | undefined {
+	if (!isRecord(value) || !isRecord(value.composer) || !isRecord(value.transcript)) return undefined;
+	const c = value.composer;
+	const t = value.transcript;
+	const draft = parseComposerDraft(c.draft);
+	const stash = c.stash === null ? null : parseComposerDraft(c.stash);
+	const lastNonSlashDraft = parseComposerDraft(c.lastNonSlashDraft);
+	if (!draft || stash === undefined || !lastNonSlashDraft) return undefined;
+	if (!isRequestId(c.selectionStart) || !isRequestId(c.selectionEnd) || c.selectionStart > c.selectionEnd || c.selectionEnd > draft.text.length) return undefined;
+	if (c.behavior !== "steer" && c.behavior !== "followUp") return undefined;
+	if (!Array.isArray(t.expandedBlocks) || t.expandedBlocks.length > 10_000 || !t.expandedBlocks.every((index) => isRequestId(index) && index <= 1_000_000)) return undefined;
+	if (!isRequestId(t.olderCount) || t.olderCount > 1_000_000 || !isRequestId(t.anchorIndex) || t.anchorIndex > 1_000_000) return undefined;
+	if (typeof t.scrollTop !== "number" || !Number.isFinite(t.scrollTop) || t.scrollTop < 0 || t.scrollTop > 1_000_000_000) return undefined;
+	if (typeof t.anchorOffset !== "number" || !Number.isFinite(t.anchorOffset) || Math.abs(t.anchorOffset) > 1_000_000_000 || typeof t.stickToBottom !== "boolean") return undefined;
+	return {
+		composer: { draft, stash, lastNonSlashDraft, selectionStart: c.selectionStart, selectionEnd: c.selectionEnd, behavior: c.behavior },
+		transcript: { olderCount: t.olderCount, scrollTop: t.scrollTop, stickToBottom: t.stickToBottom, anchorIndex: t.anchorIndex, anchorOffset: t.anchorOffset, expandedBlocks: [...t.expandedBlocks] },
+	};
+}
+
 export function parseWebviewMessage(value: unknown): WebviewToHost | undefined {
 	if (!isRecord(value) || typeof value.type !== "string") return undefined;
 
 	switch (value.type) {
+		case "viewStateCaptured": {
+			if (!isIdentifier(value.requestId) || !(value.sessionId === "" || isIdentifier(value.sessionId))) return undefined;
+			const state = parseChatViewState(value.state);
+			return state ? { type: "viewStateCaptured", requestId: value.requestId, sessionId: value.sessionId, state } : undefined;
+		}
+		case "viewStateRestored":
+			return isIdentifier(value.requestId) && (value.sessionId === "" || isIdentifier(value.sessionId))
+				? { type: "viewStateRestored", requestId: value.requestId, sessionId: value.sessionId } : undefined;
+		case "viewStateFailed":
+			return isIdentifier(value.requestId) && (value.sessionId === "" || isIdentifier(value.sessionId)) && isBoundedString(value.error, 1024)
+				? { type: "viewStateFailed", requestId: value.requestId, sessionId: value.sessionId, error: value.error } : undefined;
+		case "viewFocused":
 		case "ready":
 		case "abort":
 		case "newSession":

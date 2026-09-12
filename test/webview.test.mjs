@@ -12,10 +12,11 @@ document.body.innerHTML = '<div id="app"></div>';
 document.body.className = "vscode-dark";
 
 const posted = [];
+let savedWebviewState = { historyFolds: { archive: true } };
 const vscodeApi = {
 	postMessage: (m) => posted.push(m),
-	getState: () => undefined,
-	setState: () => {},
+	getState: () => savedWebviewState,
+	setState: (state) => { savedWebviewState = state; },
 };
 
 globalThis.window = window;
@@ -68,6 +69,7 @@ check("uiState statusText paints before the first status snapshot", document.que
 const baseStatus = {
 	connected: true, streaming: false, compacting: false, retrying: false, restoring: false,
 	modelLabel: "chutes/kimi", thinkingLevel: "max", sessionName: "demo", sessionId: "019fd749-x",
+	sessionFile: "/known/demo.jsonl",
 	statsText: "", usageTotal: 4483, costUsd: 0.004,
 	contextTokens: 60000, contextWindow: 262144, contextPercent: 23,
 	modelProvider: "chutes", modelId: "kimi",
@@ -99,6 +101,8 @@ hostMessage({
 	steerDefault: "steer",
 });
 
+check("status persists the exact session for editor restoration", savedWebviewState.session?.sessionId === baseStatus.sessionId && savedWebviewState.session?.sessionFile === baseStatus.sessionFile);
+check("session persistence preserves history fold state", savedWebviewState.historyFolds?.archive === true);
 const scroller = document.querySelector(".messages");
 check("boot splash retires on the first connected status", splash.className.includes("gone"), splash.className);
 check("welcome removed after snapshot", !document.querySelector(".welcome"));
@@ -953,8 +957,8 @@ check("session chrome actions stay in the webview for tests and welcome",
 
 // --- auto-expanding the strip when a subagent starts -------------------------
 // The value is the moment work begins; every other rule here exists so it never
-// fights the operator. State is reset through New Chat, which is the one gesture
-// that clears both the strip and any instruction the operator gave it.
+// fights the operator. A host-confirmed thread boundary resets the strip.
+// Requesting a new editor tab must leave the source document intact.
 {
 	const kid = (id, name, streaming, status) => ({
 		id: `uuid-${id}`, activeSessionId: id, browseRef: `ref-${id}`, name,
@@ -967,7 +971,17 @@ check("session chrome actions stay in the webview for tests and welcome",
 	// make every check below pass for the wrong reason.
 	const newChatBtn = document.querySelector('button[title="New session"]');
 	check("the New session control is reachable for these fixtures", !!newChatBtn);
-	const freshThread = () => newChatBtn.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+	const freshThread = () => hostMessage({ type: "newThread" });
+	const sourceTranscript = document.querySelector(".messages").innerHTML;
+	hostMessage({ type: "draft", text: "keep this source draft", sessionId: baseStatus.sessionId });
+	const sourceInput = document.querySelector("textarea");
+	const sourceDraft = sourceInput.value;
+	const sourceDisabled = sourceInput.disabled;
+	const beforeNew = posted.length;
+	newChatBtn.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+	check("New session requests a native tab", posted.slice(beforeNew).some((m) => m.type === "newSession"));
+	check("New session preserves source transcript", document.querySelector(".messages").innerHTML === sourceTranscript);
+	check("New session preserves source draft and composer state", sourceDraft === "keep this source draft" && sourceInput.value === sourceDraft && sourceInput.disabled === sourceDisabled);
 
 	// Resuming a thread that already has live subagents is not activity.
 	freshThread();
@@ -1445,7 +1459,7 @@ posted.length = 0;
 textarea.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
 check("/new posts newSession instead of a prompt", posted.some((m) => m.type === "newSession") && !posted.some((m) => m.type === "prompt"), JSON.stringify(posted.map((m) => m.type)));
 check("/new does not persist the slash as the outgoing draft", !posted.some((m) => m.type === "draftChanged" && m.text === "/new"), JSON.stringify(posted.filter((m) => m.type === "draftChanged")));
-check("/new leaves the composer empty for the new thread", textarea.value === "", JSON.stringify(textarea.value));
+check("/new preserves the source tab draft", textarea.value === "keep for next thread", JSON.stringify(textarea.value));
 
 textarea.value = "/new extra args";
 posted.length = 0;
@@ -1680,6 +1694,18 @@ document.querySelector(".history-search").dispatchEvent(new window.Event("input"
 check("rendered webview has no nested native interactive controls",
 	document.querySelectorAll("button button, button input, button select, button textarea").length === 0,
 	[...document.querySelectorAll("button button, button input, button select, button textarea")].map((node) => node.outerHTML).join("\n"));
+
+// Reusing a native editor tab must leave its history screen before focusing or attaching.
+hostMessage({ type: "showHistory" });
+check("focus fixture starts in history", document.querySelector(".history-view")?.style.display !== "none");
+hostMessage({ type: "focusComposer" });
+check("focusComposer returns from history to chat", document.querySelector(".history-view")?.style.display === "none" && document.querySelector(".composer-dock").style.display !== "none");
+check("focusComposer focuses the visible input", document.activeElement === textarea);
+hostMessage({ type: "showHistory" });
+check("selection fixture starts in history", document.querySelector(".history-view")?.style.display !== "none");
+hostMessage({ type: "insertSelection", selection: { path: "src/history-selection.ts", startLine: 1, endLine: 2, text: "selected code", languageId: "typescript" } });
+check("insertSelection returns from history to chat", document.querySelector(".history-view")?.style.display === "none" && document.querySelector(".composer-dock").style.display !== "none");
+check("insertSelection retains the attached selection", [...document.querySelectorAll(".composer-chips .compose-chip")].some((chip) => chip.textContent.includes("history-selection.ts")));
 
 // Session actions now live in the VS Code view title bar, not a webview kebab.
 hostMessage({ type: "newThread" });

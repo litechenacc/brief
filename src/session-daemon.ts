@@ -23,6 +23,10 @@ async switchSession(this: SessionController, sessionPath: string, sessionId: str
 	const previousAttachment = this.attached;
 	const epoch = this.beginNavigation();
 	const observedAtStart = this.observingId;
+	if (!previousAttachment && !observedAtStart) {
+		this.rememberedSession = { sessionId, sessionFile: sessionPath };
+		this.observationRestoring = true;
+	}
 	const session = await this.resolveHistorySession(sessionPath, sessionId);
 	if (!session || this.disposed || epoch !== this.viewEpoch) {
 		this.restoreAttachedView(previousAttachment, epoch);
@@ -44,6 +48,7 @@ async switchSession(this: SessionController, sessionPath: string, sessionId: str
 				(row.sessionFile ? normalizeFsPath(row.sessionFile) === normalizeFsPath(sessionPath) : false)),
 		);
 		let target = findLive(await this.listSessions(sidecar));
+		if (this.disposed || epoch !== this.viewEpoch) return;
 		if (!target) {
 			try {
 				target = await sidecar.createResident({ cwd: session.cwd || this.workspaceRoot, sessionPath });
@@ -56,6 +61,21 @@ async switchSession(this: SessionController, sessionPath: string, sessionId: str
 		if (!target.activeSessionId) throw new Error("daemon returned no activeSessionId");
 		const attached = await this.attachViaDaemon(target.activeSessionId, target.sessionFile ?? sessionPath, epoch);
 		if (!attached || this.disposed || epoch !== this.viewEpoch) {
+			if (!this.disposed && epoch === this.viewEpoch && isTransientWorkerAttachError(this.lastDaemonAttachError ?? "")) {
+				if (!previousAttachment && !observedAtStart) {
+					this.attachAttempt = {
+						activeSessionId: this.lastDaemonAttachCanonicalId ?? target.activeSessionId,
+						sessionPath,
+						sessionId,
+					};
+					this.attachAttemptEpoch = epoch;
+					this.scheduleReattach(0);
+					this.broadcast({ type: "notice", level: "info", text: "The worker is recovering. Brief will attach automatically when it is ready." });
+					this.pushStatus();
+				} else {
+					this.broadcast({ type: "notice", level: "warning", text: "The worker is recovering. Please try again in a moment." });
+				}
+			}
 			this.restoreAttachedView(previousAttachment, epoch);
 			return;
 		}
@@ -299,6 +319,7 @@ async runReattach(this: SessionController, sidecar: DaemonSidecar): Promise<void
 			return;
 		}
 		this.attached = attempt;
+		this.reachable = true;
 		this.attachedEpoch = attemptEpoch;
 		this.clearReattachTimer();
 		this.observationRestoring = false;
@@ -478,6 +499,7 @@ async attachViaDaemon(this: SessionController, activeSessionId: string, sessionP
 			snapshot?.summary?.sessionFile ?? (snapshot?.state as { sessionFile?: string } | undefined)?.sessionFile ?? sessionPath;
 		const attachment = { activeSessionId: finalId, sessionPath: resolvedSessionPath, sessionId: stableSessionId };
 		this.attached = attachment;
+		this.reachable = true;
 		this.attachedEpoch = epoch;
 		this.attachAttempt = { activeSessionId: finalId, sessionPath, sessionId: stableSessionId };
 		this.attachAttemptEpoch = epoch;

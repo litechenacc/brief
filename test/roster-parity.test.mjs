@@ -203,19 +203,12 @@ check("a refused subscribe keeps the pull model without throwing", controller.ro
 const TRANSIENT = 'Session "/tmp/b.jsonl" worker recovery was interrupted; retry opening the session';
 function armSwitchFakes(target) {
 	target.resolveHistorySession = async (sessionPath, sessionId) => ({ path: sessionPath, id: sessionId });
-	target.ensureStarted = async () => {};
-	target.client = {
-		request: async (cmd) =>
-			cmd.type === "switch_session"
-				? { success: false, error: "Session is already active in bbb: /tmp/b.jsonl" }
-				: { success: true, data: {} },
-	};
 	target.sidecar = {
 		connected: true,
 		connect: async () => {},
 		dispose: () => {},
 		detach: async () => {},
-		list: async () => [],
+		list: async () => [{ activeSessionId: "b", sessionId: "b", sessionFile: bPath }],
 		attach: async () => {
 			throw new Error(TRANSIENT);
 		},
@@ -233,6 +226,7 @@ posts.length = 0;
 await controller.switchSession(bPath, "b");
 check("plain view: the recovery wait is queued", controller.attachAttempt?.activeSessionId === "b");
 check("plain view: the queue owns the current epoch", controller.attachAttemptEpoch === controller.viewEpoch);
+check("plain view: the retry timer is armed", controller.reattachTimer !== null);
 check("plain view: the wait is announced", notices().some((t) => /attach automatically/i.test(t)));
 controller.clearReattachTimer();
 controller.attachAttempt = null;

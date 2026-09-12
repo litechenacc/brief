@@ -1,106 +1,87 @@
-/**
- * Brief VS Code extension entry point.
- */
-
+/** Brief VS Code extension entry point. */
 import * as fs from "node:fs";
 import * as vscode from "vscode";
-import { ChatPanel, ChatViewProvider } from "./chat-view.js";
-import { SessionController } from "./session-controller.js";
+import { ChatPanels } from "./chat-view.js";
 
-let controller: SessionController | null = null;
+let chats: ChatPanels | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
 	const marker = process.env.BRIEF_VSCODE_LOG;
 	if (marker) {
-		try {
-			fs.appendFileSync(marker, `activate ${Date.now()}\n`);
-		} catch {
-			// ignore
-		}
+		try { fs.appendFileSync(marker, `activate ${Date.now()}\n`); } catch { /* optional diagnostics */ }
 	}
 	const output = vscode.window.createOutputChannel("Brief");
-	controller = new SessionController(context, output);
-	context.subscriptions.push(controller, output);
-
-	const provider = new ChatViewProvider(context.extensionUri, controller);
-	// Keep the sidebar's DOM alive while it is hidden: without this an activity-bar
-	// toggle tears the webview down and the operator's transcript, draft and scroll
-	// position come back only after a fresh round-trip — the flash they asked us to
-	// remove. The editor-tab panel already does the same.
-	context.subscriptions.push(
-		vscode.window.registerWebviewViewProvider(ChatViewProvider.viewType, provider, {
+	const panels = new ChatPanels(context, output);
+	chats = panels;
+	context.subscriptions.push(output, panels,
+		vscode.window.registerWebviewPanelSerializer(ChatPanels.viewType, panels),
+		vscode.window.registerWebviewViewProvider("brief.chat", panels, {
 			webviewOptions: { retainContextWhenHidden: true },
-		}),
-	);
-	context.subscriptions.push(provider);
+		}));
 
-	const reveal = () => {
-		void vscode.commands.executeCommand("brief.chat.focus").then(
-			() => provider.reveal(),
-			() => provider.reveal(),
-		);
-	};
-	// VS Code does not await command callbacks. Keep their rejection boundary at
-	// the registration point so a transport failure cannot become an unhandled
-	// extension-host rejection with no operator-visible explanation.
-	const runCommand = (label: string, action: () => Promise<void>) => {
-		void action().catch((err) => {
-			const detail = err instanceof Error ? err.message : String(err);
-			output.appendLine(`[prime-agent] ${label} failed: ${detail}`);
-			controller?.showErrorNotice(`${label} failed: ${detail}`);
+	const command = (id: string, action: () => Promise<void> | void): vscode.Disposable =>
+		vscode.commands.registerCommand(id, async () => {
+			try { await action(); }
+			catch (err) {
+				const detail = err instanceof Error ? err.message : String(err);
+				output.appendLine(`[brief] ${id} failed: ${detail}`);
+				void vscode.window.showErrorMessage(`Brief: ${detail}`);
+			}
 		});
-	};
 
 	context.subscriptions.push(
-		vscode.commands.registerCommand("brief.focusChat", () => {
-			reveal();
-			provider.focusComposer();
-		}),
-		vscode.commands.registerCommand("brief.openChat", () => {
-			ChatPanel.createOrShow(context.extensionUri, controller!);
-		}),
-		vscode.commands.registerCommand("brief.newSession", () => runCommand("New session", () => controller!.newSession())),
-		vscode.commands.registerCommand("brief.abort", () => runCommand("Stop", () => controller!.abort())),
-		vscode.commands.registerCommand("brief.compact", () => runCommand("Compact", () => controller!.compact())),
-		vscode.commands.registerCommand("brief.exportChat", () => runCommand("Export chat", () => controller!.exportChat())),
-		vscode.commands.registerCommand("brief.restart", () => runCommand("Restart", () => controller!.restart())),
-		vscode.commands.registerCommand("brief.history", () => {
-			reveal();
-			controller!.showHistoryView();
-		}),
-		vscode.commands.registerCommand("brief.renameSession", () =>
-			runCommand("Rename session", async () => {
-				const current = controller!.currentSessionName();
-				const name = await vscode.window.showInputBox({
-					title: "Rename session",
-					value: current ?? "",
-					prompt: "Name this session",
-					placeHolder: "Session name",
-					ignoreFocusOut: true,
-				});
-				if (name === undefined) return;
-				await controller!.renameSession(name);
-			}),
-		),
-		vscode.commands.registerCommand("brief.addSelectionToChat", () => {
-			const selection = controller!.getActiveSelection();
-			if (!selection) {
+		command("brief.focusChat", () => panels.focus()),
+		command("brief.openChat", () => panels.useLocation("editor")),
+		command("brief.useEditor", () => panels.useLocation("editor")),
+		command("brief.useSidebar", () => panels.useLocation("sidebar")),
+		command("brief.toggleChatLocation", () => panels.toggleLocation()),
+		command("brief.switchSession", () => panels.switchSidebarSession()),
+		command("brief.newSession", () => panels.newSession()),
+		command("brief.abort", () => panels.run((controller) => controller.abort())),
+		command("brief.compact", () => panels.run((controller) => controller.compact())),
+		command("brief.exportChat", () => panels.run((controller) => controller.exportChat())),
+		command("brief.restart", () => panels.run((controller) => controller.restart())),
+		command("brief.history", () => panels.run((controller) => controller.showHistoryView(), true)),
+		command("brief.renameSession", () => panels.run(async (controller) => {
+			const name = await vscode.window.showInputBox({
+				title: "Rename session", value: controller.currentSessionName() ?? "",
+				prompt: "Name this session", placeHolder: "Session name", ignoreFocusOut: true,
+			});
+			if (name !== undefined && !controller.disposed) await controller.renameSession(name);
+		})),
+		command("brief.addSelectionToChat", () => {
+			// Capture the source before revealing a chat editor changes focus.
+			const editor = vscode.window.activeTextEditor;
+			if (!editor || editor.selection.isEmpty) {
 				void vscode.window.showInformationMessage("Select some code first.");
 				return;
 			}
-			controller!.broadcastInsertSelection(selection);
-			reveal();
+			const { document, selection } = editor;
+			const text = document.getText(selection);
+			if (text.length > 100_000) {
+				void vscode.window.showWarningMessage("Select at most 100,000 characters.");
+				return;
+			}
+			const selected = { uri: document.uri, text,
+				startLine: selection.start.line + 1, endLine: selection.end.line + 1, languageId: document.languageId };
+			return panels.run((controller) => {
+				const path = controller.workspaceRelativePath(selected.uri);
+				if (path) controller.broadcastInsertSelection({ path, text: selected.text,
+					startLine: selected.startLine, endLine: selected.endLine, languageId: selected.languageId });
+			}, true);
 		}),
-		vscode.commands.registerCommand("brief.addActiveFileToChat", () => {
-			const file = controller!.getActiveFilePath();
-			if (!file) return;
-			controller!.broadcastInsertMention(file);
-			reveal();
+		command("brief.addActiveFileToChat", () => {
+			const uri = vscode.window.activeTextEditor?.document.uri;
+			if (!uri) return;
+			return panels.run((controller) => {
+				const path = controller.workspaceRelativePath(uri);
+				if (path) controller.broadcastInsertMention(path);
+			}, true);
 		}),
 	);
 }
 
 export function deactivate(): void {
-	controller?.dispose();
-	controller = null;
+	chats?.dispose();
+	chats = undefined;
 }
