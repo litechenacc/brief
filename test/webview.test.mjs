@@ -219,12 +219,31 @@ check("edit copy emits the output once, not twice", clipboard.split("edited src/
 // 訊息本身不顯示估算或 input 費用；模型明細預設收合。
 check("user footer has no token estimate or input price", !scroller.querySelector(".uf-tokens, .uf-cost"));
 check("user copy and fork remain", scroller.querySelectorAll(".row-user .user-footer .uf-icon").length >= 2);
+check("reply usage is off by default", !scroller.classList.contains("show-usage-details"));
+check("stylesheet hides only model details by default", fs.readFileSync(new URL("../media/main.css", import.meta.url), "utf8").includes(".messages:not(.show-usage-details) .model-usage { display: none; }"));
+hostMessage({ type: "status", status: { ...baseStatus, showUsageDetails: true } });
+check("usage config enables existing replies immediately", scroller.classList.contains("show-usage-details"));
 const modelUsage = scroller.querySelector("details.model-usage");
 check("model usage is collapsed with a neutral summary", !!modelUsage && !modelUsage.open && modelUsage.querySelector("summary").textContent === "用量明細");
 check("model usage includes input output total and reported cost", /Input: 4.6k tokens/.test(modelUsage.textContent) && /Output: 348 tokens/.test(modelUsage.textContent) && modelUsage.textContent.includes("$0.0189"));
 modelUsage.open = true;
 check("model usage can be expanded", modelUsage.open);
 modelUsage.open = false;
+hostMessage({ type: "status", status: { ...baseStatus, showUsageDetails: false } });
+check("usage config disables existing replies immediately", !scroller.classList.contains("show-usage-details"));
+check("disabling reply usage keeps copy and session fee", !!scroller.querySelector(".usage-copy") && !document.querySelector(".stats-label").hidden);
+
+// Thought process 的可見性獨立於用量明細與 thinking level。
+check("thought process defaults to hidden", !scroller.classList.contains("show-thought-process"));
+check("stylesheet hides thought process by default", fs.readFileSync(new URL("../media/main.css", import.meta.url), "utf8").includes(".messages:not(.show-thought-process) .thinking { display: none; }"));
+const thoughtBlock = scroller.querySelector("details.thinking");
+hostMessage({ type: "status", status: { ...baseStatus, showThoughtProcess: true } });
+check("thought config reveals existing blocks without rebuilding", scroller.classList.contains("show-thought-process") && scroller.querySelector("details.thinking") === thoughtBlock);
+check("thought config leaves usage hidden", !scroller.classList.contains("show-usage-details"));
+hostMessage({ type: "status", status: { ...baseStatus, showThoughtProcess: false, showUsageDetails: true } });
+check("thought config hides immediately independent of usage", !scroller.classList.contains("show-thought-process") && scroller.classList.contains("show-usage-details"));
+check("hiding thoughts preserves reply and tool content", !!scroller.querySelector(".row-assistant .md") && !!scroller.querySelector(".tool"));
+hostMessage({ type: "status", status: { ...baseStatus, showThoughtProcess: true } });
 
 // --- #22: expanding a collapsed block keeps the selection and sweeps in what it revealed ---
 const thinking = scroller.querySelector("details.thinking");

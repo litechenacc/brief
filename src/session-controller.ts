@@ -264,7 +264,9 @@ export class SessionController implements vscode.Disposable {
 			vscode.workspace.onDidChangeConfiguration((event) => {
 				if (
 					event.affectsConfiguration("primeAgent.liveTranscript") ||
-					event.affectsConfiguration("primeAgent.streamToolOutput")
+					event.affectsConfiguration("primeAgent.streamToolOutput") ||
+					event.affectsConfiguration("primeAgent.showUsageDetails") ||
+					event.affectsConfiguration("primeAgent.showThoughtProcess")
 				) {
 					this.pushStatusLight();
 				}
@@ -274,6 +276,14 @@ export class SessionController implements vscode.Disposable {
 
 	liveTranscript(): boolean {
 		return vscode.workspace.getConfiguration("primeAgent").get<boolean>("liveTranscript", false) === true;
+	}
+
+	showThoughtProcess(): boolean {
+		return vscode.workspace.getConfiguration("primeAgent").get<boolean>("showThoughtProcess", false) === true;
+	}
+
+	showUsageDetails(): boolean {
+		return vscode.workspace.getConfiguration("primeAgent").get<boolean>("showUsageDetails", false) === true;
 	}
 
 	streamToolOutput(): boolean {
@@ -2184,6 +2194,8 @@ export class SessionController implements vscode.Disposable {
 				compactDefaultPercent: this.defaultCompactPercent(),
 				liveTranscript: this.liveTranscript(),
 				streamToolOutput: this.streamToolOutput(),
+				showUsageDetails: this.showUsageDetails(),
+				showThoughtProcess: this.showThoughtProcess(),
 			};
 		}
 		if (this.observingId) {
@@ -2207,6 +2219,8 @@ export class SessionController implements vscode.Disposable {
 				compactDefaultPercent: this.defaultCompactPercent(),
 				liveTranscript: this.liveTranscript(),
 				streamToolOutput: this.streamToolOutput(),
+				showUsageDetails: this.showUsageDetails(),
+				showThoughtProcess: this.showThoughtProcess(),
 			};
 		}
 		if (this.isReattaching()) {
@@ -2235,6 +2249,8 @@ export class SessionController implements vscode.Disposable {
 				compactDefaultPercent: this.defaultCompactPercent(),
 				liveTranscript: this.liveTranscript(),
 				streamToolOutput: this.streamToolOutput(),
+				showUsageDetails: this.showUsageDetails(),
+				showThoughtProcess: this.showThoughtProcess(),
 				...this.lastUsage,
 			};
 		}
@@ -2281,6 +2297,8 @@ export class SessionController implements vscode.Disposable {
 				compactDefaultPercent: this.defaultCompactPercent(),
 				liveTranscript: this.liveTranscript(),
 				streamToolOutput: this.streamToolOutput(),
+				showUsageDetails: this.showUsageDetails(),
+				showThoughtProcess: this.showThoughtProcess(),
 				...this.lastUsage,
 			};
 		}
@@ -2313,6 +2331,8 @@ export class SessionController implements vscode.Disposable {
 			compactDefaultPercent: this.defaultCompactPercent(),
 				liveTranscript: this.liveTranscript(),
 				streamToolOutput: this.streamToolOutput(),
+				showUsageDetails: this.showUsageDetails(),
+				showThoughtProcess: this.showThoughtProcess(),
 			...this.lastUsage,
 		};
 	}

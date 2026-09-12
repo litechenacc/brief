@@ -790,6 +790,14 @@ export class Transcript {
 		this.liveTranscript = value;
 	}
 
+	setShowThoughtProcess(value: boolean): void {
+		this.scroller.classList.toggle("show-thought-process", value);
+	}
+
+	setShowUsageDetails(value: boolean): void {
+		this.scroller.classList.toggle("show-usage-details", value);
+	}
+
 	setStreamToolOutput(value: boolean): void {
 		this.streamToolOutput = value;
 	}

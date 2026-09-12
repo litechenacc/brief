@@ -313,6 +313,10 @@ export interface StatusSnapshot {
 	liveTranscript?: boolean;
 	/** When true, tool output paints on each partial. Default is false. */
 	streamToolOutput?: boolean;
+	/** 顯示每則回覆的用量明細入口，預設關閉。 */
+	showUsageDetails?: boolean;
+	/** 顯示 Thought process 區塊，預設隱藏。 */
+	showThoughtProcess?: boolean;
 }
 
 export interface ModelRef {

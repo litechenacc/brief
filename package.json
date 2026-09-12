@@ -271,6 +271,16 @@
           "default": false,
           "description": "Paint thinking and tool-call arguments as they stream. Off (default) keeps unfinished parts behind the working row until thinking settles, a tool starts running, or reply text appears."
         },
+        "primeAgent.showThoughtProcess": {
+          "type": "boolean",
+          "default": false,
+          "description": "顯示回覆的 Thought process 區塊（預設隱藏）。僅控制顯示，不改變模型的 thinking level。"
+        },
+        "primeAgent.showUsageDetails": {
+          "type": "boolean",
+          "default": false,
+          "description": "顯示每則回覆的用量明細入口（預設關閉）。不影響錯誤訊息、複製按鈕與 session 費用。"
+        },
         "primeAgent.streamToolOutput": {
           "type": "boolean",
           "default": false,

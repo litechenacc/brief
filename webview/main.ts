@@ -438,6 +438,8 @@ function applyStatus(incomingStatus: StatusSnapshot): void {
 	// prompt disappears into a 120s timeout with a green dot above it.
 	transcript.setLiveTranscript(status.liveTranscript === true);
 	transcript.setStreamToolOutput(status.streamToolOutput === true);
+	transcript.setShowUsageDetails(status.showUsageDetails === true);
+	transcript.setShowThoughtProcess(status.showThoughtProcess === true);
 	composer.setEnabled(
 		status.connected && !status.restoring,
 		status.restoring

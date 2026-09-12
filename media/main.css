@@ -1757,6 +1757,21 @@ pre.term {
 
 /* 按需展開用量，錯誤與訊息操作維持在外層。 */
 .usage-line { align-items: flex-start; flex-wrap: wrap; }
+.messages:not(.show-usage-details) .model-usage { display: none; }
+.messages:not(.show-thought-process) .thinking { display: none; }
+/* 隱藏內容不留空列；複製操作浮在回覆旁，不另佔 footer 高度。 */
+.messages:not(.show-thought-process):not(.show-usage-details) .row-assistant:not(:has(.md, .tool, .usage-status)) {
+	display: none;
+}
+.row-assistant { position: relative; }
+.messages:not(.show-usage-details) .usage-line:not(:has(.usage-status)) {
+	position: absolute;
+	right: 0;
+	bottom: 0;
+}
+.messages:not(.show-usage-details) .usage-line:not(:has(.usage-status)) .usage-copy {
+	background: var(--pa-surface-2);
+}
 .model-usage summary, .stats-label summary { cursor: pointer; }
 .usage-detail, .stats-detail { white-space: pre-line; line-height: 1.6; }
 .usage-detail { padding: 4px 0; }
