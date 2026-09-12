@@ -2069,7 +2069,21 @@ pre.term {
 .tool[data-tool-kind="python"] .tool-section:first-of-type pre {
 	border-left: 2px solid var(--pa-accent-dim);
 	border-radius: 0 6px 6px 0;
+	background: var(--vscode-editor-background, var(--pa-surface-2));
+	color: var(--vscode-editor-foreground, var(--pa-text));
 }
+
+/* Token colors follow the current Color Theme's symbol-icon palette.
+   These are the editor-adjacent tokens VS Code injects into every webview;
+   TextMate token colors are not available here. */
+.hl-python .tok-kw { color: var(--vscode-symbolIcon-keywordForeground, var(--vscode-debugTokenExpression-name, inherit)); }
+.hl-python .tok-fn { color: var(--vscode-symbolIcon-functionForeground, var(--vscode-symbolIcon-methodForeground, inherit)); }
+.hl-python .tok-cls { color: var(--vscode-symbolIcon-classForeground, inherit); }
+.hl-python .tok-str { color: var(--vscode-debugTokenExpression-string, inherit); }
+.hl-python .tok-cmt { color: var(--vscode-descriptionForeground, var(--pa-dim)); font-style: italic; }
+.hl-python .tok-num { color: var(--vscode-debugTokenExpression-number, inherit); }
+.hl-python .tok-op { color: var(--vscode-symbolIcon-operatorForeground, inherit); }
+.hl-python .tok-dec { color: var(--vscode-symbolIcon-colorForeground, inherit); }
 
 /* ---------- threshold flyout (reset icon) ---------- */
 

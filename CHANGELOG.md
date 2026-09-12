@@ -13,6 +13,8 @@ After a cut, add the new version's compare link at the bottom and re-point [Unre
 
 ## [Unreleased]
 
+- **Python tool cards now syntax-highlight the cell.** Keywords, names, strings, comments, and numbers take their colors from the current VS Code Color Theme (`--vscode-symbolIcon-*` / debug-token colors), so Dark+, Light+, and High Contrast stay consistent with the editor. Shell cards are unchanged.
+
 - **Split the host and chat webview by responsibility.** Session history, daemon attach, compact, workspace helpers, webview message parsing, and the subagent strip each live in their own file. Chat, RPC, daemon attach, history, and subagents stay.
 - **Trim leftover Processes/Changes types and overlapping host/webview tests.** Chat, RPC, daemon attach, history, and subagents stay. Export is Markdown only.
 - **Drop the Processes panel, Changes panel, and the background-jobs agent extension.** Chat, RPC, daemon attach, history, and subagents stay. Export is Markdown only. Tests that only existed to pin those extra lanes are gone.

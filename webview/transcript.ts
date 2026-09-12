@@ -5,6 +5,7 @@
 import { parseIpythonBashCell, previewBashCommand, previewIpythonCode } from "./code-preview.js";
 import { butterfly, el, icon } from "./dom.js";
 import { copyToClipboard, renderMarkdown } from "./markdown.js";
+import { renderPythonCode } from "./python-highlight.js";
 import { pickSpinnerVerb } from "./spinner-verbs.js";
 
 /**
@@ -1537,6 +1538,8 @@ export class Transcript {
 				if (index === 0) pre.appendChild(el("span", "term-prompt", "$ "));
 				pre.appendChild(lineEl);
 			}
+		} else if (view.kind === "python") {
+			renderPythonCode(view.input, pre);
 		} else {
 			pre.textContent = view.input;
 		}

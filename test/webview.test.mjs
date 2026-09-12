@@ -132,6 +132,15 @@ check("shell input drops the %%bash magic line",
 check("plain python cell stays a python card, summarised by its real work",
 	!!pyCard && pyCard.querySelector(".tool-summary").textContent === "git status",
 	pyCard?.querySelector(".tool-summary")?.textContent ?? "<none>");
+const pyPre = pyCard?.querySelector(".tool-section:not(.tool-result) pre");
+check("python card highlights keywords and calls",
+	pyPre?.classList.contains("hl-python")
+		&& [...pyPre.querySelectorAll(".tok-kw")].some((n) => n.textContent === "import")
+		&& [...pyPre.querySelectorAll(".tok-fn")].some((n) => n.textContent === "run"),
+	pyPre?.innerHTML ?? "<none>");
+check("python highlight preserves the source text",
+	pyPre?.textContent === 'import os\nimport time\nsubprocess.run(["git", "status"])',
+	JSON.stringify(pyPre?.textContent));
 
 // copy of a shell card fences as bash, without the decorative $ prompt
 let clipboard = "";
