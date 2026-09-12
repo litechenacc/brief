@@ -635,7 +635,8 @@ export class Transcript {
 	 * without every call site knowing about it.
 	 */
 	private place(node: Node): void {
-		if (this.insertAnchor) this.scroller.insertBefore(node, this.insertAnchor);
+		const anchor = this.insertAnchor ?? this.workingRow;
+		if (anchor?.parentNode === this.scroller) this.scroller.insertBefore(node, anchor);
 		else this.scroller.appendChild(node);
 	}
 
@@ -906,7 +907,7 @@ export class Transcript {
 		row.setAttribute("aria-busy", "true");
 		const mark = brandMark(15, "working-mark");
 		row.appendChild(mark);
-		const label = el("span", "working-label", this.workingVerbBase);
+		const label = el("span", "working-label");
 		label.setAttribute("aria-hidden", "true");
 		row.appendChild(label);
 		const elapsed = el("span", "working-elapsed");
@@ -931,11 +932,19 @@ export class Transcript {
 	private paintWorkingLabel(): void {
 		const label = this.workingRow?.querySelector(".working-label");
 		if (!label) return;
-		if (label.textContent !== this.workingVerbBase) label.textContent = this.workingVerbBase;
+		if (label.textContent !== this.workingVerbBase) {
+			// Keep replacement verbs in phase with the icon's ongoing animation.
+			const phase = (Date.now() - this.workingStartedAt) / 1000;
+			label.replaceChildren(...Array.from(this.workingVerbBase, (char, index) => {
+				const letter = el("span", "working-letter", char);
+				letter.style.animationDelay = `${(index + 1) * 0.1 - 1.4 - phase}s`;
+				return letter;
+			}));
+		}
 		const elapsed = this.workingRow?.querySelector(".working-elapsed");
 		if (!elapsed) return;
 		const seconds = Math.floor((Date.now() - this.workingStartedAt) / 1000);
-		const text = seconds < 1 ? "" : `· ${seconds}s`;
+		const text = seconds < 1 ? "" : `${seconds}s`;
 		if (elapsed.textContent !== text) elapsed.textContent = text;
 	}
 
@@ -1039,7 +1048,7 @@ export class Transcript {
 			const userMessage = message as UserMessage;
 			const backgroundTaskStatus = this.backgroundTaskStatus(this.userMessageText(userMessage));
 			if (backgroundTaskStatus) {
-				this.place(this.buildConversationMessage("background task", backgroundTaskStatus, this.userMessageText(userMessage)));
+				this.place(this.buildConversationMessage("background task", backgroundTaskStatus, this.userMessageText(userMessage), "background"));
 				return;
 			}
 			const ordinal = this.userMessageOrdinal(userMessage);
@@ -1061,7 +1070,7 @@ export class Transcript {
 		} else if (role === ("bashExecution" as string)) {
 			const m = message as unknown as { command?: string; output?: string; exitCode?: number; cancelled?: boolean };
 			const status = m.cancelled ? "cancelled" : m.exitCode === 0 ? "completed" : `exit ${m.exitCode ?? "unknown"}`;
-			this.place(this.buildConversationMessage("bash", status, [m.command, m.output].filter((part): part is string => typeof part === "string" && Boolean(part.trim())).join("\n\n") || "bash command"));
+			this.place(this.buildConversationMessage("bash", status, [m.command, m.output].filter((part): part is string => typeof part === "string" && Boolean(part.trim())).join("\n\n") || "bash command", "bash"));
 		} else if (role === ("compactionSummary" as string)) {
 			this.place(this.buildCompactionSummary(message as unknown as CompactionSummaryMessage));
 			this.hasContent = true;
@@ -1105,15 +1114,15 @@ export class Transcript {
 		const reply = message.details?.message?.trim();
 		const content = typeof message.content === "string" ? message.content.trim() : "";
 		if (message.customType === "agent_message" && sender?.sessionName && reply) {
-			return this.buildConversationMessage(sender.sessionName, sender.model, reply, sender.model ?? sender.sessionId);
+			return this.buildConversationMessage(sender.sessionName, sender.model, reply, "agent");
 		}
 		if (message.customType === "async_bash_completion" && content) {
 			const details = message.details as { pid?: number; exitCode?: number } | undefined;
 			const detail = [details?.pid != null ? `pid ${details.pid}` : "", details?.exitCode != null ? `exit ${details.exitCode}` : ""].filter(Boolean).join(" · ");
-			return this.buildConversationMessage("bash", detail || undefined, content);
+			return this.buildConversationMessage("bash", detail || undefined, content, "bash");
 		}
 		const backgroundTaskStatus = this.backgroundTaskStatus(content);
-		if (backgroundTaskStatus) return this.buildConversationMessage("background task", backgroundTaskStatus, content);
+		if (backgroundTaskStatus) return this.buildConversationMessage("background task", backgroundTaskStatus, content, "background");
 
 		const note = el("div", "custom-note");
 		const label = el("div", "custom-note-kind", (message.customType ?? "note").replace(/_/g, " "));
@@ -1124,15 +1133,21 @@ export class Transcript {
 	}
 
 	/** A compact, foldable event sent by another agent or an asynchronous task. */
-	private buildConversationMessage(sender: string, detail: string | undefined, reply: string, seed = sender): HTMLElement {
+	private buildConversationMessage(sender: string, detail: string | undefined, reply: string, kind: "agent" | "bash" | "background"): HTMLElement {
 		const row = el("div", "conversation-message");
 		const avatar = el("div", "conversation-avatar");
-		const initials = sender.split(/[\s_-]+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
-		avatar.textContent = initials || sender.slice(0, 2).toUpperCase();
 		avatar.title = detail ? `${sender} · ${detail}` : sender;
-		let hash = 0;
-		for (const char of seed) hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0;
-		avatar.style.setProperty("--conversation-hue", String(Math.abs(hash) % 360));
+		avatar.setAttribute("aria-hidden", "true");
+		if (kind === "agent") {
+			const initials = sender.split(/[\s_-]+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
+			avatar.textContent = initials || sender.slice(0, 2).toUpperCase();
+			let hash = 0;
+			for (const char of sender) hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0;
+			avatar.style.setProperty("--conversation-hue", String(Math.abs(hash) % 360));
+		} else {
+			avatar.classList.add("conversation-avatar-tool");
+			avatar.appendChild(icon(kind === "bash" ? "terminal" : "layers", 14));
+		}
 
 		const bubble = el("details", "conversation-bubble") as HTMLDetailsElement;
 		const summary = el("summary", "conversation-summary");
@@ -1244,7 +1259,7 @@ export class Transcript {
 		}
 		row.appendChild(bubble);
 		if (plainText.trim().length > 0) {
-			row.appendChild(this.buildUserFooter(row, plainText));
+			bubble.appendChild(this.buildUserFooter(row, plainText));
 		}
 		this.markRowTimestamp(row, this.messageTimestamp(message));
 		return row;
@@ -1536,6 +1551,9 @@ export class Transcript {
 			if (usage.cost?.total != null) bits.push(`Reported cost: $${usage.cost.total.toFixed(4)} (not an account charge)`);
 			details.appendChild(el("div", "usage-detail", bits.join("\n")));
 			line.appendChild(details);
+		}
+		if (message.content.some((part) => part.type === "toolCall")) {
+			return line.childElementCount ? line : null;
 		}
 		if (!line.childElementCount && message.content.length === 0) return null;
 		const copyBtn = el("button", "uf-icon usage-copy") as HTMLButtonElement;

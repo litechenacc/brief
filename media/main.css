@@ -338,6 +338,7 @@ textarea::-webkit-scrollbar {
 }
 
 .bubble-user {
+	position: relative;
 	max-width: 88%;
 	background: var(--pa-surface-2);
 	border: 1px solid var(--pa-border);
@@ -391,46 +392,52 @@ textarea::-webkit-scrollbar {
 }
 
 .working-mark {
-	color: var(--pa-dim, inherit);
+	color: var(--pa-text, inherit);
 	flex-shrink: 0;
+	animation: working-letter-pulse 1.4s ease-in-out infinite;
 }
 
 .working-label {
-	color: var(--pa-dim, inherit);
-	background: linear-gradient(100deg,
-		var(--pa-dim, inherit) 35%,
-		var(--pa-text, inherit) 50%,
-		var(--pa-dim, inherit) 65%);
-	background-size: 300% 100%;
-	background-position: 100% 0;
-	background-clip: text;
-	-webkit-text-fill-color: transparent;
-	animation: working-sheen 4s ease-in-out infinite;
+	color: var(--pa-text, inherit);
+}
+
+.working-letter {
+	opacity: 0.35;
+	animation: working-letter-pulse 1.4s ease-in-out infinite;
 }
 
 .working-elapsed {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	white-space: nowrap;
 	color: var(--pa-dim, inherit);
 	font-variant-numeric: tabular-nums;
 }
 
-@keyframes working-sheen {
-	0%, 15% { background-position: 100% 0; }
-	85%, 100% { background-position: 0% 0; }
+.working-elapsed:not(:empty)::before {
+	content: "·";
+}
+
+@keyframes working-letter-pulse {
+	0%, 60%, 100% { opacity: 0.35; }
+	30% { opacity: 1; }
 }
 
 @media (prefers-reduced-motion: reduce), (forced-colors: active) {
-	.working-label {
+	.working-mark,
+	.working-letter {
 		animation: none;
-		background: none;
-		-webkit-text-fill-color: currentColor;
+		opacity: 1;
 	}
 }
 
-body.vscode-high-contrast .working-label,
-body.vscode-high-contrast-light .working-label {
+body.vscode-high-contrast .working-mark,
+body.vscode-high-contrast-light .working-mark,
+body.vscode-high-contrast .working-letter,
+body.vscode-high-contrast-light .working-letter {
 	animation: none;
-	background: none;
-	-webkit-text-fill-color: currentColor;
+	opacity: 1;
 }
 
 @keyframes pa-pulse {
@@ -603,10 +610,10 @@ details.thinking .thinking-body {
 /* ---------- tool cards ---------- */
 
 .tool {
-	border: 1px solid var(--pa-border);
+	border: 1px solid var(--pa-border-faint);
 	border-radius: 8px;
 	overflow: hidden;
-	background: var(--pa-surface);
+	background: color-mix(in srgb, var(--pa-surface) 45%, transparent);
 }
 
 .tool-header {
@@ -779,8 +786,7 @@ details.thinking .thinking-body {
 	display: flex;
 	align-items: center;
 	gap: 8px;
-	padding: 8px 10px;
-	border-bottom: 1px solid var(--pa-border);
+	padding: 8px 12px;
 }
 
 .history-title {
@@ -808,16 +814,41 @@ details.thinking .thinking-body {
 	display: flex;
 	flex-direction: column;
 	gap: 4px;
-	padding: 8px 10px;
-	border: 1px solid var(--pa-border);
-	border-radius: 8px;
-	background: var(--pa-surface);
+	padding: 8px;
+	border: 1px solid transparent;
+	border-radius: 4px;
+	background: transparent;
 	text-align: left;
 }
 
 .history-item:hover {
-	border-color: var(--pa-accent);
-	background: var(--pa-accent-dim);
+	background: var(--vscode-list-hoverBackground, var(--pa-raised));
+}
+
+.history-item.current {
+	background: var(--vscode-list-inactiveSelectionBackground, var(--pa-accent-dim));
+	color: var(--vscode-list-inactiveSelectionForeground, var(--pa-text));
+}
+
+.history-item.current:focus-within {
+	background: var(--vscode-list-activeSelectionBackground, var(--pa-accent-dim));
+	color: var(--vscode-list-activeSelectionForeground, var(--pa-text));
+}
+
+.history-item:focus-within {
+	outline: 1px solid var(--vscode-focusBorder, var(--pa-border-strong));
+	outline-offset: -1px;
+}
+
+.history-item.current .history-item-meta,
+.history-item.current .history-item-time,
+.history-item.current .history-item-sub {
+	color: inherit;
+}
+
+body.vscode-high-contrast .history-item.current,
+body.vscode-high-contrast-light .history-item.current {
+	border-color: var(--vscode-contrastActiveBorder, var(--vscode-focusBorder, var(--pa-border)));
 }
 
 .history-item-top {
@@ -838,11 +869,10 @@ details.thinking .thinking-body {
 }
 
 .history-item-name {
-	flex: 0 1 auto;
+	flex: 1;
 	min-width: 0;
-	max-width: 58%;
 	font-size: 12px;
-	font-weight: 550;
+	font-weight: 400;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -1591,16 +1621,20 @@ pre.term {
 }
 
 .history-group {
-	display: flex;
-	flex-direction: column;
-	gap: 6px;
+	flex-shrink: 0;
+}
+
+.history-group + .history-group {
+	margin-top: 6px;
+}
+
+.history-group > .history-item + .history-item {
+	margin-top: 2px;
 }
 
 .history-group-summary {
-	padding: 6px 4px 2px;
-	font-size: 9.5px;
-	text-transform: uppercase;
-	letter-spacing: 0.07em;
+	padding: 6px 4px;
+	font-size: 11px;
 	color: var(--pa-dim);
 	cursor: pointer;
 	list-style: none;
@@ -1680,9 +1714,7 @@ pre.term {
 }
 
 .history-actions {
-	position: absolute;
-	right: 8px;
-	top: 8px;
+	flex-shrink: 0;
 	display: none;
 	align-items: center;
 	gap: 2px;
@@ -1697,7 +1729,7 @@ pre.term {
 .history-item:hover .history-item-meta,
 .history-item:focus-within .history-item-meta,
 .history-item.confirming .history-item-meta {
-	visibility: hidden;
+	display: none;
 }
 
 .history-action {
@@ -1786,28 +1818,29 @@ pre.term {
 	background: var(--pa-accent-dim);
 }
 
-/* ---------- user message footer (copy/fork) ---------- */
+/* ---------- user message actions (copy/fork) ---------- */
 
-.user-footer {
-	display: flex;
-	align-items: center;
-	justify-content: flex-end;
-	gap: 6px;
-	margin-top: 3px;
-	padding-right: 2px;
-	font-size: 9.5px;
-	color: var(--pa-faint);
+.bubble-user:has(.user-footer) {
+	padding-right: 56px;
 }
 
-.user-footer .uf-icon {
+.user-footer {
+	position: absolute;
+	top: 7px;
+	right: 8px;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	color: var(--pa-faint);
 	opacity: 0;
+	pointer-events: none;
 	transition: opacity 0.12s ease;
 }
 
-.row-user:hover .user-footer .uf-icon,
-.user-footer:focus-within .uf-icon,
-.user-footer:hover .uf-icon {
+.bubble-user:hover .user-footer,
+.user-footer:focus-within {
 	opacity: 1;
+	pointer-events: auto;
 }
 
 .uf-icon {
@@ -2306,12 +2339,12 @@ pre.term {
 /* ---------- history search + stateful refresh ---------- */
 
 .history-search {
-	margin: 8px 10px 6px;
+	margin: 0 12px 4px;
 	padding: 4px 8px;
 	font-size: 11px;
 	background: var(--vscode-input-background, var(--pa-surface-2));
 	border: 1px solid var(--pa-border);
-	border-radius: 7px;
+	border-radius: 4px;
 	color: var(--pa-text);
 	outline: none;
 }
@@ -2323,7 +2356,7 @@ pre.term {
 }
 
 .history-search:focus {
-	border-color: var(--pa-accent-dim);
+	border-color: var(--vscode-focusBorder, var(--pa-border-strong));
 }
 
 .history-view.refreshing .history-list {
@@ -2643,22 +2676,23 @@ pre.term {
 	height: 24px;
 	margin-top: 4px;
 	border-radius: 50%;
-	background: linear-gradient(135deg,
-		hsl(var(--conversation-hue) 78% 64%),
-		hsl(calc(var(--conversation-hue) + 55) 74% 46%));
-	box-shadow: inset 0 0 0 1px color-mix(in srgb, white 20%, transparent);
-	color: white;
+	background: color-mix(in srgb, hsl(var(--conversation-hue) 28% 52%) 22%, var(--pa-surface-2));
+	color: var(--pa-text);
 	font-size: 8px;
-	font-weight: 700;
+	font-weight: 500;
 	letter-spacing: 0.02em;
-	text-shadow: 0 1px 2px rgb(0 0 0 / 35%);
 	flex: 0 0 24px;
+}
+
+.conversation-avatar-tool {
+	background: var(--pa-surface-2);
+	color: var(--pa-dim);
 }
 
 .conversation-bubble {
 	min-width: 0;
 	flex: 1;
-	border: 1px solid var(--pa-border);
+	border: 1px solid var(--pa-border-faint);
 	border-radius: 12px;
 	border-bottom-left-radius: 4px;
 	background: var(--pa-surface-2);

@@ -44,13 +44,14 @@ export class HistoryView {
 		backBtn.title = "Back to chat";
 		backBtn.appendChild(icon("back", 15));
 		backBtn.addEventListener("click", () => this.deps.onBack());
-		header.append(backBtn, el("span", "history-title", "Sessions in this workspace"));
+		header.append(backBtn, el("span", "history-title", "Sessions"));
 		// Search bar. The local filter is the instant layer; the host searches the
 		// conversation bodies in parallel and hands back the extra rows with a
 		// snippet, so a phrase the operator only half-remembers still finds them.
 		this.searchEl = document.createElement("input");
 		this.searchEl.className = "history-search";
 		this.searchEl.placeholder = "Search sessions…";
+		this.searchEl.setAttribute("aria-label", "Search sessions");
 		this.searchEl.setAttribute("spellcheck", "false");
 		this.searchEl.addEventListener("input", () => {
 			this.query = this.searchEl.value;
@@ -227,6 +228,7 @@ export class HistoryView {
 		resume.className = "history-resume";
 		resume.title = isCurrent ? `${name} (current session)` : `Resume ${name}`;
 		resume.setAttribute("aria-label", resume.title);
+		if (isCurrent) resume.setAttribute("aria-current", "true");
 		resume.appendChild(el("span", "history-item-name", name));
 		const meta = el("div", "history-item-meta");
 		meta.appendChild(

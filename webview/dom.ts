@@ -32,6 +32,7 @@ export function svgIcon(paths: string[], size = 16, filled = false): SVGSVGEleme
 
 export const icons = {
 	plus: ["M12 5v14M5 12h14"],
+	terminal: ["M5 6l6 6-6 6", "M13 18h6"],
 	history: ["M3.5 12a8.5 8.5 0 1 0 2.9-6.4", "M3.5 3.5v4.5H8", "M12 8v4.2l3 1.8"],
 	kebab: ["M12 5.5h.01M12 12h.01M12 18.5h.01"],
 	send: ["M12 19V6", "M5.5 12.5 12 6l6.5 6.5"],

@@ -117,7 +117,14 @@ check("edit path row rendered", !!scroller.querySelector(".tool-path"));
 check("bash term prompt rendered", [...scroller.querySelectorAll(".term-prompt")].some((p) => p.textContent === "$ "));
 check("no busy done pill (dot conveys state)", [...scroller.querySelectorAll(".tool-pill")].every((p) => p.textContent !== "done"));
 check("usage line rendered", scroller.querySelectorAll(".usage-line").length >= 1);
-check("user footer with copy + fork", !!scroller.querySelector(".row-user .user-footer .uf-icon") && scroller.querySelectorAll(".row-user .user-footer .uf-icon").length === 2);
+check("user card contains copy + fork", scroller.querySelectorAll(".row-user > .bubble-user > .user-footer .uf-icon").length === 2);
+check("user actions leave no footer row below the card", !scroller.querySelector(".row-user > .user-footer"));
+const userActionCss = fs.readFileSync(new URL("../media/main.css", import.meta.url), "utf8");
+check("user actions sit in the card top right without taking layout space",
+	/\.user-footer \{[^}]*position: absolute;[^}]*top: 7px;[^}]*right: 8px;/.test(userActionCss));
+check("user actions stay hidden until card hover or keyboard focus",
+	/\.user-footer \{[^}]*opacity: 0;[^}]*pointer-events: none;/.test(userActionCss) &&
+	/\.bubble-user:hover \.user-footer,\s*\.user-footer:focus-within \{[^}]*opacity: 1;[^}]*pointer-events: auto;/.test(userActionCss));
 
 // --- #56/#20: an ipython %%bash cell is a SHELL card, summarised by what actually ran ---
 const shellCard = [...scroller.querySelectorAll(".tool")].find((t) => t.dataset.toolKind === "shell");
@@ -136,6 +143,10 @@ check("shell input drops the %%bash magic line",
 check("plain python cell stays a python card, summarised by its real work",
 	!!pyCard && pyCard.querySelector(".tool-summary").textContent === "git status",
 	pyCard?.querySelector(".tool-summary")?.textContent ?? "<none>");
+check("tool-call replies keep card copy without the duplicate full-reply copy",
+	!!pyCard?.querySelector(".tool-copy-all") && !pyCard?.closest(".row-assistant")?.querySelector(".usage-copy"));
+check("text replies keep full-reply copy",
+	[...scroller.querySelectorAll(".row-assistant")].some((row) => !row.querySelector(".tool") && !!row.querySelector(".usage-copy")));
 const pyPre = pyCard?.querySelector(".tool-section:not(.tool-result) pre");
 check("python card highlights keywords and calls",
 	pyPre?.classList.contains("hl-python")
@@ -473,6 +484,9 @@ hostMessage({
 {
 	const currentRow = [...document.querySelectorAll(".history-item")].find((i) => i.textContent.includes("current thread"));
 	check("current row is marked current", currentRow?.classList.contains("current"));
+	check("current resume exposes its current state", currentRow?.querySelector(".history-resume")?.getAttribute("aria-current") === "true");
+	check("other resumes are not marked current", [...document.querySelectorAll(".history-item:not(.current) .history-resume")].every((button) => !button.hasAttribute("aria-current")));
+	check("history has a concise heading and named search", document.querySelector(".history-title")?.textContent === "Sessions" && document.querySelector(".history-search")?.getAttribute("aria-label") === "Search sessions");
 	check("current row title is not suffixed", currentRow?.querySelector(".history-item-name")?.textContent === "current thread");
 	check("current row still has time + status on the right", !!currentRow?.querySelector(".history-item-meta .history-item-time") && !!currentRow?.querySelector(".history-item-meta .running-mark"));
 	check("current row still has a resume control", currentRow?.querySelector("button.history-resume") instanceof window.HTMLButtonElement);
@@ -896,6 +910,7 @@ check("session chrome actions stay in the webview for tests and welcome",
 	const bubble = reply?.querySelector(".conversation-bubble");
 	check("a subagent reply is shown as a conversation bubble", !!reply && !!bubble);
 	check("the sender and model are visible", /auditor/.test(reply?.textContent ?? "") && /claude-sonnet/.test(reply?.textContent ?? ""));
+	check("subagent keeps an initials avatar", reply?.querySelector(".conversation-avatar")?.textContent === "A" && !reply.querySelector(".conversation-avatar svg"));
 	check("the transport envelope is not shown", !reply?.textContent.includes("Agent-to-agent message received"));
 	check("the reply starts folded", bubble && !bubble.open);
 	bubble.open = true;
@@ -916,6 +931,25 @@ check("session chrome actions stay in the webview for tests and welcome",
 	const task = conversations.find((row) => row.textContent.includes("Background task 'tests'"));
 	check("async bash completion is a conversation bubble", !!bash?.querySelector(".conversation-bubble") && bash.textContent.includes("completed"));
 	check("background task completion is a conversation bubble", !!task?.querySelector(".conversation-bubble") && task.textContent.includes("completed"));
+	check("bash and background tasks use distinct neutral icons", !!bash?.querySelector(".conversation-avatar-tool svg") && !!task?.querySelector(".conversation-avatar-tool svg") && bash.querySelector("svg path").getAttribute("d") !== task.querySelector("svg path").getAttribute("d"));
+	check("tool avatars do not repeat initials", bash?.querySelector(".conversation-avatar")?.textContent === "" && task?.querySelector(".conversation-avatar")?.textContent === "");
+}
+
+// Identity comes from the sender, not its model or a name that resembles a tool.
+{
+	const agent = (sessionName, model) => ({ role: "custom", customType: "agent_message", display: true,
+		content: "Review complete", details: { message: "Review complete", from: { sessionId: sessionName, sessionName, model } } });
+	hostMessage({ type: "snapshot", state: null, status: baseStatus, messages: [
+		agent("hybrid-views", "same-model"), agent("tab-tests", "same-model"), agent("hybrid-views", "other-model"), agent("bash", "same-model"),
+		{ role: "bashExecution", command: "echo ready", output: "ready", exitCode: 0 },
+		{ role: "custom", customType: "notification", display: true, content: "Background task 'build' (12345678-1234-1234-1234-123456789abc) failed with exit code 1." },
+	] });
+	const avatars = [...document.querySelectorAll(".conversation-avatar")];
+	const hue = (i) => avatars[i].style.getPropertyValue("--conversation-hue");
+	check("same-model agents get sender-specific colors", hue(0) !== hue(1));
+	check("sender color stays stable across model changes", hue(0) === hue(2));
+	check("an agent named bash still has an initials avatar", avatars[3].textContent === "B" && !avatars[3].querySelector("svg"));
+	check("bash history and custom background notifications use tool icons", avatars.slice(4).length === 2 && avatars.slice(4).every((avatar) => avatar.matches(".conversation-avatar-tool") && avatar.querySelector("svg")));
 }
 
 // Runtime queue previews stay separate from inputs already in the conversation.
@@ -951,6 +985,27 @@ check("session chrome actions stay in the webview for tests and welcome",
 	hostMessage({ type: "newThread" });
 	check("new thread clears pending inputs", queue.hidden);
 	hostMessage({ type: "snapshot", messages: [], state: null, status: baseStatus });
+}
+
+// The active-session indicator stays after notifications, not between senders.
+{
+	hostMessage({ type: "snapshot", state: null, status: baseStatus, messages: [] });
+	hostMessage({ type: "event", event: { type: "agent_start" } });
+	const working = document.querySelector(".working-row");
+	for (const message of [
+		{ role: "custom", customType: "agent_message", display: true, content: "Done", details: { message: "Done", from: { sessionName: "tab-tests", sessionId: "child" } } },
+		{ role: "custom", customType: "async_bash_completion", display: true, content: "Command completed", details: { pid: 1, exitCode: 0 } },
+		{ role: "user", content: "Background task 'tests' (12345678-1234-1234-1234-123456789abc) completed with exit code 0." },
+	]) {
+		hostMessage({ type: "event", event: { type: "message_start", message } });
+		hostMessage({ type: "event", event: { type: "message_end", message } });
+	}
+	const rows = [...working.parentElement.children];
+	check("inserted notifications stay above Working", [...document.querySelectorAll(".conversation-message")].every((row) => rows.indexOf(row) < rows.indexOf(working)));
+	check("notifications preserve the Working element and timer", document.querySelector(".working-row") === working);
+	check("Working belongs to the session, not a sender bubble", !working.closest(".conversation-message"));
+	hostMessage({ type: "event", event: { type: "agent_end", messages: [] } });
+	check("the indicator retires when the session run ends", !document.querySelector(".working-row"));
 }
 
 // --- the usage line must not appear under a reply still being written --------
@@ -1609,6 +1664,12 @@ check("separate sends carry separate client request ids",
 	JSON.stringify(posted.filter((m) => m.type === "prompt").map((m) => m.payload.clientRequestId)));
 check("two optimistic rows render before either verdict", scroller.querySelectorAll(".row-user").length === 2, String(scroller.querySelectorAll(".row-user").length));
 check("send paints a working indicator before the first token", !!scroller.querySelector(".working-row .working-mark") && (scroller.querySelector(".working-label")?.textContent ?? "").length > 0 && !/Sending/.test(scroller.querySelector(".working-label")?.textContent ?? ""), scroller.querySelector(".working-label")?.textContent ?? "none");
+const workingLabel = scroller.querySelector(".working-label");
+const workingLetters = [...workingLabel.querySelectorAll(".working-letter")];
+check("working verb renders one span per character", workingLetters.length === Array.from(workingLabel.textContent).length && workingLetters.every(letter => letter.textContent.length === 1));
+check("working letters have staggered animation delays", new Set(workingLetters.map(letter => letter.style.animationDelay)).size === workingLetters.length);
+await new Promise(resolve => window.setTimeout(resolve, 450));
+check("timer tick preserves animated letter nodes", workingLabel.firstChild === workingLetters[0]);
 hostMessage({ type: "promptRejected", error: "transport disconnected", clientRequestId: firstOptimisticPrompt?.payload?.clientRequestId });
 check("rejection removes the exact optimistic row", !scroller.textContent.includes("first optimistic prompt") && scroller.textContent.includes("second optimistic prompt"), scroller.textContent);
 check("rejection of one queued send keeps the working spinner", !!scroller.querySelector(".working-row") && !/Sending/.test(scroller.querySelector(".working-label")?.textContent ?? ""));
@@ -1702,8 +1763,9 @@ check("active list still shows the unarchived row",
 const archivedRow = [...archiveGroup.querySelectorAll(".history-item")].find((i) => i.textContent.includes("finished experiment"));
 check("an already-archived row has no archive action",
 	!!archivedRow && ![...archivedRow.querySelectorAll(".history-action")].some((b) => (b.title ?? "").startsWith("Archive")));
-check("history actions stay on the title line when subagents expand",
-	fs.readFileSync(new URL("../media/main.css", import.meta.url), "utf8").includes(".history-actions {\n\tposition: absolute;\n\tright: 8px;\n\ttop: 8px;"));
+check("history actions stay in the title row without covering its name",
+	!!archivedRow.querySelector(".history-item-top > .history-actions") &&
+	fs.readFileSync(new URL("../media/main.css", import.meta.url), "utf8").includes(".history-actions {\n\tflex-shrink: 0;"));
 
 // --- history search reaches the host, and transcript hits rank and explain themselves ---
 posted.length = 0;
@@ -1899,7 +1961,7 @@ const initialWorkingVerb = initialWorkingLabel.textContent;
 workingNow += 7_999;
 workingTick();
 check("working verb stays for eight seconds", initialWorkingLabel.textContent === initialWorkingVerb);
-check("elapsed time is separate from the animated verb", scroller.querySelector(".working-elapsed")?.textContent === "· 7s");
+check("elapsed time is separate from the animated verb", scroller.querySelector(".working-elapsed")?.textContent === "7s");
 workingNow += 1;
 workingTick();
 check("working verb changes after eight seconds without replacing its element", initialWorkingLabel === scroller.querySelector(".working-label") && initialWorkingLabel.textContent !== initialWorkingVerb);
