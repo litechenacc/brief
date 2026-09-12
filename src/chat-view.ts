@@ -255,7 +255,7 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 					if (message.type === "ready") { if (!this.sidebarResolved && this.location() === "editor") await this.showSidebarHistory(view); return; }
 					if (message.type === "newSession") { await this.newSession(); return; }
 					if (message.type === "switchSession") { await this.openSession(this.history(), message.path, message.sessionId); return; }
-					if (["requestHistory", "searchHistory", "renameHistorySession", "stopSession", "archiveSession", "deleteSession"].includes(message.type)) {
+					if (["requestHistory", "searchHistory", "renameHistorySession", "stopSession", "archiveSession", "unarchiveSession", "deleteSession"].includes(message.type)) {
 						await handleMessage(message, this.history(), (reply) => { void view.webview.postMessage(reply); });
 					}
 				})().catch((error) => this.history().showErrorNotice(String(error)));
@@ -265,6 +265,7 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 			if (message.type === "viewFocused") { this.lastActive = tab; return; }
 			if (message.type === "ready") {
 				if (view.transferring) return;
+				tab.controller.sendCachedModels();
 				view.loading = (view.loading ?? Promise.resolve()).catch(() => {}).then(async () => {
 					await this.initialize(tab);
 					if (!view.closed && !tab.closed && tab.view === view) await tab.controller.refreshSnapshot();
@@ -493,6 +494,9 @@ async function handleMessage(message: WebviewToHost, controller: SessionControll
 			return;
 		case "archiveSession":
 			await controller.archiveSession(message.path, message.sessionId);
+			return;
+		case "unarchiveSession":
+			await controller.unarchiveSession(message.path, message.sessionId);
 			return;
 		case "backToParent":
 			await controller.backToParent();

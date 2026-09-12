@@ -151,6 +151,20 @@ interface OptimisticUserRow {
 	row: HTMLElement;
 }
 
+interface LensTurn {
+	ordinal: number;
+	text: string;
+	row: HTMLElement | null;
+	message: UserMessage | null;
+	optimisticId?: string;
+}
+
+interface LensBand {
+	start: number;
+	end: number;
+	kind: "individual" | "context-5" | "context-10";
+}
+
 export class Transcript {
 	private toolBlocks = new Map<string, ToolBlock>();
 	private streamingBubble: HTMLElement | null = null;
@@ -242,6 +256,16 @@ export class Transcript {
 	private pendingSelection:
 		| { start: SelectionPoint; end: SelectionPoint; block: HTMLElement; wasExpanded: boolean }
 		| null = null;
+
+	/** User prompts are kept separately from rendered rows so the lens follows windowed history. */
+	private lensTurns: LensTurn[] = [];
+	private lensRoot: HTMLElement | null = null;
+	private lensFocus = 0;
+	private lensCurrent = 0;
+	private lensBands: LensBand[] = [];
+	private lensCollapseTimer: number | undefined;
+	private lensFocusTimer: number | undefined;
+	private lensTooltipTimer: number | undefined;
 
 	/** Child-index path from the scroller down to a node, plus the offset in it. */
 	private capturePoint(node: Node, offset: number): SelectionPoint | null {
@@ -347,6 +371,7 @@ export class Transcript {
 		// their flick was ever noticed — the fight this used to lose. wheel and
 		// touchmove unstick synchronously, so the very next frame already knows.
 		this.wireSelectionPreserve();
+		this.mountConversationLens();
 		this.scroller.addEventListener("wheel", (event) => {
 			if ((event as WheelEvent).deltaY < 0) this.setStick(false);
 		}, { passive: true });
@@ -358,6 +383,7 @@ export class Transcript {
 			// and needs no suppression: scrollToBottom only runs while already stuck.
 			this.setStick(this.atBottom());
 			this.maybeLoadEarlier();
+			this.updateLensCurrent();
 		}, { passive: true });
 		// A viewport that SHRINKS moves the bottom without moving the reader.
 		//
@@ -373,7 +399,10 @@ export class Transcript {
 		// Re-pin, never force: scrollToBottom() is a no-op for a reader who chose
 		// to scroll away, so a resize cannot drag anyone back down.
 		if (typeof ResizeObserver !== "undefined") {
-			this.viewportObserver = new ResizeObserver(() => this.scrollToBottom());
+			this.viewportObserver = new ResizeObserver(() => {
+				this.scrollToBottom();
+				this.updateLensCurrent();
+			});
 			this.viewportObserver.observe(this.scroller);
 		}
 	}
@@ -414,6 +443,223 @@ export class Transcript {
 			this.scroller.appendChild(this.jumpBtn);
 		}
 		this.jumpBtn.classList.add("visible");
+	}
+
+	// ---------------------------------------------------------------
+	// Conversation turn lens
+	// ---------------------------------------------------------------
+
+	/** The lens is a sibling overlay, so expanding it never changes transcript width. */
+	private mountConversationLens(): void {
+		const host = this.scroller.parentElement;
+		if (!host) return;
+		const root = el("div", "conversation-lens");
+		root.setAttribute("aria-label", "Conversation turns");
+		root.setAttribute("role", "navigation");
+		const rail = el("div", "lens-rail");
+		const current = el("div", "lens-current");
+		rail.appendChild(current);
+		root.appendChild(rail);
+		host.appendChild(root);
+		this.lensRoot = root;
+		root.addEventListener("mouseenter", () => {
+			window.clearTimeout(this.lensCollapseTimer);
+			root.classList.add("expanded");
+			this.paintLens();
+		});
+		root.addEventListener("mouseleave", () => {
+			window.clearTimeout(this.lensCollapseTimer);
+			this.lensCollapseTimer = window.setTimeout(() => {
+				root.classList.remove("expanded");
+				root.querySelector(".lens-tooltip")?.remove();
+			}, 350);
+		});
+		root.addEventListener("mousemove", (event) => this.lensPointerMove(event));
+		this.paintLens();
+	}
+
+	private lensPercent(index: number): string {
+		const total = Math.max(1, this.lensTurns.length - 1);
+		return `${(index / total) * 100}%`;
+	}
+
+	private lensPointerMove(event: MouseEvent): void {
+		if (!this.lensRoot || this.lensTurns.length < 11 || this.lensBands.length === 0) return;
+		const rect = this.lensRoot.getBoundingClientRect();
+		if (rect.height <= 0) return;
+		const position = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
+		// The physical ends are explicit edge targets. This keeps the first/last
+		// seven turns reachable without inventing symmetric blank slots.
+		if (position <= 0) {
+			this.scheduleLensFocus(0);
+			return;
+		}
+		if (position >= 1) {
+			this.scheduleLensFocus(this.lensTurns.length - 1);
+			return;
+		}
+		const slot = Math.round(position * (this.lensBands.length - 1));
+		const band = this.lensBands[slot];
+		if (!band) return;
+		const next = Math.round((band.start + band.end) / 2);
+		this.scheduleLensFocus(next);
+	}
+
+	private scheduleLensFocus(next: number): void {
+		next = Math.max(0, Math.min(this.lensTurns.length - 1, next));
+		if (next === this.lensFocus) return;
+		window.clearTimeout(this.lensFocusTimer);
+		// A short settle window prevents a pointer resting on a boundary from
+		// swapping the seven nearby markers back and forth.
+		this.lensFocusTimer = window.setTimeout(() => {
+			this.lensFocus = next;
+			this.paintLens();
+		}, 35);
+	}
+
+	private updateLensCurrent(): void {
+		if (this.lensTurns.length === 0) return;
+		const top = this.scroller.getBoundingClientRect().top;
+		const anchor = top + this.scroller.clientHeight * 0.25;
+		let current = 0;
+		let found = false;
+		for (const [index, turn] of this.lensTurns.entries()) {
+			const row = turn.row;
+			if (!row?.isConnected) continue;
+			const rowTop = row.getBoundingClientRect().top;
+			if (rowTop <= anchor) {
+				current = index;
+				found = true;
+			}
+		}
+		if (!found && this.scroller.scrollTop <= 0) current = 0;
+		this.lensCurrent = Math.max(0, Math.min(this.lensTurns.length - 1, current));
+		if (this.lensFocus < 0 || this.lensFocus >= this.lensTurns.length) this.lensFocus = this.lensCurrent;
+		const marker = this.lensRoot?.querySelector<HTMLElement>(".lens-current");
+		if (marker) marker.style.top = this.lensPercent(this.lensCurrent);
+	}
+
+	private paintLens(): void {
+		const root = this.lensRoot;
+		if (!root) return;
+		window.clearTimeout(this.lensTooltipTimer);
+		root.querySelector(".lens-tooltip")?.remove();
+		const count = this.lensTurns.length;
+		root.hidden = count <= 10;
+		root.setAttribute("aria-hidden", String(count <= 10));
+		this.lensBands = [];
+		if (count <= 10) return;
+		const rail = root.querySelector<HTMLElement>(".lens-rail");
+		if (!rail) return;
+		rail.replaceChildren();
+		const current = el("div", "lens-current");
+		current.style.top = this.lensPercent(this.lensCurrent);
+		rail.appendChild(current);
+		if (!root.classList.contains("expanded")) return;
+
+		const start = Math.max(0, Math.min(count - 7, this.lensFocus - 3));
+		const end = Math.min(count - 1, start + 6);
+		const bands: LensBand[] = [];
+		const before: LensBand[] = [];
+		// Build context outward from the focus: the nearest five are always the
+		// medium context, then farther turns are grouped in tens.
+		for (let cursor = start - 1, nearest = true; cursor >= 0;) {
+			const size = nearest ? 5 : 10;
+			const from = Math.max(0, cursor - size + 1);
+			before.push({ start: from, end: cursor, kind: nearest ? "context-5" : "context-10" });
+			cursor = from - 1;
+			nearest = false;
+		}
+		bands.push(...before.reverse());
+		for (let index = start; index <= end; index += 1) bands.push({ start: index, end: index, kind: "individual" });
+		for (let cursor = end + 1, nearest = true; cursor < count;) {
+			const size = nearest ? 5 : 10;
+			const to = Math.min(count - 1, cursor + size - 1);
+			bands.push({ start: cursor, end: to, kind: nearest ? "context-5" : "context-10" });
+			cursor = to + 1;
+			nearest = false;
+		}
+		this.lensBands = bands;
+		const slots = Math.max(1, bands.length - 1);
+		bands.forEach((band, slot) => this.addLensMarker(rail, band, slot / slots));
+	}
+
+	private addLensMarker(rail: HTMLElement, band: LensBand, top: number): void {
+		const { start, end } = band;
+		const className = band.kind === "individual" ? "lens-individual" : band.kind === "context-5" ? "lens-context-5" : "lens-context-10";
+		const marker = el("button", `lens-marker ${className}`) as HTMLButtonElement;
+		marker.type = "button";
+		const renderedTop = `${top * 100}%`;
+		marker.style.top = renderedTop;
+		marker.dataset.start = String(start);
+		marker.dataset.end = String(end);
+		marker.setAttribute("aria-label", start === end ? `Turn ${start + 1}` : `Turns ${start + 1}–${end + 1}`);
+		marker.addEventListener("mouseenter", () => {
+			window.clearTimeout(this.lensTooltipTimer);
+			if (start === end) {
+				this.lensTooltipTimer = window.setTimeout(() => this.showLensTooltip(start, renderedTop), 200);
+			} else {
+				this.scheduleLensFocus(Math.round((start + end) / 2));
+			}
+		});
+		marker.addEventListener("mouseleave", () => {
+			window.clearTimeout(this.lensTooltipTimer);
+			this.lensRoot?.querySelector(".lens-tooltip")?.remove();
+		});
+		marker.addEventListener("click", (event) => {
+			event.stopPropagation();
+			if (start === end) this.jumpToTurn(start);
+			else this.scheduleLensFocus(Math.round((start + end) / 2));
+		});
+		rail.appendChild(marker);
+	}
+
+	private showLensTooltip(index: number, renderedTop: string): void {
+		const root = this.lensRoot;
+		const turn = this.lensTurns[index];
+		if (!root || !turn) return;
+		root.querySelector(".lens-tooltip")?.remove();
+		const tooltip = el("div", "lens-tooltip");
+		tooltip.appendChild(el("div", "lens-tooltip-heading", `Turn ${index + 1} of ${this.lensTurns.length}`));
+		tooltip.appendChild(el("div", "lens-tooltip-text", turn.text || "(image prompt)"));
+		tooltip.style.top = renderedTop;
+		root.appendChild(tooltip);
+	}
+
+	private jumpToTurn(index: number): void {
+		const turn = this.lensTurns[index];
+		if (!turn) return;
+		let row = turn.row;
+		// Windowed history is loaded in batches from the boundary nearest the
+		// rendered tail. Explicit navigation is the one case where loading rows is
+		// intentional; ordinary scrolling keeps the existing behavior unchanged.
+		while ((!row || !row.isConnected) && this.olderMessages.length > 0) {
+			this.loadEarlier();
+			row = turn.row;
+		}
+		// A row that was already pruned has no complete turn reconstruction path.
+		// Leave the transcript ordering intact instead of fabricating a partial row.
+		if (!row?.isConnected) return;
+		this.setStick(false);
+		const scrollerTop = this.scroller.getBoundingClientRect().top;
+		const rowTop = row.getBoundingClientRect().top;
+		const target = this.scroller.clientHeight * 0.25;
+		this.scroller.scrollTop += rowTop - scrollerTop - target;
+		this.updateLensCurrent();
+	}
+
+	private addLensTurn(message: UserMessage, ordinal: number, row: HTMLElement | null): LensTurn {
+		const existing = this.lensTurns.find((turn) => turn.message === message);
+		if (existing) {
+			existing.ordinal = ordinal;
+			existing.text = this.userMessageText(message);
+			existing.row = row ?? existing.row;
+			return existing;
+		}
+		const turn = { ordinal, text: this.userMessageText(message), row, message };
+		this.lensTurns.push(turn);
+		this.lensTurns.sort((a, b) => a.ordinal - b.ordinal);
+		return turn;
 	}
 
 	// ---------------------------------------------------------------
@@ -521,10 +767,17 @@ export class Transcript {
 		this.lastPartialAssistant = null;
 		this.stopWorking();
 		this.optimisticRows.clear();
+		this.lensTurns = [];
+		this.lensFocus = 0;
+		this.lensCurrent = 0;
 		this.userOrdinals = new WeakMap<object, number>();
 		this.nextUserOrdinal = 0;
 		for (const message of messages) {
-			if (message.role === "user") this.userOrdinals.set(message, this.nextUserOrdinal++);
+			if (message.role === "user") {
+				const ordinal = this.nextUserOrdinal++;
+				this.userOrdinals.set(message, ordinal);
+				this.addLensTurn(message as UserMessage, ordinal, null);
+			}
 		}
 		// The jump pill lived inside the scroller we just emptied; keeping the
 		// detached node would leave the operator with no way back to the bottom
@@ -549,6 +802,9 @@ export class Transcript {
 		// A freshly opened session always lands on the latest message, whatever
 		// the scroll position was in the session we came from.
 		this.forceScrollToBottom();
+		this.updateLensCurrent();
+		this.lensFocus = this.lensCurrent;
+		this.paintLens();
 	}
 
 	/**
@@ -624,6 +880,8 @@ export class Transcript {
 		}
 		this.renderEarlierBar();
 		this.scroller.scrollTop = topBefore + (this.scroller.scrollHeight - heightBefore);
+		this.updateLensCurrent();
+		this.paintLens();
 	}
 
 	/**
@@ -830,6 +1088,8 @@ export class Transcript {
 		}
 		this.pruneOldRows();
 		this.scrollToBottom();
+		this.updateLensCurrent();
+		this.paintLens();
 	}
 
 	isStreaming(): boolean {
@@ -972,10 +1232,16 @@ export class Transcript {
 		// This ordinal is temporary: the durable ordinal is applied when the agent
 		// echoes the message. It still makes a just-sent row fork sensibly before
 		// that echo arrives.
-		const row = this.buildUserRow({ role: "user", content } as UserMessage, this.nextUserOrdinal + this.optimisticRows.size);
+		const ordinal = this.nextUserOrdinal + this.optimisticRows.size;
+		const optimisticMessage = { role: "user", content } as UserMessage;
+		const row = this.buildUserRow(optimisticMessage, ordinal);
 		this.place(row);
 		this.hasContent = true;
 		this.optimisticRows.set(clientRequestId, { clientRequestId, text, imageSignature: this.imageSignature(images), row });
+		this.lensTurns.push({ ordinal, text, row, message: optimisticMessage, optimisticId: clientRequestId });
+		this.lensTurns.sort((a, b) => a.ordinal - b.ordinal);
+		this.lensFocus = this.lensCurrent = Math.max(0, this.lensTurns.length - 1);
+		this.paintLens();
 		this.markSending();
 		// The operator just hit send — that is an explicit intent to follow along.
 		this.forceScrollToBottom();
@@ -1004,6 +1270,9 @@ export class Transcript {
 		if (!pending) return false;
 		this.optimisticRows.delete(pending.clientRequestId);
 		pending.row.remove();
+		const optimistic = this.lensTurns.find((turn) => turn.optimisticId === pending.clientRequestId);
+		if (optimistic) this.lensTurns.splice(this.lensTurns.indexOf(optimistic), 1);
+		this.paintLens();
 		if (this.optimisticRows.size === 0 && !this.streaming && !this.streamingBubble) this.stopWorking();
 		if (!this.scroller.querySelector(".row, .tool, .system-note, .working-row, .retry-row, .spawned-card")) {
 			this.hasContent = false;
@@ -1037,23 +1306,30 @@ export class Transcript {
 		const role = message.role;
 		if (role === "user") {
 			const userMessage = message as UserMessage;
+			const ordinal = this.userMessageOrdinal(userMessage);
+			const lensTurn = this.addLensTurn(userMessage, ordinal, null);
 			const backgroundTaskStatus = this.backgroundTaskStatus(this.userMessageText(userMessage));
 			if (backgroundTaskStatus) {
 				this.place(this.buildConversationMessage("background task", backgroundTaskStatus, this.userMessageText(userMessage), "background"));
 				return;
 			}
-			const ordinal = this.userMessageOrdinal(userMessage);
 			const pending = this.matchingOptimistic(userMessage);
 			if (pending) {
 				this.optimisticRows.delete(pending.clientRequestId);
+				const optimistic = this.lensTurns.find((turn) => turn.optimisticId === pending.clientRequestId);
+				if (optimistic) this.lensTurns.splice(this.lensTurns.indexOf(optimistic), 1);
 				this.deps.onOptimisticConfirmed?.(pending.clientRequestId);
 				if (pending.row.isConnected) {
 					pending.row.dataset.userOrdinal = String(ordinal);
 					this.markRowTimestamp(pending.row, this.messageTimestamp(userMessage));
+					lensTurn.row = pending.row;
+					this.paintLens();
 					return; // already rendered optimistically
 				}
 			}
-			this.place(this.buildUserRow(userMessage, ordinal));
+			const row = this.buildUserRow(userMessage, ordinal);
+			lensTurn.row = row;
+			this.place(row);
 		} else if (role === "assistant") {
 			this.place(this.buildAssistantRow(message as AssistantMessage, isPartial));
 		} else if (role === "toolResult") {
@@ -1228,6 +1504,7 @@ export class Transcript {
 	private buildUserRow(message: UserMessage, ordinal: number): HTMLElement {
 		const row = el("div", "row row-user");
 		row.dataset.userOrdinal = String(ordinal);
+		row.dataset.lensTurn = String(ordinal);
 		const plainText = this.userMessageText(message);
 		const bubble = el("div", "bubble bubble-user");
 		if (typeof message.content === "string") {
@@ -1907,6 +2184,7 @@ export class Transcript {
 	scrollToBottom(): void {
 		if (!this.stickToBottom) return;
 		this.scroller.scrollTop = this.scroller.scrollHeight;
+		this.updateLensCurrent();
 	}
 
 	/** Unconditional snap — own sends or explicit user jumps. */
@@ -1914,6 +2192,7 @@ export class Transcript {
 		this.stickToBottom = true;
 		this.scroller.scrollTop = this.scroller.scrollHeight;
 		this.jumpBtn?.classList.remove("visible");
+		this.updateLensCurrent();
 	}
 }
 

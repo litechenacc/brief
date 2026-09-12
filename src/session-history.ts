@@ -23,7 +23,7 @@ import type { SessionController } from "./session-controller.js";
 // Editor panels have separate runtimes, but edit the same workspace history.
 // Share only these overlays so a panel cannot persist an older panel's snapshot.
 const workspaceHistory = new WeakMap<SessionController["context"]["workspaceState"], Pick<SessionController,
-	"historySortMs" | "historyArchived" | "historyUnreadComplete"
+	"historySortMs" | "historyArchived" | "historyUnreadComplete" | "historyWasRunning"
 >>();
 
 export const historyCatalogMethods = {
@@ -47,12 +47,14 @@ restoreHistoryUiState(this: SessionController): void {
 		this.historySortMs = shared.historySortMs;
 		this.historyArchived = shared.historyArchived;
 		this.historyUnreadComplete = shared.historyUnreadComplete;
+		this.historyWasRunning = shared.historyWasRunning;
 		return;
 	}
 	workspaceHistory.set(workspaceState, {
 		historySortMs: this.historySortMs,
 		historyArchived: this.historyArchived,
 		historyUnreadComplete: this.historyUnreadComplete,
+		historyWasRunning: this.historyWasRunning,
 	});
 	const saved = this.context.workspaceState?.get<{
 		sortMs?: Record<string, number>;
@@ -118,6 +120,7 @@ markHistoryWaitingForUser(this: SessionController, sessionPath = this.viewedSess
 
 markHistorySessionOpened(this: SessionController, sessionPath: string): void {
 	const key = this.historyPathKey(sessionPath);
+	this.historyWasRunning.delete(key);
 	if (!this.historyUnreadComplete.has(key)) return;
 	this.historyUnreadComplete.delete(key);
 	this.persistHistoryUiState();
@@ -135,6 +138,18 @@ markHistoryArchived(this: SessionController, sessionPath: string): void {
 	this.persistHistoryUiState();
 	this.overlayCachedHistory();
 	this.paintHistory();
+},
+
+markHistoryUnarchived(this: SessionController, sessionPath = this.viewedSessionPath()): void {
+	if (!sessionPath || !this.historyArchived.delete(this.historyPathKey(sessionPath))) return;
+	this.persistHistoryUiState();
+	this.overlayCachedHistory();
+	this.paintHistory();
+},
+
+async unarchiveSession(this: SessionController, sessionPath: string, sessionId: string): Promise<void> {
+	const session = await this.resolveHistorySession(sessionPath, sessionId);
+	if (session) this.markHistoryUnarchived(session.path);
 },
 
 /**
@@ -221,6 +236,13 @@ rowsFromCatalog(this: SessionController, catalog: SessionSummaryRef[]): RecentSe
 	const root = normalizeFsPath(this.workspaceRoot);
 	const inWorkspaceRows: Array<{ row: RecentSession; source: SessionSummaryRef }> = [];
 	const otherRows: Array<{ row: RecentSession; source: SessionSummaryRef }> = [];
+	const directChildrenOf = (parent: SessionSummaryRef, fallbackId: string): SessionSummaryRef[] => {
+		const parentIds = new Set([parent.sessionId ?? fallbackId, parent.activeSessionId ?? fallbackId]);
+		return catalog.filter((child) =>
+			(child.rlmDepth ?? 0) === 1 &&
+			[child.parentActiveSessionId, child.parentSessionId].some((parentId) => parentId !== undefined && parentIds.has(parentId)),
+		);
+	};
 	for (const s of catalog) {
 		if (!s.sessionFile || !s.cwd) continue;
 		// Subagents belong under their parent in the strip, not in history.
@@ -237,8 +259,11 @@ rowsFromCatalog(this: SessionController, catalog: SessionSummaryRef[]): RecentSe
 		const modified = s.modified ?? s.lastActivityAt;
 		const parsed = modified ? Date.parse(modified) : Number.NaN;
 		const inWorkspace = normalizeFsPath(s.cwd) === root;
+		const id = s.sessionId ?? path.basename(s.sessionFile, ".jsonl");
+		const ownStatus = rosterStatus(s);
+		const status = directChildrenOf(s, id).some((child) => rosterStatus(child) === "running") ? "running" : ownStatus;
 		const row = this.decorateHistoryRow({
-			id: s.sessionId ?? path.basename(s.sessionFile, ".jsonl"),
+			id,
 			path: s.sessionFile,
 			cwd: s.cwd,
 			timestamp: s.created ?? modified ?? new Date().toISOString(),
@@ -247,8 +272,8 @@ rowsFromCatalog(this: SessionController, catalog: SessionSummaryRef[]): RecentSe
 			firstPrompt: s.firstMessage,
 			inWorkspace,
 			running: isRunningSummary(s),
-			status: rosterStatus(s),
-			...(s.statusLabel ? { statusLabel: s.statusLabel } : {}),
+			status,
+			...(status === ownStatus && s.statusLabel ? { statusLabel: s.statusLabel } : {}),
 		});
 		(inWorkspace ? inWorkspaceRows : otherRows).push({ row, source: s });
 	}
@@ -262,17 +287,10 @@ rowsFromCatalog(this: SessionController, catalog: SessionSummaryRef[]): RecentSe
 	];
 	for (const entry of visible) {
 		if (entry.row.status !== "running" && entry.row.status !== "idle") continue;
-		const parentSessionId = entry.source.sessionId ?? entry.row.id;
-		const parentActiveSessionId = entry.source.activeSessionId ?? entry.row.id;
-		const parentIds = new Set([parentSessionId, parentActiveSessionId]);
-		const children = catalog
+		const children = directChildrenOf(entry.source, entry.row.id)
 			.filter((child) => {
-				if ((child.rlmDepth ?? 0) !== 1) return false;
 				const status = rosterStatus(child);
-				if (status !== "running" && status !== "idle") return false;
-				return [child.parentActiveSessionId, child.parentSessionId].some(
-					(parentId) => parentId !== undefined && parentIds.has(parentId),
-				);
+				return status === "running" || status === "idle";
 			})
 			.map((child) => ({
 				id: child.sessionId ?? child.activeSessionId ?? child.id ?? "",

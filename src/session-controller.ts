@@ -59,6 +59,7 @@ import { archiveSessionFile, deleteSession, isSessionActive, renameSessionOfflin
 import { RpcClient } from "./rpc-client.js";
 
 const execFileAsync = promisify(execFile);
+const MODEL_CACHE_KEY = "brief.availableModels";
 
 /**
  * History bucket quotas. Separate on purpose: "this workspace" is the operator's
@@ -125,6 +126,8 @@ export interface SessionController {
 	markHistorySessionOpened(sessionPath: string): void;
 	markHistoryUnread(sessionPath: string, sessionId: string): Promise<void>;
 	markHistoryArchived(sessionPath: string): void;
+	markHistoryUnarchived(sessionPath?: string): void;
+	unarchiveSession(sessionPath: string, sessionId: string): Promise<void>;
 	decorateHistoryRow(row: RecentSession): RecentSession;
 	showHistoryView(): void;
 	resolveHistorySession(sessionPath: string, sessionId: string): Promise<ResolvedHistorySession | null>;
@@ -579,8 +582,9 @@ export class SessionController implements vscode.Disposable {
 				this.scheduleChildrenRefresh();
 			}
 		}
-		if ((event.type === "message_start" || event.type === "message_end") && event.message.role === "user" && !this.firstPromptLabel) {
-			this.firstPromptLabel = deriveSessionLabel({ firstPrompt: firstUserPrompt([event.message]) });
+		if ((event.type === "message_start" || event.type === "message_end") && event.message.role === "user") {
+			if (!this.firstPromptLabel) this.firstPromptLabel = deriveSessionLabel({ firstPrompt: firstUserPrompt([event.message]) });
+			this.markHistoryUnarchived();
 		}
 		switch (event.type) {
 			case "agent_start":
@@ -1538,6 +1542,16 @@ export class SessionController implements vscode.Disposable {
 		}
 	}
 
+	sendCachedModels(): void {
+		const models = this.context.globalState.get<RpcModel[]>(MODEL_CACHE_KEY, []);
+		if (models.length > 0) this.broadcast({ type: "models", models });
+	}
+
+	private async publishModels(models: RpcModel[]): Promise<void> {
+		this.broadcast({ type: "models", models });
+		await this.context.globalState.update(MODEL_CACHE_KEY, models);
+	}
+
 	async listModels(): Promise<void> {
 		if (this.guardObservedReadOnly("listing models")) return;
 		const attached = this.attached;
@@ -1549,7 +1563,7 @@ export class SessionController implements vscode.Disposable {
 					{ type: "get_available_models", activeSessionId: attached.activeSessionId },
 					60_000,
 				);
-				if (this.isCurrentAttachment(attached)) this.broadcast({ type: "models", models: data.models ?? [] });
+				if (this.isCurrentAttachment(attached)) await this.publishModels(data.models ?? []);
 			} catch (err) {
 				if (this.isCurrentAttachment(attached)) {
 					this.broadcast({ type: "notice", level: "error", text: `Could not list attached-session models: ${err instanceof Error ? err.message : String(err)}` });
@@ -1567,7 +1581,7 @@ export class SessionController implements vscode.Disposable {
 			// Forwarded verbatim: the payload is the agent's whole Model object, and
 			// the webview needs the fields this cast used to hide (thinkingLevelMap).
 			const data = response.data as { models?: RpcModel[] };
-			this.broadcast({ type: "models", models: data.models ?? [] });
+			await this.publishModels(data.models ?? []);
 		}
 	}
 

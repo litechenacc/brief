@@ -67,6 +67,7 @@ class Controller {
 	async ensureStarted() { this.calls.push(["start"]); }
 	async switchSession(...args) { this.calls.push(["switch", ...args]); await this.switchGate; }
 	async refreshSnapshot(...args) { this.calls.push(["snapshot", ...args]); await this.refreshGate; }
+	sendCachedModels() { this.calls.push(["cachedModels"]); }
 	async listModels() { await this.modelGate; } async listCommands() {} sendFavorites() {}
 	async listHistory() { this.calls.push(["history"]); this.sink.post({ type: "history", sessions: [] }); }
 	async resolveHistorySession(path, id) { this.calls.push(["resolve", path, id]); return this.historyGate ? await this.historyGate : path.startsWith("/known/") ? { path, id } : undefined; }
@@ -202,6 +203,7 @@ try {
 	let resolveModels;
 	cr.modelGate = new Promise((resolve) => { resolveModels = resolve; });
 	restored.send({ type: "ready" }); restored.send({ type: "ready" }); await tick();
+	assert.ok(cr.calls.some(([name]) => name === "cachedModels"), "cached models paint before live discovery finishes");
 	restored.send({ type: "abort" }); await tick();
 	assert.ok(cr.calls.some(([name]) => name === "abort"), "pending model discovery cannot block Stop");
 	resolveModels(); await tick();

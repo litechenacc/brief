@@ -669,6 +669,9 @@ for (const sessionId of ["focus-a", "focus-b"]) {
 	hostMessage({ type: "history", sessions: focusSessions });
 	check("sidebar highlights only the focused editor session after refresh", document.querySelectorAll(".history-item.current").length === 1 && document.querySelector(".history-item.current .history-item-name")?.textContent === sessionId);
 }
+const selectedHistoryRow = document.querySelector(".history-item.current");
+hostMessage({ type: "historySelection", sessionId: "focus-b" });
+check("repeated streaming selection updates preserve clickable history rows", document.querySelector(".history-item.current") === selectedHistoryRow);
 hostMessage({ type: "historySelection" });
 check("closing the focused session clears selection", !document.querySelector(".history-item.current"));
 hostMessage({ type: "setHistoryMode", enabled: false });
@@ -809,6 +812,11 @@ const rowNamed = (text) => [...document.querySelectorAll(".history-item")].find(
 const markOf = (text) => rowNamed(text)?.querySelector(".running-mark");
 const runRow = rowNamed("live worker");
 check("running row shows the animated mark", !!runRow.querySelector(".running-dot"));
+const runningDotDelay = Number.parseFloat(runRow.querySelector(".running-dot")?.style.animationDelay ?? "");
+const runningDotPhase = ((-runningDotDelay % 2800) + 2800) % 2800;
+const wallClockPhase = Date.now() % 2800;
+const phaseDelta = Math.min(Math.abs(runningDotPhase - wallClockPhase), 2800 - Math.abs(runningDotPhase - wallClockPhase));
+check("rebuilt running lamps join a shared animation phase", Number.isFinite(runningDotDelay) && phaseDelta < 50, `${runningDotDelay}ms, delta=${phaseDelta}ms`);
 check("a running row is the red working lamp", markOf("live worker")?.className.includes("working"), markOf("live worker")?.className);
 check("an idle row still gets a dot, not nothing", !!markOf("quiet archive")?.querySelector(".running-dot"));
 check("an idle row without unread is grey", markOf("quiet archive")?.className.includes("seen"), markOf("quiet archive")?.className);
@@ -1792,6 +1800,13 @@ check("active list still shows the unarchived row",
 const archivedRow = [...archiveGroup.querySelectorAll(".history-item")].find((i) => i.textContent.includes("finished experiment"));
 check("an already-archived row has no archive action",
 	!!archivedRow && ![...archivedRow.querySelectorAll(".history-action")].some((b) => (b.title ?? "").startsWith("Archive")));
+const unarchiveBtn = [...archivedRow.querySelectorAll(".history-action")].find((b) => b.title === "Move out of Archive");
+check("an archived row offers a move-out action", !!unarchiveBtn);
+posted.length = 0;
+unarchiveBtn.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+check("move-out posts without opening the session",
+	posted.some((m) => m.type === "unarchiveSession" && m.sessionId === "arch-1") && !posted.some((m) => m.type === "switchSession"),
+	JSON.stringify(posted));
 check("history actions stay in the title row without covering its name",
 	!!archivedRow.querySelector(".history-item-top > .history-actions") &&
 	fs.readFileSync(new URL("../media/main.css", import.meta.url), "utf8").includes(".history-actions {\n\tflex-shrink: 0;"));
@@ -1869,6 +1884,12 @@ textarea.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbl
 const midRunPrompt = posted.find((m) => m.type === "prompt");
 check("a mid-run send carries the chosen delivery to the host", midRunPrompt?.payload?.streamingBehavior === "followUp",
 	JSON.stringify(midRunPrompt?.payload?.streamingBehavior ?? "<none>"));
+check("queued input is not painted as a sent conversation message", !scroller.textContent.includes("and then run the tests"), scroller.textContent);
+hostMessage({ type: "event", event: { type: "session_action_update", actions: { queuedCount: 1, steering: [], followUps: ["and then run the tests"] } } });
+check("queued input stays in the pending input strip", !document.querySelector(".pending-inputs").hidden && document.querySelector(".pending-inputs").textContent.includes("and then run the tests"));
+hostMessage({ type: "promptRejected", error: "queue rejected", clientRequestId: midRunPrompt?.payload?.clientRequestId });
+check("rejected queued input returns to the composer", textarea.value === "and then run the tests", textarea.value);
+textarea.value = "";
 posted.length = 0;
 stopBtn.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
 check("stop posts abort", posted.some((m) => m.type === "abort"), JSON.stringify(posted));

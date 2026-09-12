@@ -33,6 +33,20 @@ const controller = new SessionController(
 );
 controller.attach({ post: (message) => posts.push(message) });
 
+const cachedModels = [{ provider: "cached-provider", id: "cached-model" }];
+memory.set("brief.availableModels", cachedModels);
+controller.sendCachedModels();
+check("cached models are available before runtime discovery", posts.at(-1)?.type === "models" && posts.at(-1)?.models === cachedModels);
+
+const cachedModelsEnsureStarted = controller.ensureStarted;
+controller.ensureStarted = async () => {};
+controller.client = { running: true, request: async () => ({ success: true, data: { models: [{ provider: "live-provider", id: "live-model" }] } }) };
+await controller.listModels();
+check("successful model discovery replaces the cache", memory.get("brief.availableModels")?.[0]?.id === "live-model");
+controller.ensureStarted = cachedModelsEnsureStarted;
+controller.client = null;
+posts.length = 0;
+
 const validPath = path.join(workdir, "valid-session.jsonl");
 const forgedPath = path.join(workdir, "forged-session.jsonl");
 fs.writeFileSync(validPath, '{"type":"session","id":"root"}\n');
@@ -886,6 +900,26 @@ controller.scheduleChildrenRefresh = originalIdentityChildrenRefresh;
 	rows = controller.rowsFromCatalog(catalog);
 	check("operator archive flags the row instead of dropping it",
 		rows.find((r) => r.id === "hist-live")?.archived === true);
+	controller.lastHistory = rows;
+	controller.actionHistory = rows;
+	await controller.unarchiveSession(live, "hist-live");
+	check("the history action removes an operator archive overlay",
+		controller.rowsFromCatalog(catalog).find((r) => r.id === "hist-live")?.archived !== true);
+
+	controller.markHistoryArchived(live);
+	const previousAttached = controller.attached;
+	const previousAttachedEpoch = controller.attachedEpoch;
+	controller.attached = { activeSessionId: "live-handle", sessionPath: live, sessionId: "hist-live" };
+	controller.attachedEpoch = controller.viewEpoch;
+	posts.length = 0;
+	controller.onAgentEvent({ type: "message_start", message: { role: "user", text: "continue archived work" } });
+	check("a received prompt moves its session out of Archive",
+		!controller.historyArchived.has(controller.historyPathKey(live)) &&
+		!memory.get("brief.historyUi")?.archived.includes(controller.historyPathKey(live)) &&
+		posts.some((message) => message.type === "history"),
+		JSON.stringify(posts));
+	controller.attached = previousAttached;
+	controller.attachedEpoch = previousAttachedEpoch;
 	check("daemon lifecycle archived without the overlay stays in the active list",
 		controller.rowsFromCatalog([{
 			sessionId: "hist-other",
@@ -897,6 +931,19 @@ controller.scheduleChildrenRefresh = originalIdentityChildrenRefresh;
 			lifecycle: "archived",
 			rosterStatus: "inactive",
 		}]).some((r) => r.id === "hist-other" && r.archived !== true));
+	const parentWithRunningChild = controller.rowsFromCatalog([
+		{ ...catalog[1], rosterStatus: "idle", activeSessionId: "parent-handle" },
+		{
+			sessionId: "hist-child",
+			activeSessionId: "child-handle",
+			parentActiveSessionId: "parent-handle",
+			rlmDepth: 1,
+			rosterStatus: "running",
+		},
+	])[0];
+	check("a running subagent classifies its history parent as running",
+		parentWithRunningChild?.status === "running" && parentWithRunningChild.running === false,
+		JSON.stringify(parentWithRunningChild));
 }
 
 {

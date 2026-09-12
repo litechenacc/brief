@@ -209,6 +209,10 @@ export function parseWebviewMessage(value: unknown): WebviewToHost | undefined {
 			return isPath(value.path) && isIdentifier(value.sessionId)
 				? { type: "archiveSession", path: value.path, sessionId: value.sessionId }
 				: undefined;
+		case "unarchiveSession":
+			return isPath(value.path) && isIdentifier(value.sessionId)
+				? { type: "unarchiveSession", path: value.path, sessionId: value.sessionId }
+				: undefined;
 		case "deleteSession":
 			return isPath(value.path) && isIdentifier(value.sessionId)
 				? { type: "deleteSession", path: value.path, sessionId: value.sessionId }

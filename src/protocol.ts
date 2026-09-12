@@ -310,6 +310,7 @@ export type WebviewToHost =
 	| { type: "renameHistorySession"; path: string; sessionId: string; name: string }
 	| { type: "stopSession"; path: string; sessionId: string }
 	| { type: "archiveSession"; path: string; sessionId: string }
+	| { type: "unarchiveSession"; path: string; sessionId: string }
 	| { type: "markSessionUnread"; path: string; sessionId: string }
 	| { type: "draftChanged"; text: string; sessionId: string }
 	| { type: "setCompactThreshold"; percent: number | null }

@@ -738,6 +738,10 @@ export class Composer {
 		return this.behavior;
 	}
 
+	get queuesNextSend(): boolean {
+		return this.streaming && this.behavior === "followUp";
+	}
+
 	private toggleBehavior(): void {
 		this.behavior = this.behavior === "steer" ? "followUp" : "steer";
 		this.updateBehaviorLabel();

@@ -54,6 +54,11 @@ assert.equal(parseWebviewMessage({ type: "prompt", payload: { ...prompt.payload,
 assert.equal(parseWebviewMessage({ type: "browseChild", browseRef: "../forged" }), undefined);
 assert.equal(parseWebviewMessage({ type: "switchSession", path: "/tmp/forged.jsonl" }), undefined);
 assert.equal(parseWebviewMessage({ type: "deleteSession", path: "/tmp/session\0.jsonl", sessionId: "safe-id" }), undefined);
+assert.deepEqual(parseWebviewMessage({ type: "unarchiveSession", path: "/tmp/known.jsonl", sessionId: "known-session" }), {
+	type: "unarchiveSession",
+	path: "/tmp/known.jsonl",
+	sessionId: "known-session",
+});
 assert.equal(parseWebviewMessage({ type: "openFile", path: "src/app.ts", endLine: 4 }), undefined);
 assert.equal(parseWebviewMessage({ type: "searchFiles", query: "src", requestId: Number.NaN }), undefined);
 assert.equal(parseWebviewMessage({ type: "setCompactThreshold", percent: 19 }), undefined);

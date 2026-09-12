@@ -197,6 +197,123 @@ button:focus-visible {
 	min-height: 0;
 }
 
+/* ---------- conversation turn lens ---------- */
+
+.chat-view {
+	position: relative;
+}
+
+/* This is a fixed-width overlay. It never participates in the messages flex
+   layout, so expanding the lens cannot make the transcript jump or reflow. */
+.conversation-lens {
+	position: absolute;
+	top: 0;
+	right: 8px;
+	bottom: 0;
+	width: 24px;
+	z-index: 20;
+	pointer-events: auto;
+}
+
+.lens-rail {
+	position: absolute;
+	top: 0;
+	right: 0;
+	bottom: 0;
+	width: 2px;
+	background: color-mix(in srgb, var(--pa-border) 55%, transparent);
+}
+
+.lens-current {
+	position: absolute;
+	right: 0;
+	width: 4px;
+	height: 12px;
+	transform: translateY(-50%);
+	border-radius: 2px 0 0 2px;
+	background: var(--pa-accent);
+	box-shadow: 0 0 7px var(--pa-accent-glow);
+}
+
+.conversation-lens:not(.expanded) .lens-current {
+	width: 2px;
+	height: 18px;
+	box-shadow: none;
+}
+
+.conversation-lens:not(.expanded) .lens-marker {
+	display: none;
+}
+
+.lens-marker {
+	position: absolute;
+	right: 0;
+	height: 8px;
+	transform: translateY(-50%);
+	padding: 0;
+	border-radius: 3px 0 0 3px;
+	background: var(--pa-border-strong);
+	top: 0;
+	transition: width 80ms ease, background 80ms ease;
+}
+
+.lens-individual {
+	width: 8px;
+	background: var(--pa-accent);
+}
+
+.lens-context-5 {
+	width: 16px;
+	height: 10px;
+	background: color-mix(in srgb, var(--pa-accent) 58%, var(--pa-border));
+}
+
+.lens-context-10 {
+	width: 24px;
+	height: 12px;
+	background: color-mix(in srgb, var(--pa-accent) 42%, var(--pa-border));
+}
+
+.lens-marker:hover,
+.lens-marker:focus-visible {
+	background: var(--pa-accent);
+	outline: 1px solid var(--pa-accent);
+	outline-offset: 1px;
+}
+
+.lens-tooltip {
+	position: absolute;
+	right: 28px;
+	width: min(280px, calc(100vw - 40px));
+	transform: translateY(-50%);
+	padding: 6px 8px;
+	border: 1px solid var(--pa-border);
+	border-radius: 6px;
+	background: var(--pa-surface-2);
+	box-shadow: 0 4px 16px var(--vscode-widget-shadow, transparent);
+	font-size: 11px;
+	pointer-events: none;
+	overflow: hidden;
+	z-index: 2;
+}
+
+.lens-tooltip-heading {
+	margin-bottom: 3px;
+	color: var(--pa-accent);
+	font-size: 10px;
+	font-weight: 600;
+}
+
+.lens-tooltip-text {
+	color: var(--pa-text);
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	overflow: hidden;
+	line-height: 1.35;
+	word-break: break-word;
+}
+
 .messages {
 	flex: 1;
 	overflow-y: auto;
@@ -446,6 +563,11 @@ body.vscode-high-contrast-light .working-letter {
 @keyframes session-pulse {
 	from { opacity: 0.6; transform: scale(0.9); }
 	to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes status-brightness-pulse {
+	from { opacity: 0.6; }
+	to { opacity: 1; }
 }
 
 @keyframes pa-spin {
@@ -1298,7 +1420,7 @@ body.vscode-high-contrast-light .history-item.current {
 .conn-dot.working {
 	background: #e5484d;
 	box-shadow: 0 0 6px #e5484d99;
-	animation: session-pulse 1.4s ease-in-out infinite alternate;
+	animation: status-brightness-pulse 1.4s ease-in-out infinite alternate;
 }
 
 .conn-dot.complete {
@@ -1312,6 +1434,9 @@ body.vscode-high-contrast-light .history-item.current {
 }
 
 .live-label {
+	display: inline-flex;
+	align-items: center;
+	line-height: 1;
 	white-space: nowrap;
 }
 
@@ -1319,7 +1444,7 @@ body.vscode-high-contrast-light .history-item.current {
 	color: #e5484d;
 }
 
-.live-label.working { animation: session-pulse 1.4s ease-in-out infinite alternate; }
+.live-label.working { animation: status-brightness-pulse 1.4s ease-in-out infinite alternate; }
 
 .live-label.complete {
 	color: #30a46c;

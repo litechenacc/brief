@@ -18,6 +18,7 @@ export interface HistoryDeps {
 	onResume: (path: string, sessionId: string) => void;
 	onDelete: (path: string, sessionId: string) => void;
 	onArchive: (path: string, sessionId: string) => void;
+	onUnarchive: (path: string, sessionId: string) => void;
 	onMarkUnread: (path: string, sessionId: string) => void;
 	onRename: (path: string, sessionId: string, name: string) => void;
 	onStop: (path: string, sessionId: string) => void;
@@ -32,6 +33,8 @@ export interface HistoryDeps {
 
 /** Host round-trip debounce: long enough to not search every keystroke, short enough to feel live. */
 const SEARCH_DEBOUNCE_MS = 220;
+/** 1.4s alternate animation: keep rebuilt status dots on one shared phase. */
+const RUNNING_PULSE_CYCLE_MS = 2_800;
 
 function historyLabel(session: { name?: string; firstPrompt?: string }): string {
 	return deriveSessionLabel(session) || "(untitled session)";
@@ -114,6 +117,7 @@ export class HistoryView {
 	}
 
 	setCurrentSession(sessionId?: string): void {
+		if (sessionId === this.currentId) return;
 		this.render(this.lastSessions ?? [], sessionId);
 	}
 
@@ -290,7 +294,9 @@ export class HistoryView {
 				: lamp === "complete"
 					? "Finished — waiting for you"
 					: "Opened";
-		mark.appendChild(el("span", "running-dot"));
+		const dot = el("span", "running-dot");
+		if (lamp === "working") dot.style.animationDelay = `${-(Date.now() % RUNNING_PULSE_CYCLE_MS)}ms`;
+		mark.appendChild(dot);
 		meta.appendChild(mark);
 		resume.append(meta);
 		const actions = el("div", "history-actions");
@@ -318,7 +324,17 @@ export class HistoryView {
 			this.armRename(item, session);
 		});
 		actions.appendChild(rename);
-		if (!session.archived) {
+		if (session.archived) {
+			const unarchive = document.createElement("button");
+			unarchive.className = "history-action";
+			unarchive.title = "Move out of Archive";
+			unarchive.appendChild(icon("back", 11));
+			unarchive.addEventListener("click", (event) => {
+				event.stopPropagation();
+				this.deps.onUnarchive(session.path, session.id);
+			});
+			actions.appendChild(unarchive);
+		} else {
 			const archive = document.createElement("button");
 			archive.className = "history-action";
 			archive.title = "Archive session (hides it in the Archive section)";

@@ -10,7 +10,9 @@ try {
 			<span class="working-mark" aria-hidden="true">B</span>
 			<span class="working-label">${Array.from("Thinking", (char, index) =>
 				`<span class="working-letter" style="animation-delay: ${(index + 1) * 0.1 - 1.4}s">${char}</span>`).join("")}</span><span class="working-elapsed">7s</span>
-		</div></body>`);
+		</div>
+		<div class="status-strip"><span class="conn-dot working"></span><span class="live-label working">running</span></div>
+	</body>`);
 	await page.addStyleTag({ path: "media/main.css" });
 	assert.equal(await page.locator(".working-mark").evaluate(el => getComputedStyle(el).fontWeight), "800");
 	for (const [selector, midpoint] of [[".working-mark", 420], [".working-letter:first-child", 520]]) {
@@ -49,6 +51,31 @@ try {
 	assert.equal(layout.gapBeforeDot, 8);
 	assert.equal(layout.gapAfterDot, "8px");
 	assert.equal(layout.dot, '"·"');
+	const statusMotion = await page.locator(".status-strip").evaluate(strip => {
+		const dot = strip.querySelector(".conn-dot");
+		const label = strip.querySelector(".live-label");
+		const sample = element => {
+			const animation = element.getAnimations()[0];
+			animation.pause();
+			animation.currentTime = 0;
+			const start = { opacity: Number(getComputedStyle(element).opacity), transform: getComputedStyle(element).transform };
+			animation.currentTime = 1400;
+			return { start, end: { opacity: Number(getComputedStyle(element).opacity), transform: getComputedStyle(element).transform } };
+		};
+		const dotBox = dot.getBoundingClientRect();
+		const labelBox = label.getBoundingClientRect();
+		return {
+			dot: sample(dot),
+			label: sample(label),
+			centerDelta: Math.abs((dotBox.top + dotBox.bottom) / 2 - (labelBox.top + labelBox.bottom) / 2),
+		};
+	});
+	for (const target of [statusMotion.dot, statusMotion.label]) {
+		assert.ok(Math.abs(target.start.opacity - target.end.opacity) > 0.3, "status marker changes brightness");
+		assert.equal(target.start.transform, "none", "status marker does not scale");
+		assert.equal(target.end.transform, "none", "status marker does not scale");
+	}
+	assert.ok(statusMotion.centerDelta < 0.5, "status dot and label are vertically aligned");
 	for (const media of [{ reducedMotion: "reduce" }, { reducedMotion: "no-preference", forcedColors: "active" }]) {
 		await page.emulateMedia(media);
 		assert.equal(await page.locator(".working-row").evaluate(el => el.getAnimations({ subtree: true }).length), 0);
