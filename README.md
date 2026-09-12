@@ -8,7 +8,7 @@ This repository exists because of that work. Thank you to [sirouk](https://githu
 
 ## What this repo is right now
 
-Today Brief is a VS Code sidebar that runs `prime-agent --mode rpc` and renders the agent stream (assistant text, thinking, tool calls, sessions, and subagents).
+目前 Brief 支援 VS Code 原生 editor tabs 與 sidebar。每個 session 透過 Prime Agent daemon 獨立執行，顯示回覆、thinking、tool calls 與 subagents。
 
 That is intentional. The fork starts from a working Prime Agent UI instead of rewriting the runtime.
 
@@ -55,6 +55,25 @@ code --install-extension brief-<version>.vsix --force
 ```
 
 Requires VS Code 1.90+, `node` >= 22, and the `code` CLI on `PATH`.
+
+## 使用 editor tabs 與 sidebar
+
+預設使用原生 editor tabs，每個 session 一個 tab。長標題在 tab 上最多顯示 16 個字元（含 `…`），session 的完整名稱不變。
+
+- `Brief: New Session`、標題列 `+` 或 `/new`：在預設位置建立新 session。
+- `Brief: Use Editor`：將目前 session 移到 editor，並記住 editor 為此 workspace 的預設位置。
+- `Brief: Use Sidebar`：將目前 session 移到 sidebar，並記住 sidebar 為預設位置。
+- `Brief: Toggle Chat Location`：切換目前 session 的位置。
+- `Brief: Switch Session`：從已開啟的 sessions 選擇 sidebar 顯示的 session。
+- `Brief: Sessions in this workspace`：從歷史重新開啟 session；已開啟的 session 不重複建立。
+
+也可在 Settings 設定 `brief.chatLocation` 為 `editor` 或 `sidebar`，決定新 session 與 `Focus Chat` 的預設位置。位置切換不停止 agent，也不移動其他 editor tabs。Sidebar 一次顯示一個 session，替換後的 session 仍在背景，可從 session 選單找回。
+
+移動會保留草稿、附件與閱讀位置。若正在送出訊息、處理圖片或使用輸入法組字，請等操作完成再切換，避免遺失尚未確認的輸入。關閉 editor tab 的 `×` 只關閉畫面；需要停止工作時，請用 `Brief: Stop Agent` 或輸入框的停止按鈕。
+
+Editor tabs 可拖到不同 editor groups 並排。`Brief: Open Chat in Editor Tab` 明確使用 editor；`Brief: Focus Chat` 使用預設位置。從程式碼執行 `Add Selection to Chat` 或 `Add Active File to Chat`，會送到最近使用的聊天 session。
+
+重新載入 VS Code 時，editor tabs 依各自儲存的 session identity 重新連接。附件與捲動位置只保證在位置切換時移交，不保證跨關閉或重新載入保留。
 
 ## Settings and commands
 

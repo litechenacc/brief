@@ -70,5 +70,4 @@ code --install-extension "$VSIX" --force
 
 echo
 echo "Success: Brief installed into VS Code."
-echo "Open VS Code and click the Brief icon in the activity bar — no reload usually needed;"
-echo "otherwise run \"Developer: Reload Window\" from the Command Palette."
+echo "Run Developer: Reload Window, then Brief: New Session from the Command Palette."
