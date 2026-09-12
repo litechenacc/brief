@@ -33,12 +33,6 @@ export interface WorkerDescriptorRef {
 	workerId?: string;
 	pid?: number;
 	rootActiveSessionId?: string;
-	/**
-	 * `<workerId>.orphans.jsonl` — the append-only record the bash tool writes
-	 * for every process group it spawns. The daemon reaps strays from it; we
-	 * read it to know what the agent started (see process-tracker.ts).
-	 */
-	orphanProcessJournalPath?: string;
 	ownerClientId?: string;
 	updatedAt?: string;
 	createdAt?: string;
@@ -163,7 +157,7 @@ export function resolveOwnerClientId(lookup: OwnerLookup): string | undefined {
  *
  * Same match as `resolveOwnerClientId` minus the ownership filter: a session
  * brokered by the daemon for a terminal client has no `ownerClientId` and still
- * has a worker, a pid and an orphan journal. Read-only, like everything here.
+ * has a worker. Read-only, like everything here.
  */
 export function resolveWorkerDescriptor(lookup: OwnerLookup): WorkerDescriptorRef | undefined {
 	return newestLiveDescriptor(lookup, () => true);

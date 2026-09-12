@@ -4,7 +4,7 @@
 
 import { el, icon } from "./dom.js";
 import type { RecentSession } from "../src/protocol.js";
-import { deriveSessionLabel as deriveSessionLabelFromPrompt } from "../src/session-label.js";
+import { deriveSessionLabel } from "../src/session-label.js";
 
 export interface HistoryFoldState {
 	workspace: boolean;
@@ -28,8 +28,8 @@ export interface HistoryDeps {
 /** Host round-trip debounce: long enough to not search every keystroke, short enough to feel live. */
 const SEARCH_DEBOUNCE_MS = 220;
 
-export function deriveSessionLabel(session: { name?: string; firstPrompt?: string }): string {
-	return deriveSessionLabelFromPrompt(session) || "(untitled session)";
+function historyLabel(session: { name?: string; firstPrompt?: string }): string {
+	return deriveSessionLabel(session) || "(untitled session)";
 }
 
 export class HistoryView {
@@ -218,7 +218,7 @@ export class HistoryView {
 		const isCurrent = session.id === this.currentId;
 		if (isCurrent) item.classList.add("current");
 		const top = el("div", "history-item-top");
-		const name = deriveSessionLabel(session);
+		const name = historyLabel(session);
 		const resume = isCurrent ? el("div", "history-resume") : document.createElement("button");
 		resume.className = "history-resume";
 		resume.title = isCurrent ? `${name} (current session)` : `Resume ${name}`;
@@ -341,7 +341,7 @@ export class HistoryView {
 			item.classList.remove("renaming");
 			return;
 		}
-		const currentText = session.name || deriveSessionLabel(session);
+		const currentText = session.name || historyLabel(session);
 		const input = document.createElement("input");
 		input.className = "history-rename-input";
 		input.value = currentText;

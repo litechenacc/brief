@@ -5,6 +5,7 @@
 import { Composer } from "./composer.js";
 import { butterfly, el, icon } from "./dom.js";
 import { HistoryView } from "./history.js";
+import { SubagentsStrip } from "./subagents.js";
 import { Transcript } from "./transcript.js";
 import type {
 	AgentEvent,
@@ -13,7 +14,6 @@ import type {
 	ImageAttachment,
 	RpcModel,
 	SelectionAttachment,
-	SessionChild,
 	StatusSnapshot,
 	WebviewToHost,
 } from "../src/protocol.js";
@@ -185,235 +185,15 @@ convCopy.addEventListener("click", (event) => {
 });
 statusStrip.append(connDot, liveLabel, sessionIdLabel, el("span", "spacer"), statsLabel, convCopy);
 
-// Subagents strip: collapsible panel floating on top of the composer.
-const subagentsStrip = el("div", "subagents-strip") as HTMLElement;
-let subagentsExpanded = false;
-let sessionChildren: SessionChild[] = [];
-
-/**
- * Auto-expanding the strip when a subagent starts, without becoming a nuisance.
- *
- * The whole value is the moment work begins: a subagent that spawned into a
- * collapsed strip is invisible until the operator goes looking. Everything else
- * here exists to make sure that never fights them:
- *
- * - Only ever expands. Nothing auto-collapses, so it cannot close a list being
- *   read — including the historical group, which keeps its own state.
- * - Never while they are inside a subagent view. There the strip is how they get
- *   back out, and opening it under them moves the row they were aiming for.
- * - A collapse by hand is an instruction. It is respected until they open the
- *   strip by hand again, so a busy thread cannot keep reopening a panel they
- *   deliberately shut.
- * - Nothing on the first roster of a session. Resuming a thread with live
- *   subagents is not something that just started, and forcing the panel open on
- *   every resume is exactly the noise being avoided.
- * - Never takes the scroll: expanding shrinks the transcript viewport, so a
- *   reader parked mid-history keeps their place and only a reader who was
- *   already following the tail is re-pinned to it.
- */
-let subagentsAutoExpandSuppressed = false;
-/** Ids seen live on the previous roster, to spot one starting rather than staying. */
-let liveChildIds = new Set<string>();
-
-/** False until this session's first roster, so a resume is not read as activity. */
-let subagentRosterSeen = false;
-
-/**
- * Forget which subagents were live, so the next roster seeds instead of reading
- * as a burst of activity. Deliberately does NOT clear the operator's collapse:
- * `subagentsExpanded` already survives a session change on purpose, and the
- * instruction that produced it has to survive with it, or browsing into a child
- * and back would quietly re-arm a panel they shut.
- */
-function resetSubagentActivityBaseline(): void {
-	liveChildIds = new Set();
-	subagentRosterSeen = false;
-}
-
-const childKey = (child: { activeSessionId?: string; id?: string }): string => child.activeSessionId || child.id || "";
-
-/**
- * Subagents that STARTED since the last roster: freshly spawned, or an existing
- * one that went from idle/finished back to running. Seeds silently on the first
- * roster of a session — resuming a busy thread is not something starting now.
- */
-function takeStartedSubagents(spawned: readonly { activeSessionId: string }[]): string[] {
-	const liveNow = new Set(sessionChildren.filter((child) => childStatus(child) === "running").map(childKey));
-	const seeding = !subagentRosterSeen;
-	subagentRosterSeen = true;
-	const started = seeding
-		? []
-		: [...spawned.map((entry) => entry.activeSessionId).filter(Boolean), ...[...liveNow].filter((id) => !liveChildIds.has(id))];
-	liveChildIds = liveNow;
-	return [...new Set(started)].filter(Boolean);
-}
-
-/** Open the strip for work that just began. Returns whether it actually opened. */
-function maybeAutoExpandSubagents(started: readonly string[]): boolean {
-	if (started.length === 0 || subagentsExpanded || subagentsAutoExpandSuppressed) return false;
-	// Inside a subagent the strip is the way back out; opening it under the
-	// operator moves the row they were reaching for.
-	if (sessionParent || sessionViewedId) return false;
-	subagentsExpanded = true;
-	return true;
-}
-
-/**
- * Roster status of a row. Hosts before the status field only sent `isStreaming`,
- * which cannot tell a finished subagent from one waiting between turns — fall
- * back to it rather than inventing a liveness we don't have.
- */
-function childStatus(child: SessionChild): "running" | "idle" | "inactive" {
-	return child.status ?? (child.isStreaming ? "running" : "idle");
-}
-
-function renderSubagentsStrip(): void {
-	subagentsStrip.textContent = "";
-	const parent = sessionParent;
-	const viewedId = sessionViewedId;
-	const siblings = sessionSiblings;
-	const nothingToShow = !parent && sessionChildren.length === 0 && siblings.length === 0;
-	if (nothingToShow) {
-		subagentsStrip.classList.remove("visible");
-		return;
-	}
-	subagentsStrip.classList.add("visible");
-
-	// Finished subagents keep their own collapsed group: they are real work the
-	// operator can go back and read, but counting them as live is the drift that
-	// made the strip disagree with what is actually running.
-	const live = (child: SessionChild): boolean => childStatus(child) !== "inactive";
-	const liveChildren = sessionChildren.filter(live);
-	const liveSiblings = siblings.filter(live);
-	const historical = [...sessionChildren, ...siblings].filter((child) => !live(child));
-	const liveCount = liveChildren.length + liveSiblings.length;
-
-	// Back row (separate, never part of the toggle) — always reliable.
-	if (parent) {
-		const back = el("button", "subagents-back-row") as HTMLButtonElement;
-		back.append(el("span", "subagents-back", "‹ parent"), el("span", "subagents-back-name", parent.name ?? parent.id));
-		back.title = "Return to the parent agent";
-		back.addEventListener("click", () => post({ type: "backToParent" }));
-		subagentsStrip.appendChild(back);
-	}
-
-	// Collapsible header (always a toggle). It reports the SAME three states the
-	// rows below it use — the daemon's roster has exactly running, idle and
-	// inactive (classifySessionRosterStatus), so folding running and idle into one
-	// "live" number made the header disagree with the dots it was summarising.
-	// Zero buckets are dropped rather than printed, so a quiet strip stays quiet.
-	const header = el("button", "subagents-header") as HTMLButtonElement;
-	const tally = { running: 0, idle: 0, inactive: 0 };
-	for (const child of [...sessionChildren, ...siblings]) tally[childStatus(child)] += 1;
-	const countParts: string[] = [];
-	if (tally.running > 0) countParts.push(`${tally.running} running`);
-	if (tally.idle > 0) countParts.push(`${tally.idle} idle`);
-	if (tally.inactive > 0) countParts.push(`${tally.inactive} finished`);
-	const countLabel = countParts.join(" · ") || "0";
-	header.append(el("span", "subagents-caret", subagentsExpanded ? "▾" : "▸"), `Subagents (${countLabel})`);
-	header.title =
-		`${tally.running} running · ${tally.idle} idle · ${tally.inactive} finished — ` +
-		"click to expand, browse one to look inside";
-	header.addEventListener("click", () => {
-		subagentsExpanded = !subagentsExpanded;
-		// Collapsing by hand means "keep it shut"; opening by hand takes it back.
-		subagentsAutoExpandSuppressed = !subagentsExpanded;
-		renderSubagentsStrip();
-	});
-	subagentsStrip.appendChild(header);
-
-	if (!subagentsExpanded) return;
-
-	const buildRow = (child: SessionChild, isSibling: boolean): HTMLElement => {
-		const row = el("button", `subagent-row${isSibling ? " sibling" : ""}`) as HTMLButtonElement;
-		const viewing = viewedId === child.activeSessionId;
-		const status = childStatus(child);
-		// One vocabulary for the whole strip: the header counts "running · idle ·
-		// finished", so a row must not call the same state something else. The dot
-		// keeps its existing class names, which the stylesheet is written against.
-		const dotClass = status === "running" ? "active" : status === "idle" ? "idle" : "done";
-		const dot = el("span", `subagent-dot ${dotClass}`);
-		dot.title =
-			child.statusLabel != null
-				? `${child.statusLabel} — flagged by the daemon: ${
-						child.statusLabel === "queued"
-							? "spawn accepted, worker not started yet"
-							: child.statusLabel === "recovering"
-								? "worker went quiet past the staleness threshold and is being recovered"
-								: child.statusLabel === "failed"
-									? "worker failed; waiting for a client with fresh runtime context"
-									: "an exceptional state this build does not know by name"
-					}`
-				: status === "running"
-					? child.isStreaming
-						? "running (responding)"
-						: "running (working)"
-					: status === "idle"
-						? "idle — resident, waiting for work"
-						: "finished — no worker behind it";
-		const name = el("span", "subagent-name", child.name ?? child.id);
-		// An off-nominal daemon label (queued/recovering/failed) means exactly what
-		// it says and outranks the coarse running/idle/finished bucket. It is the
-		// same label the CLI's agents view prints, so the strip stops soft
-		// describing a stuck worker as merely "idle".
-		const badgeText = child.statusLabel ?? (status === "running" ? "running" : status === "idle" ? "idle" : "finished");
-		const badge =
-			status === "running" && !child.statusLabel
-				? el("span", "subagent-badge", badgeText)
-				: el("span", `subagent-badge idle${child.statusLabel ? " labeled" : ""}`, badgeText);
-		const suffix = el("span", "subagent-go", viewing ? "" : "view ›");
-		row.title = `${child.runtimeKind === "subagent" ? `subagent${child.rlmDepth ? ` · depth ${child.rlmDepth}` : ""}` : (child.runtimeKind ?? "session")}${child.attachedClients ? ` · ${child.attachedClients} attached client(s)` : ""}`;
-		if (viewing) {
-			row.classList.add("viewing");
-			row.title = "Currently viewing — this transcript shows this subagent";
-		}
-		row.append(dot, name, badge, suffix);
-		row.addEventListener("click", (event) => {
-			event.stopPropagation();
-			if (!viewing && child.browseRef) post({ type: "browseChild", browseRef: child.browseRef });
-		});
-		return row;
-	};
-
-	if (liveChildren.length > 0) {
-		const list = el("div", "subagents-list");
-		for (const child of liveChildren) list.appendChild(buildRow(child, false));
-		subagentsStrip.appendChild(list);
-	}
-	if (liveSiblings.length > 0) {
-		// The viewed subagent rides in this group too, so name it after the parent
-		// it hangs off rather than calling a session its own sibling.
-		const siblingHeader = el("div", "subagents-sibling-header", parent ? `Under ${parent.name ?? parent.id}` : "Siblings");
-		const list = el("div", "subagents-list siblings");
-		for (const sib of liveSiblings) list.appendChild(buildRow(sib, true));
-		subagentsStrip.append(siblingHeader, list);
-	}
-	if (historical.length > 0) {
-		const histHeader = el("button", "subagents-subhead") as HTMLButtonElement;
-		histHeader.append(
-			el("span", "subagents-caret", historicalExpanded ? "▾" : "▸"),
-			`Historical (${historical.length})`,
-		);
-		histHeader.title = "Subagents that already finished — open one to read what it did";
-		histHeader.addEventListener("click", (event) => {
-			event.stopPropagation();
-			historicalExpanded = !historicalExpanded;
-			renderSubagentsStrip();
-		});
-		subagentsStrip.appendChild(histHeader);
-		if (historicalExpanded) {
-			const list = el("div", "subagents-list historical");
-			for (const child of historical) list.appendChild(buildRow(child, false));
-			subagentsStrip.appendChild(list);
-		}
-	}
-}
-
-let sessionParent: SessionChild | null = null;
-let historicalExpanded = false;
-let spawnSeenBaseline = false;
-let sessionViewedId: string | null = null;
-let sessionSiblings: SessionChild[] = [];
+const subagents = new SubagentsStrip({
+	post,
+	injectSpawnCard: (card) => transcript.injectSpawnCard(card),
+	onRosterPainted: (opened) => {
+		if (currentStatus) renderLiveLabel(currentStatus);
+		if (opened) transcript.scrollToBottom();
+	},
+});
+const subagentsStrip = subagents.root;
 
 // Install prompt banner: one persistent, dismissible card when prime-agent can't run.
 const installBanner = el("div", "install-banner");
@@ -484,12 +264,7 @@ function showView(view: "chat" | "history"): void {
 
 function startNewThread(): void {
 	showView("chat");
-	subagentsExpanded = false;
-	// A new thread starts with no instruction from the operator about this strip.
-	subagentsAutoExpandSuppressed = false;
-	spawnSeenBaseline = false;
-	resetSubagentActivityBaseline();
-	renderSubagentsStrip();
+	subagents.resetForNewThread();
 	pendingPrompts.clear();
 	authoritativeSessionId = undefined;
 	transcript.clearSpawnCards?.();
@@ -630,16 +405,10 @@ function applyStatus(incomingStatus: StatusSnapshot): void {
 		// started. Discard it rather than let Enter land on whatever replaced it.
 		// Drop the previous session's tree before repainting — otherwise the old
 		// subagent rows linger as a stuck artifact until the next children push.
-		// `subagentsExpanded` deliberately survives: browsing into a subagent is a
+		// Expanded state deliberately survives: browsing into a subagent is a
 		// session change, and collapsing the strip under the operator mid-navigation
 		// is exactly the freeze that made siblings unreachable.
-		sessionChildren = [];
-		sessionParent = null;
-		sessionSiblings = [];
-		sessionViewedId = null;
-		spawnSeenBaseline = false;
-		resetSubagentActivityBaseline();
-		renderSubagentsStrip();
+		subagents.resetForSessionChange();
 	}
 	currentStatus = status;
 	renderLiveLabel(status);
@@ -674,11 +443,6 @@ function applyStatus(incomingStatus: StatusSnapshot): void {
 	setObserving(!!status.observingId);
 }
 
-/** Subagents of the session on screen that are still working. */
-function workingSubagentCount(): number {
-	return sessionChildren.filter((child) => childStatus(child) === "running").length;
-}
-
 /**
  * The header's liveness word. Split out of applyStatus so a roster update can
  * repaint it without waiting for the next status push.
@@ -690,7 +454,7 @@ function workingSubagentCount(): number {
  * says the run died when it did not.
  */
 function renderLiveLabel(status: StatusSnapshot): void {
-	const working = workingSubagentCount();
+	const working = subagents.workingCount();
 	const base = status.compacting
 		? "compacting…"
 		: status.retrying
@@ -784,8 +548,7 @@ function dispatchHostMessage(message: HostToWebview): void {
 			adoptAuthoritativeSession(message.status.sessionId);
 			pendingPrompts.clear();
 			transcript.clearSpawnCards?.();
-			spawnSeenBaseline = false;
-			resetSubagentActivityBaseline();
+			subagents.resetActivity();
 			transcript.renderSnapshot(message.messages ?? []);
 			// Up/Down recall has to survive a reload or a resume, so it is seeded
 			// from the thread itself rather than only from what this panel sent.
@@ -825,38 +588,9 @@ function dispatchHostMessage(message: HostToWebview): void {
 			// the last status instead lost it entirely before the first snapshot.
 			composer.setCompactThreshold(message.percent, message.defaultPercent ?? currentStatus?.compactDefaultPercent ?? null);
 			break;
-		case "sessionChildren": {
-			sessionChildren = message.children ?? [];
-			sessionParent = message.parent ?? null;
-			sessionViewedId = message.viewedActiveSessionId ?? null;
-			sessionSiblings = message.siblings ?? [];
-			const spawnedList = message.spawned ?? [];
-			for (const spawn of spawnedList) {
-				transcript.injectSpawnCard({ id: spawn.activeSessionId, browseRef: spawn.browseRef, name: spawn.name, created: spawn.created });
-			}
-			const startedSubagents = takeStartedSubagents(spawnedList);
-			// Seed cards ONLY for currently-running children; finished and idle ones
-			// stay in the collapsible strip. Spams nothing on resume. `status` is what
-			// makes this honest: a subagent whose own turn ended but whose children
-			// are still working is running, and isStreaming alone calls it idle.
-			if (!spawnSeenBaseline && sessionChildren.length > 0) {
-				spawnSeenBaseline = true;
-				for (const child of sessionChildren) {
-					if (childStatus(child) === "running" && child.created) {
-						transcript.injectSpawnCard({ id: child.activeSessionId, browseRef: child.browseRef, name: child.name, created: child.created });
-					}
-				}
-			}
-			const opened = maybeAutoExpandSubagents(startedSubagents);
-			renderSubagentsStrip();
-			// The roster is what knows a subagent started or finished; the header
-			// would otherwise keep saying "live" until the next status push.
-			if (currentStatus) renderLiveLabel(currentStatus);
-			// Expanding shrinks the transcript viewport. This only moves a reader who
-			// was already following the tail; one parked mid-history keeps their place.
-			if (opened) transcript.scrollToBottom();
+		case "sessionChildren":
+			subagents.applyRoster(message);
 			break;
-		}
 		case "commands":
 			composer.setCommands(message.commands);
 			break;
@@ -878,8 +612,7 @@ function dispatchHostMessage(message: HostToWebview): void {
 			// transcript, and "Subagent spawned" never appears again for them.
 			pendingPrompts.clear();
 			transcript.clearSpawnCards?.();
-			spawnSeenBaseline = false;
-			resetSubagentActivityBaseline();
+			subagents.resetActivity();
 			transcript.renderSnapshot(message.messages);
 			showView("chat");
 			break;

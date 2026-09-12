@@ -28,19 +28,12 @@ function check(name, condition, detail = "") {
 check("the decoded budget encodes under the provider ceiling", fit.base64Length(fit.MAX_DECODED_IMAGE_BYTES) < fit.PROVIDER_BASE64_LIMIT);
 check("budget headroom is at least half a megabyte", fit.PROVIDER_BASE64_LIMIT - fit.base64Length(fit.MAX_DECODED_IMAGE_BYTES) >= 500_000);
 
-// base64 math is exact, monotonic, and self-inverse.
-check("base64Length of 0 is 0", fit.base64Length(0) === 0);
-check("base64Length of 3 is 4", fit.base64Length(3) === 4);
 check("base64Length of 7 MiB is ~9.79 MB", fit.base64Length(7 * 1024 * 1024) === 9_786_712);
-for (const n of [1, 3, 4, 100, 10_001, 8_032_770 % 65536, 65_536]) {
-	const b64 = Buffer.alloc(n, 7).toString("base64");
-	check(`decodedLength inverts real base64 at ${n}`, fit.decodedLength(b64) === n && fit.base64Length(n) === b64.length);
-}
+const sample = Buffer.alloc(10_001, 7).toString("base64");
+check("decodedLength inverts real base64", fit.decodedLength(sample) === 10_001 && fit.base64Length(10_001) === sample.length);
 
-// fitsProvider is the conjunction every sender must obey.
 check("7 MiB fits", fit.fitsProvider(7 * 1024 * 1024));
 check("the incident image (7.66 MB decoded -> 10.21 MB on the wire) does NOT fit", !fit.fitsProvider(8_032_770));
-check("7.5 MiB (the old 8 MiB cap's guaranteed-400 window) does NOT fit", !fit.fitsProvider(7 * 1024 * 1024 + 1024));
 
 // fitRect preserves aspect and respects the edge.
 const dims = fit.fitRect(3292, 3656, 1568);

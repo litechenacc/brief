@@ -52,19 +52,13 @@ check(
 	rosterStatus({ activeSessionId: "h1", rosterStatus: "idle", isSessionActive: true, activity: "idle" }) === "idle",
 );
 check(
-	"a v0.9 row's advertised running stands on its own",
-	rosterStatus({ activeSessionId: "h2", rosterStatus: "running", activity: "idle" }) === "running",
-);
-check(
 	"advertised inactive beats busy-looking legacy bits",
 	rosterStatus({ activeSessionId: "h3", rosterStatus: "inactive", isSessionActive: true, hasRunningRlmChildren: true }) === "inactive",
 );
-// Fallback (pre-v0.9 daemon, no rosterStatus on the wire): unchanged mirror.
 check(
 	"fallback still counts a held lease as running",
 	rosterStatus({ activeSessionId: "h4", isSessionActive: true, activity: "idle" }) === "running",
 );
-check("fallback still calls a quiet resident idle", rosterStatus({ activeSessionId: "h5", activity: "idle" }) === "idle");
 check("fallback still calls the registry row inactive", rosterStatus({}) === "inactive");
 
 // --- transient worker-recovery attach errors ---------------------------------

@@ -10,7 +10,6 @@ const require = createRequire(process.cwd() + "/");
 const disposables = [];
 const registeredCommands = [];
 const registeredViews = [];
-const registeredSchemes = [];
 
 const vscodeStub = {
 	window: {
@@ -36,16 +35,6 @@ const vscodeStub = {
 		getConfiguration: () => ({ get: (_key, fallback) => fallback }),
 		onDidChangeConfiguration: () => ({ dispose: () => {} }),
 		workspaceFolders: [{ uri: { fsPath: process.cwd(), scheme: "file" }, name: "stub", index: 0 }],
-		createFileSystemWatcher: () => ({
-			onDidCreate: () => ({ dispose: () => {} }),
-			onDidChange: () => ({ dispose: () => {} }),
-			onDidDelete: () => ({ dispose: () => {} }),
-			dispose: () => {},
-		}),
-		registerTextDocumentContentProvider: (scheme) => {
-			registeredSchemes.push(scheme);
-			return { dispose: () => {} };
-		},
 		findFiles: async () => [],
 		asRelativePath: (uri) => (typeof uri === "string" ? uri : uri.fsPath),
 		fs: { readFile: async () => new Uint8Array() },

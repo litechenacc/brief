@@ -61,20 +61,6 @@ export interface AssistantMessage {
 	timestamp?: number;
 }
 
-/**
- * One file edit as prime-agent publishes it (core/kernel KernelDiffDisplay).
- * The bundled `edit` skill emits these over `display_data`; the ipython tool
- * forwards them on its result details. This is the ONLY structured change
- * record the agent exposes — nothing else may be presented as a diff.
- */
-export interface ToolDiffDetail {
-	path: string;
-	oldStr: string;
-	newStr: string;
-	/** 1-based line where `oldStr` began in the file. */
-	startLine?: number;
-}
-
 export interface ToolResultMessage {
 	role: "toolResult";
 	toolCallId: string;
@@ -82,8 +68,6 @@ export interface ToolResultMessage {
 	content: Array<TextContent | ImageContent>;
 	isError?: boolean;
 	timestamp?: number;
-	/** Tool-specific payload; ipython carries `diffs` for every edit-skill call. */
-	details?: { diffs?: ToolDiffDetail[]; [key: string]: unknown };
 }
 
 /** Messages can be extension-defined; only the known roles are rendered. */
@@ -98,12 +82,6 @@ export type AssistantMessageEvent =
 	| { type: "thinking_delta"; contentIndex: number; delta: string }
 	| { type: "toolcall_delta"; contentIndex: number; delta: string }
 	| { type: string; [key: string]: unknown };
-
-export interface SessionActionSnapshot {
-	queuedCount?: number;
-	steering?: Array<{ text?: string }>;
-	followUps?: Array<{ text?: string }>;
-}
 
 export type AgentEvent =
 	| { type: "agent_start" }
@@ -121,7 +99,7 @@ export type AgentEvent =
 	| { type: "compaction_end"; reason: string; aborted?: boolean; errorMessage?: string }
 	| { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage?: string }
 	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
-	| { type: "session_action_update"; actions: SessionActionSnapshot }
+	| { type: "session_action_update"; actions?: unknown }
 	| { type: "thinking_level_changed"; level: string }
 	| { type: "session_info_changed"; name?: string };
 
@@ -430,7 +408,3 @@ export type HostToWebview =
 	| { type: "observedClosed"; sessionId: string }
 	| { type: "editorText"; text: string }
 	| { type: "focusComposer" };
-
-// ---------------------------------------------------------------------------
-// Per-thread diff panel (host -> webview)
-// ---------------------------------------------------------------------------

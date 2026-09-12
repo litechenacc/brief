@@ -15,6 +15,27 @@ import { locateAgent, type LocatedAgent } from "./agent-locator.js";
 import { DaemonSidecar } from "./daemon-sidecar.js";
 import { resolveOwnerClientId, resolveWorkerDescriptor } from "./daemon-owner.js";
 import type { AttachSnapshot, DaemonServerMessage, RosterEntry, SavedSessionInfo, SessionSummaryRef } from "./daemon-sidecar.js";
+import {
+	COMPACT_REPLY_CEILING_MS,
+	HISTORY_OTHER_LIMIT,
+	HISTORY_WORKSPACE_LIMIT,
+	SAVED_CATALOG_TTL_MS,
+	THINKING_LEVELS,
+	compactFailureHint,
+	excerpt,
+	formatNumber,
+	historyActivityMs,
+	isRunningSummary,
+	isTransientWorkerAttachError,
+	pickCompactionFallback,
+	rosterStatus,
+	supportedThinkingLevels,
+} from "./session-logic.js";
+import { compactMethods } from "./session-compact.js";
+import { daemonAttachMethods } from "./session-daemon.js";
+import { workspaceMethods } from "./session-workspace.js";
+import { historyCatalogMethods } from "./session-history.js";
+import type { AttachRef, ResolvedHistorySession, WebviewSink } from "./session-types.js";
 import type {
 	AgentEvent,
 	AgentMessage,
@@ -44,71 +65,79 @@ const execFileAsync = promisify(execFile);
  * own history and must never be crowded out by throwaway sessions from other
  * folders, which is exactly what one shared cap did.
  */
-const HISTORY_WORKSPACE_LIMIT = 200;
-const HISTORY_OTHER_LIMIT = 40;
-/** The saved-session catalog carries every transcript; don't refetch it per keystroke. */
-const SAVED_CATALOG_TTL_MS = 15_000;
-/**
- * Our own ceiling on a compact reply. Deliberately far above any real
- * compaction: whether a compaction has failed is the agent's call, not a
- * stopwatch's, and a dead transport already settles these promises through the
- * socket/process close paths rather than through this timer.
- */
-const COMPACT_REPLY_CEILING_MS = 30 * 60_000;
+export interface SessionController {
+	getActiveSelection(): { path: string; startLine: number; endLine: number; text: string; languageId: string } | null;
+	getActiveFilePath(): string | null;
+	searchFiles(query: string, requestId: number, reply?: (message: import("./protocol.js").HostToWebview) => void): Promise<void>;
+	searchDirs(query: string, max: number): Promise<string[]>;
+	pickImages(requestId: number, reply?: (message: import("./protocol.js").HostToWebview) => void): Promise<void>;
+	openFile(relPath: string, startLine?: number, endLine?: number): Promise<void>;
+	resolveWorkspaceUri(relPath: string): Promise<import("vscode").Uri | null>;
+	compactionStillRunning(): Promise<boolean>;
+	runNoticeAction(id: string): Promise<void>;
+	offerNoticeAction(label: string, run: () => Promise<void>): { id: string; label: string };
+	fetchAvailableModels(): Promise<import("./protocol.js").RpcModel[]>;
+	compactWithModel(model: import("./protocol.js").RpcModel): Promise<void>;
+	reportCompactFailure(detail: string): Promise<void>;
+	compact(instructions?: string, opts?: { betweenTurnsOnly?: boolean }): Promise<void>;
+	maybeTriggerAutoCompact(percent: number | null, owner: string): void;
 
-/** Level order used by the agent itself (packages/ai getSupportedThinkingLevels). */
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+	switchSession(sessionPath: string, sessionId: string): Promise<void>;
+	startObserving(sessionId: string, previousAttachment?: AttachRef | null, epoch?: number, sessionPath?: string, observedAtStart?: string | null): Promise<boolean>;
+	ensureSidecar(options?: { reattach?: boolean }): Promise<import("./daemon-sidecar.js").DaemonSidecar>;
+	onSidecarClosed(): void;
+	runReattach(sidecar: import("./daemon-sidecar.js").DaemonSidecar): Promise<void>;
+	waitForDaemonDetach(activeSessionId: string): Promise<void>;
+	detachDaemonSession(sidecar: import("./daemon-sidecar.js").DaemonSidecar, activeSessionId: string): Promise<void>;
+	clearReattachTimer(): void;
+	scheduleReattach(step: number): void;
+	applyAttachedSnapshot(snapshot: import("./daemon-sidecar.js").AttachSnapshot | undefined): void;
+	attachViaDaemon(activeSessionId: string, sessionPath: string, epoch?: number): Promise<boolean>;
+	rollbackAttachment(sidecar: import("./daemon-sidecar.js").DaemonSidecar, attachment: AttachRef): Promise<false>;
+	detachFromDaemon(expected?: AttachRef | null): Promise<boolean>;
+	ownedRosterClientId(): string | undefined;
+	listSessions(sidecar: import("./daemon-sidecar.js").DaemonSidecar): Promise<import("./daemon-sidecar.js").SessionSummaryRef[]>;
+	promoteOwnRpcSession(): Promise<void>;
+	releaseOwnerIdentity(): void;
+	scheduleChildrenRefresh(): void;
+	runChildrenRefresh(): Promise<void>;
+	resetChildrenBaseline(): void;
+	browseRefFor(activeSessionId: string, parentId?: string, contextId?: number): string | undefined;
+	refreshChildren(): Promise<void>;
+	browseChild(browseRef: string): Promise<boolean>;
+	backToParent(): Promise<void>;
+	onDaemonEvent(message: import("./daemon-sidecar.js").DaemonServerMessage): void;
+	onDaemonClosing(reason: string | undefined): void;
+	onRosterUpdate(message: import("./daemon-sidecar.js").DaemonServerMessage): void;
+	setupRosterSubscription(sidecar: import("./daemon-sidecar.js").DaemonSidecar): Promise<void>;
+	refreshAttachedState(): Promise<void>;
+	clearObservation(expectedId?: string | null, epoch?: number): Promise<boolean>;
+	stopObserving(): Promise<void>;
 
-/**
- * Which thinking levels the model actually accepts, derived exactly the way the
- * agent derives them. RPC `get_state` narrows the session state and drops the
- * agent's own availableThinkingLevels, but it keeps the whole Model — including
- * `thinkingLevelMap` — so we can answer honestly instead of offering a fixed six
- * and letting clampThinkingLevel silently swap the operator's choice.
- * Returns null when we have no model to reason about.
- */
-function supportedThinkingLevels(model: RpcModel | null | undefined): string[] | null {
-	if (!model) return null;
-	if (model.reasoning === false) return ["off"];
-	return THINKING_LEVELS.filter((level) => {
-		const mapped = model.thinkingLevelMap?.[level];
-		if (mapped === null) return false;
-		// xhigh/max exist only where the model declares a mapping for them.
-		if (level === "xhigh" || level === "max") return mapped !== undefined;
-		return true;
-	});
-}
-
-/** A window of `text` around a match, trimmed to word-ish edges, for search evidence. */
-function excerpt(text: string, at: number, length: number): string {
-	const start = Math.max(0, at - 45);
-	const end = Math.min(text.length, at + length + 65);
-	const body = text.slice(start, end).replace(/\s+/g, " ").trim();
-	return `${start > 0 ? "…" : ""}${body}${end < text.length ? "…" : ""}`;
-}
-
-interface WebviewSink {
-	post(message: HostToWebview): void;
-}
-
-/** A daemon-brokered session we are following, under both of its identities. */
-interface AttachRef {
-	/** Daemon attach handle (12-char active id). Addresses every daemon command. */
-	activeSessionId: string;
-	sessionPath: string;
-	/** Daemon/session UUID, when available. What history rows and UI identity key on. */
-	sessionId?: string;
-}
-
-/** A catalog capability plus the immutable JSONL filename it authorizes. */
-interface ResolvedHistorySession extends RecentSession {
-	/** File-stem identity used only by offline file operations and artifacts. */
-	fileId: string;
+	scheduleHistoryRefresh(): void;
+	historyPathKey(sessionPath: string): string;
+	restoreHistoryUiState(): void;
+	persistHistoryUiState(): void;
+	overlayCachedHistory(): void;
+	viewedSessionPath(): string | undefined;
+	markHistoryWaitingForUser(sessionPath?: string): void;
+	markHistorySessionOpened(sessionPath: string): void;
+	markHistoryArchived(sessionPath: string): void;
+	decorateHistoryRow(row: RecentSession): RecentSession;
+	showHistoryView(): void;
+	resolveHistorySession(sessionPath: string, sessionId: string): Promise<ResolvedHistorySession | null>;
+	rowsFromCatalog(catalog: SessionSummaryRef[]): RecentSession[];
+	collectHistory(): Promise<RecentSession[]>;
+	listHistory(): Promise<void>;
+	searchHistory(query: string): Promise<void>;
+	forgetHistoryRow(sessionPath: string): void;
+	savedSessionCatalog(): Promise<SavedSessionInfo[]>;
 }
 
 export class SessionController implements vscode.Disposable {
-	private client: RpcClient | null = null;
-	private disposed = false;
+
+	client: RpcClient | null = null;
+	disposed = false;
 	/**
 	 * "The agent actually answers", not "a process object exists". Only a
 	 * completed RPC round-trip sets it; start/stop/exit clear it. A binary that
@@ -116,119 +145,119 @@ export class SessionController implements vscode.Disposable {
 	 * a build that doesn't understand --mode rpc) is NOT connected, and the whole
 	 * UI — status strip, composer, install recommendation — hangs off this.
 	 */
-	private reachable = false;
+	reachable = false;
 	/**
 	 * The RPC subprocess starts as a client-owned worker. Once promoted to
 	 * resident, other prime-agent clients can see it and RPC disconnect no
 	 * longer reaps the agent.
 	 */
-	private rpcSessionPromoted = false;
+	rpcSessionPromoted = false;
 	/** Result of the last CLI lookup, for the install card's explanation. */
-	private locatedAgent: LocatedAgent | null = null;
+	locatedAgent: LocatedAgent | null = null;
 	/**
 	 * One error toast per unreachable CLI, not one per action. Seventeen call
 	 * sites reach ensureStarted(), and before this a missing binary stacked an
 	 * identical notice for every one of them.
 	 */
-	private spawnErrorNotified = false;
+	spawnErrorNotified = false;
 	/**
 	 * Bumped by every stop(). The CLI lookup can take a few seconds when the agent
 	 * is not on the inherited PATH, and a stop landing inside that window must not
 	 * be undone by the attempt it interrupted spawning a process nothing owns.
 	 */
-	private startGeneration = 0;
-	private sinks = new Set<WebviewSink>();
-	private disposables: vscode.Disposable[] = [];
-	private state: RpcSessionState | null = null;
-	private cachedMessages: AgentMessage[] = [];
-	private extensionStatusText: string | undefined;
-	private streaming = false;
-	private compacting = false;
-	private retrying = false;
-	private debugLog = new DebugFileLog();
-	private startingPromise: Promise<void> | null = null;
-	private intentionalStop = false;
-	private observingId: string | null = null;
+	startGeneration = 0;
+	sinks = new Set<WebviewSink>();
+	disposables: vscode.Disposable[] = [];
+	state: RpcSessionState | null = null;
+	cachedMessages: AgentMessage[] = [];
+	extensionStatusText: string | undefined;
+	streaming = false;
+	compacting = false;
+	retrying = false;
+	debugLog = new DebugFileLog();
+	startingPromise: Promise<void> | null = null;
+	intentionalStop = false;
+	observingId: string | null = null;
 	/** Identity of the read-only session, kept separately from the hidden RPC state. */
-	private observedSession: { activeSessionId: string; sessionId?: string; sessionPath?: string } | null = null;
+	observedSession: { activeSessionId: string; sessionId?: string; sessionPath?: string } | null = null;
 	/** A just-closed observed session stays non-interactive until our own view repaints. */
-	private observationRestoring = false;
+	observationRestoring = false;
 	/**
 	 * View epoch that owns an in-flight New Session. Prompts must not land on
 	 * the previous session while the empty new page is on screen.
 	 */
-	private creatingSessionEpoch: number | null = null;
+	creatingSessionEpoch: number | null = null;
 	/** Daemon sidecar for resident-session parity (attach/prompt/abort on live sessions). */
-	private sidecar: DaemonSidecar | null = null;
+	sidecar: DaemonSidecar | null = null;
 	/** Serialize release/attach hand-offs for one daemon handle. */
-	private pendingDaemonDetaches = new Map<string, Promise<void>>();
+	pendingDaemonDetaches = new Map<string, Promise<void>>();
 	/**
 	 * `activeSessionId` is the daemon's 12-char attach handle; `sessionId` is the
 	 * daemon's durable session UUID used by history/UI. Neither is necessarily the
 	 * transcript filename stem, so file operations derive that only from a verified
 	 * catalog path.
 	 */
-	private attached: AttachRef | null = null;
+	attached: AttachRef | null = null;
 	/** View generation that owns the currently attached daemon session. */
-	private attachedEpoch: number | null = null;
+	attachedEpoch: number | null = null;
 	/** Attach attempt remembered across socket drops so a reconnect can re-anchor seamlessly. */
-	private attachAttempt: AttachRef | null = null;
+	attachAttempt: AttachRef | null = null;
 	/** View generation that owned the reconnect attempt. */
-	private attachAttemptEpoch: number | null = null;
+	attachAttemptEpoch: number | null = null;
 	/**
 	 * The last daemon attach failure message. attachViaDaemon swallows the error
 	 * into a boolean; the switch path keeps the text so a recovering worker
 	 * (v0.9+ blocks attach until recovery resolves) is queued for retry instead
 	 * of demoted to the read-only observe fallback.
 	 */
-	private lastDaemonAttachError: string | null = null;
+	lastDaemonAttachError: string | null = null;
 	/** Canonical 12-char attach handle the failing attach targeted (for the retry). */
-	private lastDaemonAttachCanonicalId: string | null = null;
+	lastDaemonAttachCanonicalId: string | null = null;
 	/**
 	 * Why the daemon is about to close our sidecar socket (its `daemon_closing`
 	 * broadcast). "update" means the ladder should re-attach by itself; "shutdown"
 	 * means the ladder must stop and the own-RPC view takes over.
 	 */
-	private daemonClosingReason: "update" | "shutdown" | null = null;
+	daemonClosingReason: "update" | "shutdown" | null = null;
 	/**
 	 * The sidecar instance that currently holds a roster subscription (rev 24+,
 	 * capability "agent_roster"). Tracked per instance because a socket drop or
 	 * an owner swap kills the daemon-side subscription with the connection.
 	 */
-	private rosterSubscribedSidecar: DaemonSidecar | null = null;
+	rosterSubscribedSidecar: DaemonSidecar | null = null;
 	/** Breadcrumbs for nested subagent browsing; each Back returns exactly one level. */
-	private returnTargets: Array<{ kind: "rpc" } | ({ kind: "attached" } & AttachRef)> = [];
-	private rentedState: RpcSessionState | null = null;
+	returnTargets: Array<{ kind: "rpc" } | ({ kind: "attached" } & AttachRef)> = [];
+	rentedState: RpcSessionState | null = null;
 	/** Last history answer, replayed instantly so a reopened sidebar never flashes empty. */
-	private lastHistory: RecentSession[] | null = null;
+	lastHistory: RecentSession[] | null = null;
 	/** Latest rendered history capability set, including catalog-search-only rows. */
-	private actionHistory: RecentSession[] | null = null;
-	private savedCatalog: { at: number; rows: SavedSessionInfo[] } | null = null;
+	actionHistory: RecentSession[] | null = null;
+	savedCatalog: { at: number; rows: SavedSessionInfo[] } | null = null;
 	/**
 	 * History rank times, frozen while a turn is in flight. A live RPC event
 	 * must not reshuffle the list; only `agent_end` (waiting for the user)
 	 * advances a row.
 	 */
-	private historySortMs = new Map<string, number>();
+	historySortMs = new Map<string, number>();
 	/** Sessions the operator archived from Brief. Daemon auto-archive is not this. */
-	private historyArchived = new Set<string>();
+	historyArchived = new Set<string>();
 	/** Finished turns the operator has not opened since. */
-	private historyUnreadComplete = new Set<string>();
+	historyUnreadComplete = new Set<string>();
 	/** Last seen running, so idle after a turn can bump rank exactly once. */
-	private historyWasRunning = new Set<string>();
+	historyWasRunning = new Set<string>();
 	/** Monotonic navigation ownership: late session RPCs cannot repaint a newer view. */
-	private viewEpoch = 0;
+	viewEpoch = 0;
 	/** Supersedes slow history/search answers so they cannot repaint a newer query. */
-	private historyRequestGeneration = 0;
+	historyRequestGeneration = 0;
 	/** Opaque, host-issued capabilities for the currently rendered child strip. */
-	private browseableChildren = new Map<string, { activeSessionId: string; parentId?: string; contextId: number }>();
-	private browseRefByActiveId = new Map<string, string>();
+	browseableChildren = new Map<string, { activeSessionId: string; parentId?: string; contextId: number }>();
+	browseRefByActiveId = new Map<string, string>();
 	/** Invalidates child capabilities only when the displayed session actually changes. */
-	private childrenContext = 0;
+	childrenContext = 0;
 
 	constructor(
-		private readonly context: vscode.ExtensionContext,
-		private readonly output: vscode.OutputChannel,
+		readonly context: vscode.ExtensionContext,
+		readonly output: vscode.OutputChannel,
 	) {
 		this.restoreHistoryUiState();
 		this.disposables.push(
@@ -243,11 +272,11 @@ export class SessionController implements vscode.Disposable {
 		);
 	}
 
-	private liveTranscript(): boolean {
+	liveTranscript(): boolean {
 		return vscode.workspace.getConfiguration("primeAgent").get<boolean>("liveTranscript", false) === true;
 	}
 
-	private streamToolOutput(): boolean {
+	streamToolOutput(): boolean {
 		return vscode.workspace.getConfiguration("primeAgent").get<boolean>("streamToolOutput", false) === true;
 	}
 
@@ -256,7 +285,7 @@ export class SessionController implements vscode.Disposable {
 	}
 
 	/** This extension is deliberately single-root until paths carry a root id. */
-	private isInWorkspaceRoot(uri: vscode.Uri): boolean {
+	isInWorkspaceRoot(uri: vscode.Uri): boolean {
 		if (uri.scheme !== "file" || !this.workspaceRoot) return false;
 		try {
 			// A lexical prefix is not enough: VS Code follows workspace symlinks,
@@ -271,7 +300,7 @@ export class SessionController implements vscode.Disposable {
 		}
 	}
 
-	private workspaceRelativePath(uri: vscode.Uri): string | null {
+	workspaceRelativePath(uri: vscode.Uri): string | null {
 		if (!this.isInWorkspaceRoot(uri)) return null;
 		return path.relative(this.workspaceRoot, uri.fsPath).split(path.sep).join("/");
 	}
@@ -290,7 +319,7 @@ export class SessionController implements vscode.Disposable {
 		return new vscode.Disposable(() => this.sinks.delete(sink));
 	}
 
-	private broadcast(message: HostToWebview): void {
+	broadcast(message: HostToWebview): void {
 		if (this.disposed) return;
 		if (this.sinks.size === 0) this.debugLog.append(`broadcast ${message.type} with no sinks`);
 		for (const sink of this.sinks) {
@@ -341,7 +370,7 @@ export class SessionController implements vscode.Disposable {
 
 	// ---- install prompt: one smart banner when prime-agent can't be detected ----
 
-	private installPromptDismissed(): boolean {
+	installPromptDismissed(): boolean {
 		return this.context.workspaceState.get<boolean>("pa-install-prompt-dismissed", false);
 	}
 
@@ -349,7 +378,7 @@ export class SessionController implements vscode.Disposable {
 		await this.context.workspaceState.update("pa-install-prompt-dismissed", true);
 	}
 
-	private maybeShowInstallPrompt(reason: string): void {
+	maybeShowInstallPrompt(reason: string): void {
 		if (this.installPromptDismissed()) return;
 		this.broadcast({
 			type: "installPrompt",
@@ -360,10 +389,10 @@ export class SessionController implements vscode.Disposable {
 		});
 	}
 
-	private installWatchdog: NodeJS.Timeout | null = null;
+	installWatchdog: NodeJS.Timeout | null = null;
 
 	/** If the agent still isn't reachable ~25s after the first attempt, recommend installing it (once). */
-	private armInstallWatchdog(): void {
+	armInstallWatchdog(): void {
 		if (this.installWatchdog) clearTimeout(this.installWatchdog);
 		this.installWatchdog = setTimeout(() => {
 			this.installWatchdog = null;
@@ -382,7 +411,7 @@ export class SessionController implements vscode.Disposable {
 		}, 25_000);
 	}
 
-	private async start(): Promise<void> {
+	async start(): Promise<void> {
 		if (!this.workspaceRoot) throw new Error("Open a workspace folder before starting Prime Agent.");
 		const config = vscode.workspace.getConfiguration("primeAgent");
 		const configuredCommand = config.get<unknown>("command", "prime-agent");
@@ -543,7 +572,7 @@ export class SessionController implements vscode.Disposable {
 	 * session on screen changes, or an idle/new session inherits "running", a
 	 * Stop button and a steer pill that no agent_end will ever clear.
 	 */
-	private clearRunFlags(): void {
+	clearRunFlags(): void {
 		this.streaming = false;
 		this.compacting = false;
 		this.retrying = false;
@@ -579,7 +608,7 @@ export class SessionController implements vscode.Disposable {
 	// Event routing
 	// ------------------------------------------------------------------
 
-	private onAgentEvent(event: AgentEvent): void {
+	onAgentEvent(event: AgentEvent): void {
 		// Subagent strip: keep counts honest mid-run. scheduleChildrenRefresh
 		// coalesces these — a daemon `list all` re-reads every session file on
 		// disk, so one per tool call is a real cost on a long turn.
@@ -623,8 +652,6 @@ export class SessionController implements vscode.Disposable {
 			case "auto_retry_end":
 				this.retrying = false;
 				break;
-			case "session_action_update":
-				break;
 			case "session_info_changed":
 			case "thinking_level_changed":
 				void this.refreshStateAndStats();
@@ -648,7 +675,7 @@ export class SessionController implements vscode.Disposable {
 		}
 	}
 
-	private onOtherMessage(client: RpcClient, raw: Record<string, unknown>): void {
+	onOtherMessage(client: RpcClient, raw: Record<string, unknown>): void {
 		// Non-response, non-event messages (e.g. extension_bus events). Surface notable ones.
 		const type = raw.type as string;
 		if (type === "extension_error") {
@@ -676,13 +703,13 @@ export class SessionController implements vscode.Disposable {
 		}
 	}
 
-	private async restoreAfterObservationClosed(epoch: number): Promise<void> {
+	async restoreAfterObservationClosed(epoch: number): Promise<void> {
 		if (this.disposed || this.attached || this.observingId || epoch !== this.viewEpoch) return;
 		this.beginRpcRestore();
 		if (await this.restoreOwnRpcView(epoch)) this.scheduleChildrenRefresh();
 	}
 
-	private onBusySettled(): void {
+	onBusySettled(): void {
 		void this.refreshStateAndStats();
 	}
 
@@ -690,7 +717,7 @@ export class SessionController implements vscode.Disposable {
 	// Extension UI requests -> native VS Code dialogs
 	// ------------------------------------------------------------------
 
-	private async onExtensionUiRequest(client: RpcClient, request: RpcExtensionUIRequest): Promise<void> {
+	async onExtensionUiRequest(client: RpcClient, request: RpcExtensionUIRequest): Promise<void> {
 		// Native dialogs may resolve after a restart. Their response belongs only to
 		// the client and view that opened the dialog; never send an approval into a
 		// replacement or now-hidden session. We still answer cancellation so the
@@ -778,16 +805,16 @@ export class SessionController implements vscode.Disposable {
 	// High-level operations
 	// ------------------------------------------------------------------
 
-	private isReattaching(): boolean {
+	isReattaching(): boolean {
 		return this.attached === null && this.attachAttempt !== null && this.attachAttemptEpoch === this.viewEpoch;
 	}
 
 	/** Claim a new displayed-session intent before any validation or startup await. */
-	private isCreatingSession(): boolean {
+	isCreatingSession(): boolean {
 		return this.creatingSessionEpoch === this.viewEpoch;
 	}
 
-	private beginCreatingSession(): void {
+	beginCreatingSession(): void {
 		this.creatingSessionEpoch = this.viewEpoch;
 		this.resetChildrenBaseline();
 		this.resetViewedSessionState();
@@ -803,7 +830,7 @@ export class SessionController implements vscode.Disposable {
 		this.pushStatus();
 	}
 
-	private abortCreatingSession(previous: AttachRef | null, previousMessages: AgentMessage[], epoch: number): void {
+	abortCreatingSession(previous: AttachRef | null, previousMessages: AgentMessage[], epoch: number): void {
 		if (this.disposed || epoch !== this.viewEpoch) return;
 		this.creatingSessionEpoch = null;
 		this.cachedMessages = previousMessages;
@@ -819,7 +846,7 @@ export class SessionController implements vscode.Disposable {
 		this.pushStatus();
 	}
 
-	private beginNavigation(): number {
+	beginNavigation(): number {
 		const epoch = ++this.viewEpoch;
 		// A socket-drop reconnect belongs to the view that dropped. Once the user
 		// chooses another view, it must never resurrect the old one underneath it.
@@ -830,7 +857,7 @@ export class SessionController implements vscode.Disposable {
 	}
 
 	/** Block operations that would otherwise silently address the hidden RPC session. */
-	private guardObservedReadOnly(action: string): boolean {
+	guardObservedReadOnly(action: string): boolean {
 		if (this.isCreatingSession()) {
 			this.broadcast({ type: "notice", level: "warning", text: `Please wait for the new session to finish creating before ${action}.` });
 			return true;
@@ -850,12 +877,12 @@ export class SessionController implements vscode.Disposable {
 		return true;
 	}
 
-	private isCurrentAttachment(attached: AttachRef): boolean {
+	isCurrentAttachment(attached: AttachRef): boolean {
 		return !this.disposed && this.attached === attached && this.attachedEpoch === this.viewEpoch;
 	}
 
 	/** Put a failed navigation back on the prior attached view without reviving its old async work. */
-	private restoreAttachedView(attached: AttachRef | null, epoch: number): void {
+	restoreAttachedView(attached: AttachRef | null, epoch: number): void {
 		if (this.disposed || epoch !== this.viewEpoch || !attached) return;
 		// The socket can close while an explicit navigation is still resolving. Its
 		// old attachment is no longer usable, so recover the hidden RPC view rather
@@ -871,7 +898,7 @@ export class SessionController implements vscode.Disposable {
 	}
 
 	/** Whether the subprocess is the session currently represented by this window. */
-	private isForegroundRpcClient(client: RpcClient): boolean {
+	isForegroundRpcClient(client: RpcClient): boolean {
 		return (
 			this.client === client &&
 			!this.disposed &&
@@ -884,7 +911,7 @@ export class SessionController implements vscode.Disposable {
 	}
 
 	/** A background-RPC reply may only update the same un-attached view that asked. */
-	private isCurrentRpcView(client: RpcClient, epoch: number, allowRestoring = false): boolean {
+	isCurrentRpcView(client: RpcClient, epoch: number, allowRestoring = false): boolean {
 		return (
 			this.client === client &&
 			!this.disposed &&
@@ -897,7 +924,7 @@ export class SessionController implements vscode.Disposable {
 		);
 	}
 
-	private resetViewedSessionState(): void {
+	resetViewedSessionState(): void {
 		this.extensionStatusText = undefined;
 		this.lastStatsText = "";
 		this.lastUsage = {};
@@ -915,7 +942,7 @@ export class SessionController implements vscode.Disposable {
 	 * arrives. Clear the old view and keep controls disabled until that response
 	 * proves which session is now on screen.
 	 */
-	private beginRpcRestore(): void {
+	beginRpcRestore(): void {
 		this.observationRestoring = true;
 		this.resetChildrenBaseline();
 		this.resetViewedSessionState();
@@ -943,7 +970,7 @@ export class SessionController implements vscode.Disposable {
 	 * may have exited while we were following someone else's session — then
 	 * release the lock either way and let the status strip report the truth.
 	 */
-	private async restoreOwnRpcView(epoch: number): Promise<boolean> {
+	async restoreOwnRpcView(epoch: number): Promise<boolean> {
 		let restored = await this.refreshSnapshot({ epoch, allowRestoring: true });
 		if (!restored && !this.disposed && !this.observingId && !this.attached && epoch === this.viewEpoch) {
 			try {
@@ -961,7 +988,7 @@ export class SessionController implements vscode.Disposable {
 		return restored;
 	}
 
-	private rejectPrompt(payload: PromptPayload, error: string, reply: (message: HostToWebview) => void = (message) => this.broadcast(message)): void {
+	rejectPrompt(payload: PromptPayload, error: string, reply: (message: HostToWebview) => void = (message) => this.broadcast(message)): void {
 		reply({ type: "promptRejected", error, clientRequestId: payload.clientRequestId });
 	}
 
@@ -1082,7 +1109,7 @@ export class SessionController implements vscode.Disposable {
 		}
 	}
 
-	private composeMessageText(payload: PromptPayload): string {
+	composeMessageText(payload: PromptPayload): string {
 		let text = payload.text;
 		const includeSnippets = vscode.workspace.getConfiguration("primeAgent").get<boolean>("sendSelectionSnippet", true);
 		for (const sel of payload.selections) {
@@ -1183,37 +1210,6 @@ export class SessionController implements vscode.Disposable {
 	 * the operator just sent, with nothing to resend it. Re-checked after every
 	 * await because a turn can start while we are connecting.
 	 */
-	/**
-	 * A reply that never came is not the same as work that failed.
-	 *
-	 * prime-agent's own daemon client gives up on a request after 30s
-	 * (dist/modes/daemon/daemon-client.js: `request(command, timeoutMs = 30000)`,
-	 * no special case for `compact`), and compaction on a long thread routinely
-	 * outlives that. The error it raises names a socket and a log file, so
-	 * relaying it verbatim as "Compaction failed" told the operator their
-	 * compaction had died when it was still running — and it kept running.
-	 *
-	 * So: never present a timeout as a failure without asking the session itself
-	 * whether it is still compacting. The transcript refresh does not depend on
-	 * this reply either; compaction_end drives it.
-	 */
-	private async compactionStillRunning(): Promise<boolean> {
-		try {
-			const attached = this.attached;
-			if (attached && this.sidecar?.connected) {
-				const state = (await this.sidecar.getState(attached.activeSessionId)) as RpcSessionState;
-				return state?.isCompacting === true;
-			}
-			const client = this.client;
-			if (client?.running) {
-				const response = await client.request({ type: "get_state" }, 15_000);
-				if (response.success) return (response.data as RpcSessionState)?.isCompacting === true;
-			}
-		} catch {
-			// Fall back to what the event stream last told us.
-		}
-		return this.compacting;
-	}
 
 	/** Say the true thing about a compact request that did not answer in time. */
 	/**
@@ -1232,177 +1228,18 @@ export class SessionController implements vscode.Disposable {
 	 *   fault in the request (claude-haiku-4-5 rejected 484,555 tokens against a
 	 *   200,000 ceiling on that same thread).
 	 */
-	private static compactFailureHint(detail: string): string {
-		if (/refus/i.test(detail)) {
-			return " The model declined to summarize this thread's content.";
-		}
-		if (/prompt is too long|context (?:window|length) exceeded|too many tokens/i.test(detail)) {
-			return " This thread is larger than the current model's context window. Switch to a model with a bigger window and run it again.";
-		}
-		return "";
-	}
-
-	/**
-	 * Pick a model to retry a refused compaction with.
-	 *
-	 * Deliberately capability-based and name-free: a refusal is a verdict from
-	 * one model about one thread, and hard-coding which models "work" would be
-	 * wrong the day a provider changes its mind. The only property that can be
-	 * checked up front is whether a candidate could hold the thread at all —
-	 * claude-haiku-4-5 answers a 484,555-token prefix with "prompt is too long"
-	 * against its 200,000 ceiling, which is a wasted round trip, not a fallback.
-	 *
-	 * So: never shrink the context window, never re-offer something already
-	 * refused for this thread, and prefer the roomiest candidate.
-	 */
-	static pickCompactionFallback(
-		models: readonly RpcModel[],
-		current: RpcModel | null | undefined,
-		tried: ReadonlySet<string>,
-	): RpcModel | null {
-		const key = (model: { provider?: string; id?: string }): string => `${model.provider ?? ""}/${model.id ?? ""}`;
-		const floor = current?.contextWindow ?? 0;
-		const candidates = models
-			.filter((model) => model.provider && model.id)
-			.filter((model) => key(model) !== key(current ?? {}))
-			.filter((model) => !tried.has(key(model)))
-			.filter((model) => (model.contextWindow ?? 0) >= floor);
-		if (candidates.length === 0) return null;
-		return candidates.reduce((best, model) =>
-			(model.contextWindow ?? 0) > (best.contextWindow ?? 0) ? model : best,
-		);
-	}
+	static compactFailureHint = compactFailureHint;
+	static pickCompactionFallback = pickCompactionFallback;
+	static rosterStatus = rosterStatus;
+	static isTransientWorkerAttachError = isTransientWorkerAttachError;
 
 	/** Models already asked to summarize THIS thread, so a retry cannot loop. */
-	private compactionModelsTried = new Set<string>();
+	compactionModelsTried = new Set<string>();
 
 	/** Host-issued one-shot recoveries offered on a notice; see `runNoticeAction`. */
-	private noticeActions = new Map<string, () => Promise<void>>();
-
-	/**
-	 * Run a recovery the host itself offered. The webview may be compromised, so
-	 * the id is only ever a key into this map — never anything it can compose.
-	 */
-	async runNoticeAction(id: string): Promise<void> {
-		const run = this.noticeActions.get(id);
-		if (!run) return;
-		this.noticeActions.delete(id);
-		await run();
-	}
-
-	private offerNoticeAction(label: string, run: () => Promise<void>): { id: string; label: string } {
-		// One offer at a time: a stale button from an earlier failure would retry
-		// against a session the operator has since left.
-		this.noticeActions.clear();
-		const id = randomUUID();
-		this.noticeActions.set(id, run);
-		return { id, label };
-	}
-
-	private async fetchAvailableModels(): Promise<RpcModel[]> {
-		const attached = this.attached;
-		if (attached) {
-			const sidecar = await this.ensureSidecar();
-			const data = await sidecar.request<{ models?: RpcModel[] }>(
-				{ type: "get_available_models", activeSessionId: attached.activeSessionId },
-				60_000,
-			);
-			return data.models ?? [];
-		}
-		const client = this.client;
-		if (!client?.running) return [];
-		const response = await client.request({ type: "get_available_models" }, 60_000);
-		return response.success ? ((response.data as { models?: RpcModel[] }).models ?? []) : [];
-	}
+	noticeActions = new Map<string, () => Promise<void>>();
 
 	/** Compact once with `model`, then put the operator's model back. */
-	private async compactWithModel(model: RpcModel): Promise<void> {
-		const original = this.state?.model ?? this.rentedState?.model ?? null;
-		const label = model.name ?? `${model.provider}/${model.id}`;
-		this.compactionModelsTried.add(`${model.provider}/${model.id}`);
-		this.broadcast({ type: "notice", level: "info", text: `Compacting with ${label}…` });
-		try {
-			await this.setModel(model.provider, model.id);
-			await this.compact();
-		} finally {
-			// The operator picked their model for the work, not for summarising.
-			if (original?.provider && original.id) await this.setModel(original.provider, original.id);
-		}
-	}
-
-	private async reportCompactFailure(detail: string): Promise<void> {
-		if (await this.compactionStillRunning()) {
-			this.broadcast({
-				type: "notice",
-				level: "info",
-				text: "Compaction is taking longer than the agent's reply timeout — it is still running. The transcript refreshes when it finishes.",
-			});
-			return;
-		}
-		const text = `Compaction failed: ${detail}${SessionController.compactFailureHint(detail)}`;
-		if (!/refus/i.test(detail)) {
-			this.broadcast({ type: "notice", level: "error", text });
-			return;
-		}
-		let fallback: RpcModel | null = null;
-		try {
-			const current = this.state?.model ?? this.rentedState?.model ?? null;
-			this.compactionModelsTried.add(`${current?.provider ?? ""}/${current?.id ?? ""}`);
-			fallback = SessionController.pickCompactionFallback(await this.fetchAvailableModels(), current, this.compactionModelsTried);
-		} catch {
-			// Catalogue unavailable: report the failure without an offer we cannot honour.
-		}
-		if (!fallback) {
-			// No button to offer, so the text has to carry the whole instruction.
-			this.broadcast({ type: "notice", level: "error", text: `${text} Another model usually compacts it — switch model and run it again.` });
-			return;
-		}
-		const label = fallback.name ?? `${fallback.provider}/${fallback.id}`;
-		this.broadcast({
-			type: "notice",
-			level: "error",
-			text,
-			action: this.offerNoticeAction(`Compact with ${label}`, () => this.compactWithModel(fallback)),
-		});
-	}
-
-	async compact(instructions?: string, opts?: { betweenTurnsOnly?: boolean }): Promise<void> {
-		if (this.guardObservedReadOnly("compacting")) return;
-		const wouldAbortARun = (): boolean => opts?.betweenTurnsOnly === true && this.effectiveStreaming();
-		if (wouldAbortARun()) return;
-		const attached = this.attached;
-		if (attached) {
-			try {
-				const sidecar = await this.ensureSidecar();
-				if (!this.isCurrentAttachment(attached) || wouldAbortARun()) return;
-				await sidecar.compact(attached.activeSessionId);
-			} catch (err) {
-				if (this.isCurrentAttachment(attached)) await this.reportCompactFailure(err instanceof Error ? err.message : String(err));
-			}
-			return;
-		}
-		if (this.isReattaching()) return;
-		const epoch = this.viewEpoch;
-		await this.ensureStarted();
-		const client = this.client;
-		if (!client || !this.isCurrentRpcView(client, epoch) || wouldAbortARun()) return;
-		try {
-			const response = await client.request(
-				instructions ? { type: "compact", customInstructions: instructions } : { type: "compact" },
-				COMPACT_REPLY_CEILING_MS,
-			);
-			if (!this.isCurrentRpcView(client, epoch)) return;
-			if (!response.success) {
-				await this.reportCompactFailure(response.error ?? "unknown error");
-			} else {
-				await this.refreshSnapshot();
-			}
-		} catch (err) {
-			if (this.isCurrentRpcView(client, epoch)) {
-				await this.reportCompactFailure(err instanceof Error ? err.message : String(err));
-			}
-		}
-	}
 
 	/**
 	 * Fork the session from the (N-th) user message — mirrors /fork: resolves
@@ -1577,7 +1414,7 @@ export class SessionController implements vscode.Disposable {
 	 * own RPC session otherwise. Export and copy must never quietly hand over a
 	 * different (usually empty) conversation under the header they can see.
 	 */
-	private async messagesForExport(): Promise<{ messages: Array<Record<string, unknown>>; state: RpcSessionState | null } | null> {
+	async messagesForExport(): Promise<{ messages: Array<Record<string, unknown>>; state: RpcSessionState | null } | null> {
 		if (this.guardObservedReadOnly("exporting or copying this conversation")) return null;
 		const attached = this.attached;
 		if (attached) {
@@ -1619,7 +1456,7 @@ export class SessionController implements vscode.Disposable {
 	 * (draft, compact override, auto-compact ownership) keys on this — while
 	 * attached, the RPC session behind us is a different thread entirely.
 	 */
-	private sessionKey(): string {
+	sessionKey(): string {
 		if (this.attached) return this.attached.sessionId ?? this.attached.activeSessionId;
 		return this.state?.sessionId ?? this.rpcFileStem() ?? "none";
 	}
@@ -1630,7 +1467,7 @@ export class SessionController implements vscode.Disposable {
 	 * `draftChanged`, and the host rejects anything that is not an identifier — so
 	 * a path-keyed session silently persisted no drafts at all.
 	 */
-	private rpcFileStem(): string | undefined {
+	rpcFileStem(): string | undefined {
 		const file = this.state?.sessionFile;
 		if (!file) return undefined;
 		const stem = path.basename(file, ".jsonl");
@@ -1639,7 +1476,7 @@ export class SessionController implements vscode.Disposable {
 
 	// ---- sticky composer drafts (per session, survive view reloads) ----
 
-	private draftKey(): string {
+	draftKey(): string {
 		return `pa-draft:${this.sessionKey()}`;
 	}
 
@@ -1651,14 +1488,14 @@ export class SessionController implements vscode.Disposable {
 		void this.context.globalState.update(this.draftKey(), bounded && bounded.trim() ? bounded : undefined);
 	}
 
-	private restoreDraft(): void {
+	restoreDraft(): void {
 		const text = this.context.globalState.get<string>(this.draftKey());
 		this.broadcast({ type: "draft", text: text ?? "" });
 	}
 
 	// ---- auto-compact threshold (per session, client-side trigger) ----
 
-	private thresholdKey(): string {
+	thresholdKey(): string {
 		return `pa-ct:${this.sessionKey()}`;
 	}
 
@@ -1679,160 +1516,19 @@ export class SessionController implements vscode.Disposable {
 	}
 
 	/** Effective agent default: prime-agent compacts when ~reserveTokens (16384) of the window remain. */
-	private defaultCompactPercent(): number | null {
+	defaultCompactPercent(): number | null {
 		const cw = this.lastUsage.contextWindow;
 		if (!cw || cw <= 0) return null;
 		const percent = Math.ceil(((cw - 16_384) / cw) * 100);
 		return Math.max(20, Math.min(97, percent));
 	}
 
-	private historyRefreshTimer: NodeJS.Timeout | null = null;
-	private static readonly HISTORY_UI_STATE_KEY = "brief.historyUi";
-
-	/** Debounced history refresh after rename-affecting signals (CLI or other clients). */
-	private scheduleHistoryRefresh(): void {
-		if (this.historyRefreshTimer) clearTimeout(this.historyRefreshTimer);
-		this.historyRefreshTimer = setTimeout(() => {
-			this.historyRefreshTimer = null;
-			void this.listHistory();
-		}, 800);
-	}
-
-	private historyPathKey(sessionPath: string): string {
-		return normalizeFsPath(sessionPath);
-	}
-
-	private restoreHistoryUiState(): void {
-		const saved = this.context.workspaceState?.get<{
-			sortMs?: Record<string, number>;
-			archived?: string[];
-			unread?: string[];
-		}>(SessionController.HISTORY_UI_STATE_KEY);
-		if (!saved) return;
-		if (saved.sortMs) {
-			for (const [path, ms] of Object.entries(saved.sortMs)) {
-				if (typeof ms === "number" && Number.isFinite(ms)) this.historySortMs.set(path, ms);
-			}
-		}
-		if (Array.isArray(saved.archived)) {
-			for (const path of saved.archived) {
-				if (typeof path === "string" && path) this.historyArchived.add(path);
-			}
-		}
-		if (Array.isArray(saved.unread)) {
-			for (const path of saved.unread) {
-				if (typeof path === "string" && path) this.historyUnreadComplete.add(path);
-			}
-		}
-	}
-
-	private persistHistoryUiState(): void {
-		void this.context.workspaceState?.update(SessionController.HISTORY_UI_STATE_KEY, {
-			sortMs: Object.fromEntries(this.historySortMs),
-			archived: [...this.historyArchived],
-			unread: [...this.historyUnreadComplete],
-		});
-	}
-
-	private overlayCachedHistory(): void {
-		if (this.lastHistory) this.lastHistory = this.lastHistory.map((row) => this.decorateHistoryRow(row));
-		if (this.actionHistory) this.actionHistory = this.actionHistory.map((row) => this.decorateHistoryRow(row));
-	}
+	historyRefreshTimer: NodeJS.Timeout | null = null;
+		/** Debounced history refresh after rename-affecting signals (CLI or other clients). */
 
 	/** Current chat session file, when the host knows it. */
-	private viewedSessionPath(): string | undefined {
-		if (this.attached?.sessionPath) return this.historyPathKey(this.attached.sessionPath);
-		if (this.state?.sessionFile) return this.historyPathKey(this.state.sessionFile);
-		return undefined;
-	}
 
-	/**
-	 * A turn finished and the agent is waiting. This is the only moment the
-	 * history row is allowed to move — not mid-turn RPC chatter.
-	 */
-	private markHistoryWaitingForUser(sessionPath = this.viewedSessionPath()): void {
-		if (!sessionPath) return;
-		const key = this.historyPathKey(sessionPath);
-		this.historySortMs.set(key, Date.now());
-		this.historyWasRunning.delete(key);
-		if (this.viewedSessionPath() !== key) this.historyUnreadComplete.add(key);
-		else this.historyUnreadComplete.delete(key);
-		this.persistHistoryUiState();
-		this.overlayCachedHistory();
-	}
-
-	private markHistorySessionOpened(sessionPath: string): void {
-		const key = this.historyPathKey(sessionPath);
-		if (!this.historyUnreadComplete.has(key)) return;
-		this.historyUnreadComplete.delete(key);
-		this.persistHistoryUiState();
-		this.overlayCachedHistory();
-	}
-
-	private markHistoryArchived(sessionPath: string): void {
-		this.historyArchived.add(this.historyPathKey(sessionPath));
-		this.persistHistoryUiState();
-		this.overlayCachedHistory();
-	}
-
-	/**
-	 * Rank is frozen while a session is running. Catalog mtime/lastActivity
-	 * moves on every RPC event; using it as the list order is what made the
-	 * history jump around mid-turn.
-	 */
-	private decorateHistoryRow(row: RecentSession): RecentSession {
-		const key = this.historyPathKey(row.path);
-		const catalogMs = row.modifiedMs ?? (Number.isFinite(Date.parse(row.timestamp)) ? Date.parse(row.timestamp) : 0);
-		const prev = this.historySortMs.get(key);
-		const running = row.status === "running" || row.running === true;
-		if (running) {
-			this.historyWasRunning.add(key);
-			if (prev === undefined) this.historySortMs.set(key, catalogMs);
-		} else if (this.historyWasRunning.delete(key)) {
-			this.historySortMs.set(key, Date.now());
-			if (this.viewedSessionPath() !== key) this.historyUnreadComplete.add(key);
-			else this.historyUnreadComplete.delete(key);
-		} else if (prev === undefined) {
-			this.historySortMs.set(key, catalogMs);
-		}
-		const sortMs = this.historySortMs.get(key) ?? catalogMs;
-		const archived = this.historyArchived.has(key);
-		const unreadComplete = !running && this.historyUnreadComplete.has(key);
-		return { ...row, sortMs, archived, unreadComplete };
-	}
-
-	private autoCompactSent = false;
-
-	/**
-	 * `owner` is the session the percentage was measured on. compact() targets
-	 * the session on screen, so firing on someone else's number would compact the
-	 * operator's terminal session because our idle background one filled up.
-	 */
-	private maybeTriggerAutoCompact(percent: number | null, owner: string): void {
-		if (owner !== this.sessionKey()) return;
-		const threshold = this.compactThreshold();
-		if (percent == null || threshold == null) {
-			this.autoCompactSent = false;
-			return;
-		}
-		if (percent < Math.max(20, threshold - 15)) {
-			this.autoCompactSent = false;
-			return;
-		}
-		// Between turns, never during one. `compact` aborts the in-flight run and
-		// nothing resends the aborted prompt, so the old mid-turn gate answered the
-		// operator's message with silence. Idle is also why setting a threshold
-		// below the current fill compacts right away: pushStatus() lands here.
-		if (percent >= threshold && !this.autoCompactSent && !this.effectiveStreaming() && !this.compacting) {
-			this.autoCompactSent = true;
-			this.broadcast({
-				type: "notice",
-				level: "info",
-				text: `Context hit ${percent}% ≥ ${threshold}% — auto-compacting for this session.`,
-			});
-			void this.compact(undefined, { betweenTurnsOnly: true });
-		}
-	}
+	autoCompactSent = false;
 
 	async exportChat(): Promise<void> {
 		if (this.guardObservedReadOnly("exporting this conversation")) return;
@@ -1979,50 +1675,6 @@ export class SessionController implements vscode.Disposable {
 		}
 	}
 
-	showHistoryView(): void {
-		this.broadcast({ type: "showHistory" });
-		void this.listHistory();
-	}
-
-	/**
-	 * History actions are capabilities, not arbitrary file operations. A webview
-	 * may only act on a session record the host generated from its catalog. If a
-	 * sidebar was reloaded, refresh once before rejecting the stale row.
-	 */
-	private async resolveHistorySession(sessionPath: string, sessionId: string): Promise<ResolvedHistorySession | null> {
-		if (typeof sessionPath !== "string" || typeof sessionId !== "string" || !sessionId || !/^[A-Za-z0-9_-]+$/.test(sessionId)) {
-			this.broadcast({ type: "notice", level: "error", text: "Invalid session reference." });
-			return null;
-		}
-		const target = normalizeFsPath(sessionPath);
-		let rows = this.actionHistory ?? this.lastHistory;
-		let match = rows?.find((row) => row.id === sessionId && normalizeFsPath(row.path) === target);
-		if (!match) {
-			rows = await this.collectHistory();
-			this.lastHistory = rows;
-			match = rows.find((row) => row.id === sessionId && normalizeFsPath(row.path) === target);
-		}
-		if (!match) {
-			this.broadcast({ type: "notice", level: "warning", text: "That session is no longer available in history." });
-			return null;
-		}
-		try {
-			const stat = await fs.lstat(match.path);
-			const resolvedPath = path.resolve(match.path);
-			const fileId = path.basename(resolvedPath, ".jsonl");
-			if (!stat.isFile() || stat.isSymbolicLink() || !/^[A-Za-z0-9_-]+$/.test(fileId) || path.basename(resolvedPath) !== `${fileId}.jsonl`) {
-				throw new Error("not a regular session file");
-			}
-			// Daemon catalogs may expose a runtime/session UUID that differs from the
-			// transcript filename stem. Keep the former for view identity and derive
-			// the latter only after resolving this host-issued path for file actions.
-			return { ...match, path: resolvedPath, fileId };
-		} catch {
-			this.broadcast({ type: "notice", level: "warning", text: "That session file is no longer available." });
-			return null;
-		}
-	}
-
 	// ------------------------------------------------------------------
 	// Session deletion (same conventions as the CLI: trash-first + artifacts)
 	// ------------------------------------------------------------------
@@ -2067,7 +1719,7 @@ export class SessionController implements vscode.Disposable {
 	// Favorite models (persisted in globalState)
 	// ------------------------------------------------------------------
 
-	private favorites(): ModelRef[] {
+	favorites(): ModelRef[] {
 		return this.context.globalState.get<ModelRef[]>("primeAgent.favoriteModels", []);
 	}
 
@@ -2085,264 +1737,9 @@ export class SessionController implements vscode.Disposable {
 		this.sendFavorites();
 	}
 
-	/**
-	 * The roster status. prime-agent v0.9+ publishes the answer on the row
-	 * (`rosterStatus`, from its shared classifyAgentStatus) — trust it. Older
-	 * daemons get the legacy fallback below, mirroring the pre-v0.9
-	 * classifySessionRosterStatus term for term:
-	 *
-	 *   no activeSessionId                                  -> "inactive"
-	 *   hasActiveHeartbeat | activity "working" | busy       -> "running"
-	 *   otherwise                                            -> "idle"
-	 *
-	 * where busy is `isSessionActive || hasRunningRlmChildren` (isActiveSessionBusy).
-	 * "inactive" means the daemon is serving this one from its on-disk registry
-	 * with no worker behind it — every archived session, and every finished
-	 * subagent, lands there.
-	 *
-	 * The streaming/compacting/bash bits are NOT added on top. The daemon already
-	 * folds them into `activity`, and counting them again promoted sessions the
-	 * CLI calls idle, which is how the strip's header could disagree with the
-	 * roster it was summarising. They stay only as a fallback for a daemon old
-	 * enough not to send `activity` at all. A queued follow-up is deliberately not
-	 * "running": nothing is executing yet, and the CLI does not count it either.
-	 */
-	private static rosterStatus(s: SessionSummaryRef): "running" | "idle" | "inactive" {
-		// prime-agent v0.9 ranks the row itself: rosterStatus is the verdict of the
-		// shared classifier the CLI's agents view also reads (classifyAgentStatus),
-		// which counts queued children as running and does NOT count a bare lease
-		// or running-children as work of this session. Taking it verbatim is how
-		// this view, the strip, and the CLI stop disagreeing about the same row.
-		const advertised = s.rosterStatus;
-		if (advertised === "running" || advertised === "idle" || advertised === "inactive") return advertised;
-		// Fallback for pre-v0.9 daemons that never name a status: the hand-rolled
-		// mirror of the old CLI classifier.
-		if (!s.activeSessionId) return "inactive";
-		if (s.hasActiveHeartbeat || s.activity === "working" || s.isSessionActive || s.hasRunningRlmChildren) return "running";
-		if (s.activity === undefined && (s.isStreaming || s.isCompacting || s.isBashRunning)) return "running";
-		return "idle";
-	}
-
-	/** Whether there is a run to stop. One source of truth with the roster status. */
-	private static isRunningSummary(s: SessionSummaryRef): boolean {
-		return SessionController.rosterStatus(s) === "running";
-	}
-
-	/**
-	 * History rows from the daemon's own catalog. This is the authority: it has
-	 * read every session file end to end, so the CURRENT name (a rename appended
-	 * megabytes into a file), the message count and the lifecycle are exact —
-	 * none of which a bounded tail read can promise.
-	 *
-	 * Buckets are filled independently. A single global cap applied before
-	 * bucketing is what starved "This workspace" down to three rows while 79
-	 * sessions from other folders ate the budget.
-	 */
-	private rowsFromCatalog(catalog: SessionSummaryRef[]): RecentSession[] {
-		const root = normalizeFsPath(this.workspaceRoot);
-		const inWorkspaceRows: RecentSession[] = [];
-		const otherRows: RecentSession[] = [];
-		for (const s of catalog) {
-			if (!s.sessionFile || !s.cwd) continue;
-			// Subagents belong under their parent in the strip, not in history.
-			if ((s.rlmDepth ?? 0) > 0) continue;
-			// Drafts have no message and nothing to resume, so they stay out.
-			// Archived ones do NOT: prime-agent archives a session whenever its
-			// worker closes for any reason but a clean shutdown or an update
-			// (daemon-mode closeKeepsResumeEntry), so "archived" marks plenty of
-			// threads the operator never retired — a kill, a worker swap, an
-			// update that did not land cleanly. Hiding those made real work
-			// disappear from the list and left the CLI as the only way to find it.
-			// They come back as "inactive", which is what they are.
-			if (s.lifecycle === "draft") continue;
-			const modified = s.modified ?? s.lastActivityAt;
-			const parsed = modified ? Date.parse(modified) : Number.NaN;
-			const inWorkspace = normalizeFsPath(s.cwd) === root;
-			(inWorkspace ? inWorkspaceRows : otherRows).push(
-				this.decorateHistoryRow({
-					id: s.sessionId ?? path.basename(s.sessionFile, ".jsonl"),
-					path: s.sessionFile,
-					cwd: s.cwd,
-					timestamp: s.created ?? modified ?? new Date().toISOString(),
-					modifiedMs: Number.isFinite(parsed) ? parsed : undefined,
-					name: s.sessionName,
-					firstPrompt: s.firstMessage,
-					inWorkspace,
-					running: SessionController.isRunningSummary(s),
-					status: SessionController.rosterStatus(s),
-					...(s.statusLabel ? { statusLabel: s.statusLabel } : {}),
-				}),
-			);
-		}
-		const activityOf = (s: RecentSession): number => {
-			if (s.sortMs !== undefined) return s.sortMs;
-			if (s.modifiedMs !== undefined) return s.modifiedMs;
-			const parsed = Date.parse(s.timestamp);
-			return Number.isFinite(parsed) ? parsed : 0;
-		};
-		const byActivityDesc = (a: RecentSession, b: RecentSession): number => activityOf(b) - activityOf(a);
-		inWorkspaceRows.sort(byActivityDesc);
-		otherRows.sort(byActivityDesc);
-		this.persistHistoryUiState();
-		return [...inWorkspaceRows.slice(0, HISTORY_WORKSPACE_LIMIT), ...otherRows.slice(0, HISTORY_OTHER_LIMIT)];
-	}
-
 	/** Daemon catalog when it answers, on-disk scan when it does not. */
-	private async collectHistory(): Promise<RecentSession[]> {
-		try {
-			const sidecar = await this.ensureSidecar();
-			return this.rowsFromCatalog(await this.listSessions(sidecar));
-		} catch {
-			// Daemon unreachable: the scan is less exact about names but it is the
-			// difference between a stale title and no history at all.
-			const rows = await listRecentSessions(this.workspaceRoot, {
-				workspaceLimit: HISTORY_WORKSPACE_LIMIT,
-				otherLimit: HISTORY_OTHER_LIMIT,
-			});
-			const decorated = rows.map((row) => this.decorateHistoryRow(row));
-			const activityOf = (s: RecentSession): number => s.sortMs ?? s.modifiedMs ?? 0;
-			const byActivityDesc = (a: RecentSession, b: RecentSession): number => activityOf(b) - activityOf(a);
-			return [
-				...decorated.filter((s) => s.inWorkspace).sort(byActivityDesc),
-				...decorated.filter((s) => !s.inWorkspace).sort(byActivityDesc),
-			];
-		}
-	}
-
-	async listHistory(): Promise<void> {
-		const generation = ++this.historyRequestGeneration;
-		// Repaint the previous answer first. The sidebar webview is torn down on
-		// every hide, so without a host-side cache the list flashes "Loading…"
-		// through a full catalog fetch each time the operator comes back.
-		if (this.lastHistory) this.broadcast({ type: "history", sessions: this.lastHistory });
-		let sessions: RecentSession[];
-		try {
-			sessions = await this.collectHistory();
-		} catch (err) {
-			if (!this.disposed && generation === this.historyRequestGeneration) {
-				this.broadcast({ type: "notice", level: "error", text: `Could not load history: ${err instanceof Error ? err.message : String(err)}` });
-			}
-			return;
-		}
-		if (this.disposed || generation !== this.historyRequestGeneration) return;
-		this.lastHistory = sessions;
-		this.actionHistory = sessions;
-		this.broadcast({ type: "history", sessions });
-	}
-
-	/**
-	 * Search the way the CLI does: over the conversation itself, not just the row
-	 * labels. `allMessagesText` rides only on `list_saved_sessions` (the `list`
-	 * catalog does not carry it), so this is a second, heavier call — cached for
-	 * a few seconds because the webview searches as the operator types.
-	 *
-	 * Matching rows come back with a `matchSnippet`, which is what lets the
-	 * webview's own filter rank them: it cannot see the transcript, only what we
-	 * hand it, and a hit with no visible reason reads as a bug.
-	 */
-	async searchHistory(query: string): Promise<void> {
-		const generation = ++this.historyRequestGeneration;
-		const needle = query.trim().toLowerCase();
-		let base: RecentSession[];
-		try {
-			base = await this.collectHistory();
-		} catch {
-			if (!this.disposed && generation === this.historyRequestGeneration) this.broadcast({ type: "history", sessions: [] });
-			return;
-		}
-		if (this.disposed || generation !== this.historyRequestGeneration) return;
-		this.lastHistory = base;
-		if (needle.length < 2) {
-			this.actionHistory = base;
-			this.broadcast({ type: "history", sessions: base });
-			return;
-		}
-		let saved: SavedSessionInfo[];
-		try {
-			saved = await this.savedSessionCatalog();
-		} catch {
-			// No text corpus available — the webview still filters on names/paths.
-			// Same generation guard as every other exit: a slow failure for an old
-			// query must not repaint (nor re-authorize) a newer answer's list.
-			if (!this.disposed && generation === this.historyRequestGeneration) {
-				this.actionHistory = base;
-				this.broadcast({ type: "history", sessions: base });
-			}
-			return;
-		}
-		if (this.disposed || generation !== this.historyRequestGeneration) return;
-		const snippetByPath = new Map<string, string>();
-		const hits: RecentSession[] = [];
-		const knownPaths = new Set(base.map((s) => normalizeFsPath(s.path)));
-		const root = normalizeFsPath(this.workspaceRoot);
-		for (const info of saved) {
-			// Same visibility rule as the roster: drafts have nothing to find, and a
-			// crashed record is not a session. Archived ones ARE searchable now,
-			// because the roster shows them — this filter is what made a real
-			// thread unfindable from here while the CLI could still see it.
-			if ((info.messageCount ?? 0) === 0 || info.state?.status === "crash") continue;
-			const body = info.allMessagesText ?? "";
-			const at = body.toLowerCase().indexOf(needle);
-			if (at < 0) continue;
-			const key = normalizeFsPath(info.path);
-			const snippet = excerpt(body, at, needle.length);
-			if (knownPaths.has(key)) {
-				snippetByPath.set(key, snippet);
-				continue;
-			}
-			// A session the roster capped away still deserves to be findable.
-			const modified = info.modified ? Date.parse(info.modified) : Number.NaN;
-			hits.push(
-				this.decorateHistoryRow({
-					id: info.id,
-					path: info.path,
-					cwd: info.cwd,
-					timestamp: info.created ?? info.modified ?? new Date().toISOString(),
-					modifiedMs: Number.isFinite(modified) ? modified : undefined,
-					name: info.name,
-					firstPrompt: info.firstMessage,
-					inWorkspace: normalizeFsPath(info.cwd) === root,
-					// `running` stays unset: the saved catalog has no runtime state, and
-					// "we did not ask" must not render as "not running". The status dot
-					// says "inactive" for the same reason the on-disk scan does — this
-					// row exists only because the roster did not carry it.
-					status: "inactive",
-					matchSnippet: snippet,
-				}),
-			);
-		}
-		// Copy rather than tag `base` in place — it is the cache replayed on the
-		// next visit, and a snippet for a query the operator has already cleared
-		// would sit under the row explaining nothing.
-		const decorated = base.map((s) => {
-			const snippet = snippetByPath.get(normalizeFsPath(s.path));
-			return snippet ? { ...s, matchSnippet: snippet } : s;
-		});
-		const results = [...decorated, ...hits];
-		this.actionHistory = results;
-		this.broadcast({ type: "history", sessions: results });
-	}
 
 	/** Drop a row from the replay cache so a deleted session never flashes back. */
-	private forgetHistoryRow(sessionPath: string): void {
-		if (!this.lastHistory) return;
-		const target = normalizeFsPath(sessionPath);
-		this.lastHistory = this.lastHistory.filter((s) => normalizeFsPath(s.path) !== target);
-		if (this.actionHistory) this.actionHistory = this.actionHistory.filter((s) => normalizeFsPath(s.path) !== target);
-		this.historySortMs.delete(target);
-		this.historyArchived.delete(target);
-		this.historyUnreadComplete.delete(target);
-		this.persistHistoryUiState();
-	}
-
-	private async savedSessionCatalog(): Promise<SavedSessionInfo[]> {
-		const now = Date.now();
-		if (this.savedCatalog && now - this.savedCatalog.at < SAVED_CATALOG_TTL_MS) return this.savedCatalog.rows;
-		const sidecar = await this.ensureSidecar();
-		const rows = await sidecar.listSavedSessions(this.workspaceRoot, "all");
-		this.savedCatalog = { at: now, rows };
-		return rows;
-	}
 
 	/** Stop a live session from the history view (daemon abort on its active id). */
 	async stopSession(sessionPath: string, sessionId: string): Promise<void> {
@@ -2520,1264 +1917,29 @@ export class SessionController implements vscode.Disposable {
 		}
 	}
 
-	async switchSession(sessionPath: string, sessionId: string): Promise<void> {
-		// Claim navigation ownership before validating the host-issued capability:
-		// a slow filesystem validation for an old click must never win over a newer
-		// history selection.
-		const previousAttachment = this.attached;
-		const epoch = this.beginNavigation();
-		const observedAtStart = this.observingId;
-		const session = await this.resolveHistorySession(sessionPath, sessionId);
-		if (!session || this.disposed || epoch !== this.viewEpoch) {
-			this.restoreAttachedView(previousAttachment, epoch);
-			return;
-		}
-		sessionPath = session.path;
-		sessionId = session.id;
-		// Re-attaching an already attached session and then releasing the previous
-		// attachment would release the attachment we just refreshed. Treat this as
-		// the no-op the history row represents instead.
-		this.markHistorySessionOpened(sessionPath);
-		if (this.attached && normalizeFsPath(this.attached.sessionPath) === normalizeFsPath(sessionPath)) {
-			this.broadcast({ type: "notice", level: "info", text: "You are already viewing that session." });
-			this.restoreAttachedView(previousAttachment, epoch);
-			return;
-		}
-		await this.ensureStarted();
-		if (!this.client || this.disposed || epoch !== this.viewEpoch) {
-			this.restoreAttachedView(previousAttachment, epoch);
-			return;
-		}
-		const client = this.client;
-		let response;
-		try {
-			response = await client.request({ type: "switch_session", sessionPath }, 60_000);
-		} catch (err) {
-			if (this.client === client && !this.disposed && epoch === this.viewEpoch) {
-				this.broadcast({ type: "notice", level: "error", text: `Could not resume session: ${err instanceof Error ? err.message : String(err)}` });
-				this.restoreAttachedView(previousAttachment, epoch);
-			}
-			return;
-		}
-		if (this.client !== client || this.disposed || epoch !== this.viewEpoch) return;
-		if (response.success) {
-			if (!(await this.detachFromDaemon(previousAttachment)) || epoch !== this.viewEpoch) return;
-			if (!(await this.clearObservation(observedAtStart, epoch))) return;
-			this.returnTargets = [];
-			this.resetViewedSessionState();
-			// Reset the spawn baseline with the strip: without this the next
-			// children refresh reads every subagent of the resumed session as
-			// "newly spawned" and blasts a card for each into the transcript.
-			this.resetChildrenBaseline();
-			this.beginRpcRestore();
-			if (await this.restoreOwnRpcView(epoch)) this.scheduleChildrenRefresh();
-			return;
-		}
-		const error = response.error ?? "unknown error";
-		if (/already active/i.test(error)) {
-			const id = sessionId;
-			const attached = await this.attachViaDaemon(id, sessionPath, epoch);
-			if (this.disposed || epoch !== this.viewEpoch) return;
-			if (attached) {
-				const currentAttachment = this.attached;
-				if (!currentAttachment || epoch !== this.viewEpoch) return;
-				if (previousAttachment && currentAttachment !== previousAttachment && this.sidecar?.connected) {
-					try {
-						await this.detachDaemonSession(this.sidecar, previousAttachment.activeSessionId);
-					} catch {
-						// The daemon may already have released the prior viewer.
-					}
-				}
-				if (!(await this.clearObservation(observedAtStart, epoch))) return;
-				this.returnTargets = [];
-				return;
-			}
-			if (SessionController.isTransientWorkerAttachError(this.lastDaemonAttachError ?? "")) {
-				// v0.9+: the daemon made attach wait on worker recovery, then told
-				// us the wait was interrupted and to retry. From a plain own-RPC
-				// view the retry rides the same ladder a socket drop uses —
-				// demoting to the read-only observe fallback would outlive the
-				// recovery it reacted to. That ladder is built for
-				// attached === null only: queued from an attached view it could
-				// never arm (isReattaching() stays false), and from an observing
-				// view a successful re-attach would be rolled back as stale —
-				// an attach/rollback loop. Those keep their current view; the
-				// worker settles in seconds and a fresh click lands normally.
-				if (this.attached === null && this.observingId === null && !this.observationRestoring) {
-					const canonical = this.lastDaemonAttachCanonicalId ?? id;
-					this.attachAttempt = { activeSessionId: canonical, sessionPath, sessionId: id };
-					this.attachAttemptEpoch = epoch;
-					this.scheduleReattach(0);
-					this.broadcast({
-						type: "notice",
-						level: "info",
-						text: "That session's worker is still recovering — the view will attach automatically when it is ready.",
-					});
-					this.pushStatus();
-					return;
-				}
-				this.broadcast({
-					type: "notice",
-					level: "info",
-					text: "That session's worker is still recovering — try again in a moment.",
-				});
-				this.restoreAttachedView(previousAttachment, epoch);
-				return;
-			}
-			const observed = await this.startObserving(id, previousAttachment, epoch, sessionPath, observedAtStart);
-			if (this.disposed || epoch !== this.viewEpoch) return;
-			if (observed) return;
-			this.restoreAttachedView(previousAttachment, epoch);
-			this.broadcast({
-				type: "notice",
-				level: "warning",
-				text:
-					"That session is live in another client (likely a terminal). Close it there first, " +
-					"then resume from here.",
-			});
-			return;
-		}
-		this.broadcast({ type: "notice", level: "error", text: `Could not resume session: ${error}` });
-		this.restoreAttachedView(previousAttachment, epoch);
-	}
-
 	/** Attach to a resident session read-only through the daemon observe channel. */
-	private async startObserving(
-		sessionId: string,
-		previousAttachment: AttachRef | null = this.attached,
-		epoch = this.viewEpoch,
-		sessionPath?: string,
-		observedAtStart: string | null = this.observingId,
-	): Promise<boolean> {
-		if (!this.client) return false;
-		const client = this.client;
-		const response = await client.request({ type: "observe", activeSessionId: sessionId }, 30_000);
-		if (
-			this.client !== client ||
-			this.disposed ||
-			epoch !== this.viewEpoch ||
-			this.attached !== previousAttachment ||
-			this.observingId !== observedAtStart
-		)
-			return false;
-		if (!response.success) return false;
-		// Do not retain a writable attachment beneath an observed transcript. If
-		// attaching B failed after we were attached to A, leaving A here made every
-		// action that fell through to `attached` silently operate on A.
-		if (!(await this.detachFromDaemon(previousAttachment)) || epoch !== this.viewEpoch) return false;
-		if (!(await this.clearObservation(observedAtStart, epoch))) return false;
-		// A daemon reconnect belongs to the writable attachment that just gave way
-		// to this read-only view. Do not let its already-in-flight attach complete
-		// underneath observation and start delivering a second event stream.
-		this.attachAttempt = null;
-		this.attachAttemptEpoch = null;
-		this.clearReattachTimer();
-		this.returnTargets = [];
-		this.resetChildrenBaseline();
-		this.resetViewedSessionState();
-		this.observationRestoring = false;
-		this.observingId = sessionId;
-		this.observedSession = { activeSessionId: sessionId, sessionId, sessionPath };
-		const messages = (response.data as { messages?: AgentMessage[] })?.messages ?? [];
-		this.cachedMessages = messages;
-		this.broadcast({ type: "observedSession", sessionId, messages });
-		this.pushStatus();
-		return true;
-	}
 
 	
 	// ----------------------------------------------------------------
 	// Daemon sidecar: attached live sessions (terminal parity)
 	// ----------------------------------------------------------------
 
-	private async ensureSidecar(options: { reattach?: boolean } = {}): Promise<DaemonSidecar> {
-		// The daemon binds a connection's identity on its first command envelope, so
-		// a claim can only be applied to a FRESH socket. Learning our owner id late
-		// (the descriptor is written just after the RPC session starts) or moving to
-		// a different worker therefore has to replace the connection.
-		//
-		// Only ever upgrade or switch: a lookup that momentarily comes back empty —
-		// a descriptor caught mid-rewrite — must not drop a working claim and tear
-		// down a live attachment with it. The claim is released deliberately when
-		// the RPC process exits (see `releaseOwnerIdentity`).
-		const owner = this.ownedRosterClientId();
-		if (this.sidecar && owner && this.sidecar.impersonateClientId !== owner) {
-			this.sidecar.dispose();
-			this.sidecar = null;
-		}
-		if (!this.sidecar) {
-			this.sidecar = new DaemonSidecar();
-			this.sidecar.impersonateClientId = owner ?? null;
-			this.sidecar.onEvent = (message) => this.onDaemonEvent(message);
-			this.sidecar.onAnyLine = (byteLength) => this.debugLog.append(`sidecar-line bytes=${byteLength}`);
-			this.sidecar.onClose = () => this.onSidecarClosed();
-		}
-		if (!this.sidecar.connected) {
-			await this.sidecar.connect();
-		}
-		// Roster push is per-connection: offer it again after every (re)connect.
-		// Capability-detected, so a pre-v0.9 daemon declines and the pull model
-		// below keeps working untouched.
-		await this.setupRosterSubscription(this.sidecar);
-		// Seamless re-attach after a drop: pick up exactly where the user was.
-		// Serialized like connect(): two callers arriving while the socket was down
-		// would otherwise both issue `attach` for the same handle, and the loser
-		// would detach the attachment the winner had just installed — leaving a
-		// live-looking view that receives no events and never recovers.
-		if (options.reattach !== false && this.sidecar.connected && this.attachAttempt && !this.attached) {
-			if (!this.reattaching) {
-				const sidecar = this.sidecar;
-				this.reattaching = this.runReattach(sidecar).finally(() => {
-					this.reattaching = null;
-				});
-			}
-			await this.reattaching;
-		}
-		return this.sidecar;
-	}
-
-	/**
-	 * The daemon connection died. Decide — from the daemon_closing reason the
-	 * supervisor may have announced first — whether the view rides the
-	 * re-attach ladder or goes home to this window's own RPC session.
-	 * Extracted from the socket callback so the lifecycle is testable
-	 * without a live socket.
-	 */
-	private onSidecarClosed(): void {
-		// A roster subscription dies with its connection; ensureSidecar must
-		// offer it again after every reconnect.
-		this.rosterSubscribedSidecar = null;
-		// `daemon_closing` told us WHY the socket is about to go: an update
-		// wants the re-attach ladder, a real shutdown does not.
-		const closing = this.daemonClosingReason;
-		this.daemonClosingReason = null;
-		if (this.attached) {
-			const attachment = this.attached;
-			const attachmentEpoch = this.attachedEpoch;
-			// The daemon dropped our attach registration with the socket, so we
-			// are NOT following this session any more. Leaving `attached` set
-			// makes the re-attach guard below permanently false and the notice
-			// below a lie: prompts would still land but no events would return.
-			this.attached = null;
-			this.attachedEpoch = null;
-			if (closing === "shutdown") {
-				// No supervisor comes back for this socket: the ladder would chase
-				// a dead daemon forever. Hand the view back to our own RPC session
-				// exactly as the session_closed path does.
-				this.attachAttempt = null;
-				this.attachAttemptEpoch = null;
-				this.clearReattachTimer();
-				this.clearRunFlags();
-				this.observationRestoring = true;
-				const epoch = ++this.viewEpoch;
-				this.pushStatus();
-				void this.restoreAfterObservationClosed(epoch);
-				return;
-			}
-			if (attachmentEpoch === this.viewEpoch) {
-				this.attachAttempt = { ...attachment };
-				this.attachAttemptEpoch = attachmentEpoch;
-				this.broadcast({
-					type: "notice",
-					level: "warning",
-					text: closing === "update"
-						? "The daemon restarted for its update — re-attaching now."
-						: "Daemon connection dropped — re-attaching when it comes back.",
-				});
-			} else {
-				this.attachAttempt = null;
-				this.attachAttemptEpoch = null;
-				// A newer explicit navigation owns the display. Keep it
-				// non-interactive until that navigation either completes or
-				// restores an authoritative RPC snapshot.
-				this.observationRestoring = true;
-				// ...but that navigation may itself be blocked on the socket
-				// that just died. Nothing else would ever clear the lock, so
-				// fall back to this window's own session after a grace period.
-				const restoreEpoch = this.viewEpoch;
-				const settle = setTimeout(() => {
-					if (this.disposed || restoreEpoch !== this.viewEpoch) return;
-					if (this.attached || this.observingId || !this.observationRestoring) return;
-					void this.restoreAfterObservationClosed(restoreEpoch);
-				}, 2_000);
-				settle.unref?.();
-			}
-			this.pushStatus();
-			if (attachmentEpoch === this.viewEpoch) this.scheduleReattach(0);
-		}
-		// Not attached, but a re-attach wait may be riding the ladder (a drop
-		// mid-ladder, or the queued wait for a recovering worker). A shutdown
-		// means no supervisor is coming back for that handle: stop the ladder
-		// and give the view back to this window's own session. An update (or a
-		// plain drop) keeps the ladder riding, exactly as before.
-		if (closing === "shutdown" && this.attachAttempt !== null) {
-			const attemptEpoch = this.attachAttemptEpoch;
-			this.attachAttempt = null;
-			this.attachAttemptEpoch = null;
-			this.clearReattachTimer();
-			if (attemptEpoch === this.viewEpoch) {
-				this.clearRunFlags();
-				this.observationRestoring = true;
-				const epoch = ++this.viewEpoch;
-				this.pushStatus();
-				void this.restoreAfterObservationClosed(epoch);
-			}
-		}
-	}
-
 	/** One re-attach attempt for the dropped view. Never run concurrently with itself. */
-	private reattaching: Promise<void> | null = null;
+	reattaching: Promise<void> | null = null;
 
-	private async runReattach(sidecar: DaemonSidecar): Promise<void> {
-		if (this.sidecar !== sidecar || !sidecar.connected || !this.attachAttempt || this.attached) return;
-		const attempt = this.attachAttempt;
-		const attemptEpoch = this.attachAttemptEpoch;
-		if (attemptEpoch === null || attemptEpoch !== this.viewEpoch) {
-			if (this.attachAttempt === attempt) {
-				this.attachAttempt = null;
-				this.attachAttemptEpoch = null;
-				this.clearReattachTimer();
-			}
-			return;
-		}
-		try {
-			// A release of this handle may still be in flight; attaching under it
-			// lets the late detach tear down the fresh subscription.
-			await this.waitForDaemonDetach(attempt.activeSessionId);
-			if (this.sidecar !== sidecar || this.attachAttempt !== attempt || this.viewEpoch !== attemptEpoch || this.attached) return;
-			const result = await sidecar.attach(attempt.activeSessionId);
-			// The user may have switched, stopped observing, or disposed the panel
-			// while the daemon was answering. A late reattach must never reclaim the
-			// view (and therefore later prompts) from that newer navigation.
-			if (
-				this.disposed ||
-				this.viewEpoch !== attemptEpoch ||
-				this.attachAttempt !== attempt ||
-				this.attachAttemptEpoch !== attemptEpoch ||
-				this.attached !== null ||
-				this.observingId !== null
-			) {
-				// Never release a handle that is now the live attachment: that is
-				// the same daemon registration another attach just installed, and
-				// dropping it silently kills the event stream for a view that
-				// still looks (and behaves) attached.
-				if ((this.attached as AttachRef | null)?.activeSessionId !== attempt.activeSessionId) {
-					try {
-						await this.detachDaemonSession(sidecar, attempt.activeSessionId);
-					} catch {
-						// The daemon may already have released the stale viewer.
-					}
-				}
-				return;
-			}
-			this.attached = attempt;
-			this.attachedEpoch = attemptEpoch;
-			this.clearReattachTimer();
-			this.observationRestoring = false;
-			this.applyAttachedSnapshot(result.snapshot);
-			this.broadcast({
-				type: "notice",
-				level: "info",
-				text: "Re-attached to the live session.",
-			});
-		} catch (err) {
-			const transient = SessionController.isTransientWorkerAttachError(err instanceof Error ? err.message : String(err));
-			if (
-				transient &&
-				!this.disposed &&
-				this.attachAttempt === attempt &&
-				this.attachAttemptEpoch === attemptEpoch &&
-				this.viewEpoch === attemptEpoch &&
-				this.attached === null
-			) {
-				// The worker is still recovering; keep the attempt so the ladder
-				// retries instead of ending the view over a transient the daemon
-				// itself flagged as retryable.
-				this.scheduleReattach(0);
-				return;
-			}
-			// keep the attempt saved? user closed it in the meantime — drop
-			if (
-				!this.disposed &&
-				this.attachAttempt === attempt &&
-				this.attachAttemptEpoch === attemptEpoch &&
-				this.viewEpoch === attemptEpoch &&
-				this.attached === null
-			) {
-				this.attachAttempt = null;
-				this.attachAttemptEpoch = null;
-				this.clearReattachTimer();
-				// The shared transcript is still painted. Never make it writable-looking
-				// by falling through to the hidden RPC session before that session has
-				// produced a fresh snapshot.
-				this.observationRestoring = true;
-				const epoch = this.beginNavigation();
-				this.pushStatus();
-				void this.restoreAfterObservationClosed(epoch);
-			}
-		}
-	}
+	reattachTimer: NodeJS.Timeout | null = null;
+	ownerIdCache: { sessionFile: string; id: string | undefined; at: number } | null = null;
+	childrenTimer: ReturnType<typeof setTimeout> | null = null;
+	childrenRefreshInFlight = false;
+	childrenRefreshPending = false;
+	lastChildrenRefreshMs = 0;
 
-	/** Wait for an earlier release of this daemon handle before attaching it again. */
-	private async waitForDaemonDetach(activeSessionId: string): Promise<void> {
-		const pending = this.pendingDaemonDetaches.get(activeSessionId);
-		if (!pending) return;
-		try {
-			await pending;
-		} catch {
-			// A failed release leaves no daemon registration to wait on.
-		}
-	}
-
-	/**
-	 * Serialize detach calls by active handle. Without this, Browse can start
-	 * releasing parent A just as Back re-attaches A, and its late detach tears
-	 * down the fresh parent subscription.
-	 */
-	private async detachDaemonSession(sidecar: DaemonSidecar, activeSessionId: string): Promise<void> {
-		const prior = this.pendingDaemonDetaches.get(activeSessionId);
-		const chained = (prior ? prior.catch(() => {}) : Promise.resolve()).then(() => sidecar.detach(activeSessionId));
-		this.pendingDaemonDetaches.set(activeSessionId, chained);
-		try {
-			await chained;
-		} finally {
-			if (this.pendingDaemonDetaches.get(activeSessionId) === chained) this.pendingDaemonDetaches.delete(activeSessionId);
-		}
-	}
-
-	private reattachTimer: NodeJS.Timeout | null = null;
-	/** Backoff ladder (ms) for autonomous re-attach after a daemon restart. */
-	private static readonly REATTACH_BACKOFF = [1_000, 2_000, 5_000, 10_000, 10_000, 30_000];
-
-	private clearReattachTimer(): void {
-		if (this.reattachTimer) clearTimeout(this.reattachTimer);
-		this.reattachTimer = null;
-	}
-
-	/**
-	 * Recovery must not wait for the operator to click something: nothing else
-	 * calls ensureSidecar() once the socket is gone (the event traffic that drove
-	 * scheduleChildrenRefresh died with it), so the promised re-attach would
-	 * never happen on its own.
-	 */
-	private scheduleReattach(step: number): void {
-		this.clearReattachTimer();
-		if (this.disposed || !this.isReattaching()) return;
-		const delay = SessionController.REATTACH_BACKOFF[Math.min(step, SessionController.REATTACH_BACKOFF.length - 1)];
-		this.reattachTimer = setTimeout(() => {
-			this.reattachTimer = null;
-			if (this.disposed || !this.isReattaching()) return;
-			void this.ensureSidecar()
-				.catch(() => {})
-				.finally(() => {
-					if (!this.disposed && this.isReattaching()) this.scheduleReattach(step + 1);
-				});
-		}, delay);
-	}
-
-	/**
-	 * Adopt a daemon snapshot (attach reply, re-attach, or a catch-up frame) as
-	 * the attached transcript and repaint every webview from it.
-	 */
-	private applyAttachedSnapshot(snapshot: AttachSnapshot | undefined): void {
-		if (snapshot?.messages) this.cachedMessages = snapshot.messages as AgentMessage[];
-		if (snapshot?.state) this.rentedState = snapshot.state as RpcSessionState;
-		const inFlight = snapshot?.summary?.streamingMessage as AgentMessage | undefined;
-		// A turn already under way has no agent_start left to send us; without this
-		// the header, the Stop button and the queue/steer toggle all read "idle".
-		this.clearRunFlags();
-		this.streaming = Boolean(inFlight ?? this.rentedState?.isStreaming);
-		this.compacting = this.rentedState?.isCompacting === true;
-		this.broadcast({
-			type: "snapshot",
-			messages: this.cachedMessages,
-			state: this.rentedState,
-			status: this.buildStatus(),
-			steerDefault: vscode.workspace.getConfiguration("primeAgent").get<"steer" | "followUp">("defaultStreamingBehavior", "steer"),
-		});
-		// The in-flight assistant message is NOT in snapshot.messages, and its
-		// message_start fired before we attached. Replay it so the deltas already
-		// on the wire have a bubble to land in — otherwise the transcript freezes
-		// mid-turn and the finished answer never appears either.
-		if (inFlight?.role === "assistant") {
-			this.broadcast({ type: "event", event: { type: "message_start", message: inFlight } as AgentEvent });
-		}
-		this.pushStatus();
-	}
-
-	/**
-	 * Attach to a session that is already live somewhere else (a terminal).
-	 * The daemon brokers it; both clients see the same stream, both can prompt.
-	 */
-	private async attachViaDaemon(activeSessionId: string, sessionPath: string, epoch = this.beginNavigation()): Promise<boolean> {
-		this.lastDaemonAttachError = null;
-		try {
-			const sidecar = await this.ensureSidecar({ reattach: false });
-			// Resolve the canonical activeSessionId: root-session uuids and 12-char
-			// active windows differ, and events are addressed to the canonical id.
-			let canonicalId = activeSessionId;
-			try {
-				const listed = await this.listSessions(sidecar);
-				const target =
-					listed.find((s) => s.activeSessionId === activeSessionId) ??
-					listed.find((s) => (s as { sessionId?: string }).sessionId === activeSessionId) ??
-					listed.find((s) => s.id === activeSessionId);
-				if (target?.activeSessionId) {
-					canonicalId = target.activeSessionId;
-				}
-			} catch {
-				// list failed — fall back to what was asked (attach may still succeed)
-			}
-			await this.waitForDaemonDetach(canonicalId);
-			if (this.disposed || epoch !== this.viewEpoch) return false;
-			this.lastDaemonAttachCanonicalId = canonicalId;
-			const result = await sidecar.attach(canonicalId);
-			if (this.disposed || epoch !== this.viewEpoch) {
-				try {
-					await this.detachDaemonSession(sidecar, canonicalId);
-				} catch {
-					// Late attach belongs to an obsolete navigation.
-				}
-				return false;
-			}
-			const returnedId = (result.snapshot as { activeSessionId?: string } | undefined)?.activeSessionId;
-			const finalId = returnedId ?? canonicalId;
-			const snapshot = result.snapshot;
-			// History rows and visible-session guards key on the daemon UUID, never
-			// the 12-char attach handle. It may differ from the JSONL filename stem.
-			const uuid =
-				(snapshot?.state as { sessionId?: string } | undefined)?.sessionId ?? snapshot?.summary?.sessionId ?? undefined;
-			// Keep the identity presented to a webview stable for this attachment.
-			// The daemon may reveal its UUID only in a later get_state reply; changing
-			// `sessionId` mid-view otherwise looks like a new chat and clears its draft.
-			const stableSessionId = uuid ?? (sessionPath ? path.basename(sessionPath, ".jsonl") : finalId);
-			const attachment = { activeSessionId: finalId, sessionPath, sessionId: stableSessionId };
-			this.attached = attachment;
-			this.attachedEpoch = epoch;
-			this.attachAttempt = { activeSessionId: finalId, sessionPath, sessionId: stableSessionId };
-			this.attachAttemptEpoch = epoch;
-			// Clear the strip only now that the switch is real — a different session
-			// owns nothing from the last view, but a failed attach must leave the
-			// operator's current strip (and its back row) exactly where it was.
-			this.broadcast({ type: "sessionChildren", children: [] });
-			this.resetChildrenBaseline();
-			this.rentedState = (snapshot?.state ?? null) as RpcSessionState | null;
-			// Local busy flags belong to the session we just left; the snapshot below
-			// re-establishes them for this one.
-			this.clearRunFlags();
-			if (!snapshot?.messages) {
-				try {
-					const messages = await sidecar.getMessages(finalId);
-					if (!this.isCurrentAttachment(attachment) || epoch !== this.viewEpoch) return this.rollbackAttachment(sidecar, attachment);
-					this.cachedMessages = messages as AgentMessage[];
-				} catch {
-					if (!this.isCurrentAttachment(attachment) || epoch !== this.viewEpoch) return this.rollbackAttachment(sidecar, attachment);
-					this.cachedMessages = [];
-				}
-			}
-			if (!this.isCurrentAttachment(attachment) || epoch !== this.viewEpoch) return this.rollbackAttachment(sidecar, attachment);
-			void this.refreshAttachedState();
-			this.scheduleChildrenRefresh();
-			this.resetViewedSessionState();
-			// Stats before the first paint: otherwise the gauge shows the previous
-			// session's context until the throttled status push catches up.
-			await this.fetchAttachedStats();
-			if (!this.isCurrentAttachment(attachment) || epoch !== this.viewEpoch) return this.rollbackAttachment(sidecar, attachment);
-			this.observationRestoring = false;
-			this.creatingSessionEpoch = null;
-			this.applyAttachedSnapshot(snapshot);
-			return true;
-		} catch (error) {
-			this.lastDaemonAttachError = error instanceof Error ? error.message : String(error);
-			this.output.appendLine(`[prime-agent] daemon attach failed: ${String(error)}`);
-			return false;
-		}
-	}
-
-	/**
-	 * prime-agent v0.9 blocks create/attach while a worker recovers instead of
-	 * answering fast (ee8fd6996). The failures it then raises are transient by
-	 * contract — the daemon tells the caller to retry — so they must NOT demote
-	 * the view to the read-only observe fallback or the read-only wall sticks
-	 * for the life of the window.
-	 */
-	private static isTransientWorkerAttachError(message: string): boolean {
-		return /worker recovery was interrupted|retry opening the session|worker is (stopping|starting|recovering|unavailable|not connected)|registered to a failed worker|recovery was interrupted/i.test(
-			message,
-		);
-	}
-
-	/**
-	 * Undo a half-installed attachment. Reaching this means a newer navigation
-	 * took the view after we had already published `this.attached`: leaving it
-	 * set leaks a daemon viewer AND wedges that newer navigation, because its own
-	 * `detachFromDaemon(previous)` no longer recognises what it is holding — the
-	 * window then stays in "switching sessions…" with every action refused.
-	 */
-	private async rollbackAttachment(sidecar: DaemonSidecar, attachment: AttachRef): Promise<false> {
-		const stillOurs = this.attached === attachment;
-		if (stillOurs) {
-			this.attached = null;
-			this.attachedEpoch = null;
-			this.clearRunFlags();
-		}
-		if (this.attachAttempt?.activeSessionId === attachment.activeSessionId) {
-			this.attachAttempt = null;
-			this.attachAttemptEpoch = null;
-			this.clearReattachTimer();
-		}
-		// Only release the handle when it is not the one a newer attach installed.
-		if (this.attached?.activeSessionId !== attachment.activeSessionId) {
-			try {
-				await this.detachDaemonSession(sidecar, attachment.activeSessionId);
-			} catch {
-				// The daemon may already have released this viewer.
-			}
-		}
-		return false;
-	}
-
-	private async detachFromDaemon(expected: AttachRef | null = this.attached): Promise<boolean> {
-		if (expected && this.sidecar?.connected) {
-			await this.detachDaemonSession(this.sidecar, expected.activeSessionId);
-		}
-		// A concurrent navigation attached a different session while the detach was
-		// in flight. Its state belongs to that navigation and must remain intact.
-		if (this.attached !== expected) {
-			// A sidecar close has already released `expected` and cleared the local
-			// attachment. Let the navigation that owned it continue; its epoch guards
-			// still reject an obsolete caller, while treating this as failure would
-			// strand the requested switch behind a disconnected old view.
-			return this.attached === null;
-		}
-		this.attached = null;
-		this.attachedEpoch = null;
-		this.attachAttempt = null;
-		this.attachAttemptEpoch = null;
-		this.rentedState = null;
-		// The run we were following belongs to the session we just let go of.
-		this.clearRunFlags();
-		this.clearReattachTimer();
-		return true;
-	}
-
-	/**
-	 * How long a resolved owner id is trusted. Hits are stable for the life of a
-	 * worker; misses are re-checked promptly because the descriptor is written
-	 * just after the RPC session starts, and the first refreshes race it.
-	 */
-	private static readonly OWNER_ID_HIT_TTL_MS = 30_000;
-	private static readonly OWNER_ID_MISS_TTL_MS = 2_000;
-	private ownerIdCache: { sessionFile: string; id: string | undefined; at: number } | null = null;
-
-	/**
-	 * The owner id of the client-owned worker hosting THIS session, or undefined
-	 * when the roster can be read as ourselves.
-	 *
-	 * Keyed by session file, so switching or forking a session drops the previous
-	 * worker's identity instead of quietly reusing it.
-	 */
-	private ownedRosterClientId(): string | undefined {
-		const sessionFile = this.state?.sessionFile;
-		if (!sessionFile) return undefined;
-		const cached = this.ownerIdCache;
-		const now = Date.now();
-		if (cached && cached.sessionFile === sessionFile) {
-			const ttl = cached.id ? SessionController.OWNER_ID_HIT_TTL_MS : SessionController.OWNER_ID_MISS_TTL_MS;
-			if (now - cached.at < ttl) return cached.id;
-		}
-		let id: string | undefined;
-		try {
-			id = resolveOwnerClientId({ sessionFile });
-		} catch {
-			// Descriptor layout changed or unreadable: degrade to the plain roster.
-			id = undefined;
-		}
-		this.ownerIdCache = { sessionFile, id, at: now };
-		return id;
-	}
-
-	/**
-	 * Every roster read in this class goes through here.
-	 *
-	 * A plain `list all` cannot see the client-owned worker that hosts our own
-	 * RPC session, so our live root reads as a stale on-disk row and none of our
-	 * subagents appear at all. The flag asks for owned workers; the identity that
-	 * makes the daemon hand them over is carried by the sidecar connection itself
-	 * (see `ensureSidecar`). Without a claim this degrades to the plain roster.
-	 */
-	private async listSessions(sidecar: DaemonSidecar): Promise<SessionSummaryRef[]> {
-		return sidecar.list(true, { includeClientOwned: true });
-	}
-
-	/**
-	 * RPC mode creates a client-owned worker. Promote it to resident so:
-	 * other prime-agent processes can see the conversation, and closing the
-	 * RPC stdin does not reap the agent. Idempotent.
-	 */
-	private async promoteOwnRpcSession(): Promise<void> {
-		if (this.rpcSessionPromoted || this.disposed) return;
-		const sessionFile = this.state?.sessionFile;
-		if (!sessionFile) return;
-		let lastError: unknown;
-		for (let attempt = 0; attempt < 5; attempt++) {
-			const descriptor = resolveWorkerDescriptor({ sessionFile });
-			const activeSessionId = descriptor?.rootActiveSessionId;
-			if (!activeSessionId) {
-				await new Promise((resolve) => setTimeout(resolve, 200));
-				continue;
-			}
-			if (!descriptor?.ownerClientId) {
-				this.rpcSessionPromoted = true;
-				return;
-			}
-			try {
-				const sidecar = await this.ensureSidecar({ reattach: false });
-				await sidecar.promoteOwnedSession(activeSessionId);
-				this.rpcSessionPromoted = true;
-				this.output.appendLine(`[prime-agent] promoted RPC session ${activeSessionId} to resident`);
-				return;
-			} catch (err) {
-				lastError = err;
-				await new Promise((resolve) => setTimeout(resolve, 200));
-			}
-		}
-		if (lastError) {
-			this.output.appendLine(`[prime-agent] promote_owned_session failed: ${String(lastError)}`);
-		}
-	}
-
-	/**
-	 * Give up the owner identity when the RPC process that owns the worker is
-	 * gone.
-	 *
-	 * The daemon refuses to reap a client-owned worker while any connected client
-	 * still answers to its owner id, so holding the claim past the agent's death
-	 * would strand that worker and its IPython kernels for as long as this window
-	 * stayed open. Dropping the socket is what releases it: the daemon reschedules
-	 * cleanup on disconnect. The cache is cleared too, so the next connection
-	 * resolves the identity again from scratch — and a descriptor whose process is
-	 * dead resolves to nothing.
-	 */
-	private releaseOwnerIdentity(): void {
-		this.ownerIdCache = null;
-		this.rosterSubscribedSidecar = null;
-		if (!this.sidecar?.impersonateClientId) return;
-		this.sidecar.dispose();
-		this.sidecar = null;
-	}
-
-	/**
-	 * Throttle window for the subagent strip. `list all` is a socket round-trip
-	 * that makes the daemon re-read every session file plus every subagent
-	 * registry — one per tool call stalls a long run for no new information.
-	 */
-	private static readonly CHILDREN_REFRESH_MS = 700;
-	private childrenTimer: ReturnType<typeof setTimeout> | null = null;
-	private childrenRefreshInFlight = false;
-	private childrenRefreshPending = false;
-	private lastChildrenRefreshMs = 0;
-
-	/**
-	 * Connect the sidecar lazily and refresh children; fire-and-forget.
-	 * Coalescing matters twice over: it caps the daemon reads, and it stops the
-	 * webview rebuilding the strip (and losing its scroll position) mid-burst.
-	 */
-	private scheduleChildrenRefresh(): void {
-		if (this.disposed) return;
-		// A refresh already on the wire will not see events that arrive during it,
-		// so remember to run once more instead of racing a second list.
-		if (this.childrenRefreshInFlight) {
-			this.childrenRefreshPending = true;
-			return;
-		}
-		if (this.childrenTimer) return;
-		const wait = Math.max(0, SessionController.CHILDREN_REFRESH_MS - (Date.now() - this.lastChildrenRefreshMs));
-		this.childrenTimer = setTimeout(() => {
-			this.childrenTimer = null;
-			void this.runChildrenRefresh();
-		}, wait);
-	}
-
-	private async runChildrenRefresh(): Promise<void> {
-		if (this.disposed) return;
-		this.childrenRefreshInFlight = true;
-		this.childrenRefreshPending = false;
-		try {
-			await this.ensureSidecar();
-			await this.refreshChildren();
-		} catch {
-			// daemon unavailable — panel stays empty
-		} finally {
-			this.childrenRefreshInFlight = false;
-			this.lastChildrenRefreshMs = Date.now();
-			if (!this.disposed && this.childrenRefreshPending) this.scheduleChildrenRefresh();
-		}
-	}
-
-	/** Refresh and broadcast the children (subagents) of the CURRENT session. */
-	/** Previous flattened children set (for spawn/retire card derivation). */
-	private previousChildIds: Set<string> | null = null;
-	/** Last strip payload sent, so an unchanged roster doesn't repaint the strip. */
-	private lastChildrenPayload: string | null = null;
-
-	/**
-	 * Forget what the strip knows. Both halves must go together: the spawn
-	 * baseline decides which subagents count as "new" (a stale one announces a
-	 * whole resumed session as freshly spawned), and the payload cache would
-	 * otherwise suppress the re-send the webview needs after it wipes its own
-	 * copy on a session change.
-	 */
-	private resetChildrenBaseline(): void {
-		this.childrenContext += 1;
-		this.previousChildIds = null;
-		this.lastChildrenPayload = null;
-		this.browseableChildren.clear();
-		this.browseRefByActiveId.clear();
-	}
-
-	/** Mint a stable opaque capability for a child that is actually in this strip. */
-	private browseRefFor(activeSessionId: string, parentId?: string, contextId = this.childrenContext): string | undefined {
-		if (!activeSessionId) return undefined;
-		let ref = this.browseRefByActiveId.get(activeSessionId);
-		if (!ref) {
-			ref = randomUUID();
-			this.browseRefByActiveId.set(activeSessionId, ref);
-		}
-		this.browseableChildren.set(ref, { activeSessionId, parentId, contextId });
-		return ref;
-	}
-
-	private async refreshChildren(): Promise<void> {
-		if (!this.sidecar?.connected) return;
-		const epoch = this.viewEpoch;
-		const attachment = this.attached;
-		// The observed transcript is intentionally read-only. Never mine the hidden
-		// RPC session for child capabilities while it is on screen.
-		if (this.observingId) return;
-		try {
-			const sessions = await this.listSessions(this.sidecar);
-			if (this.disposed || epoch !== this.viewEpoch || this.attached !== attachment || this.observingId) return;
-			let parentActive: string;
-			let parentUuid: string | undefined;
-			if (attachment) {
-				parentActive = attachment.activeSessionId;
-				parentUuid = undefined;
-			} else {
-				parentActive = "";
-				parentUuid = this.state?.sessionId;
-			}
-			type Rich = SessionSummaryRef & { runtimeKind?: string; rlmDepth?: number; parentSessionId?: string; isStreaming?: boolean; activity?: string; sessionName?: string };
-			const byActive = (s: SessionSummaryRef): string => s.activeSessionId ?? s.id ?? "";
-			// Identity that survives passivation. A resident subagent is listed under
-			// its 12-char active handle and the same subagent, once finished, under
-			// its uuid — diffing on the attach target alone reads that transition as
-			// a brand-new subagent and fabricates a spawn card for it.
-			const stableId = (s: SessionSummaryRef): string => s.sessionId ?? s.activeSessionId ?? s.id ?? "";
-			const asChild = (c: SessionSummaryRef, parentId?: string): SessionChild => {
-				const rich = c as Rich;
-				const activeSessionId = byActive(c);
-				return {
-					id: c.id ?? "",
-					activeSessionId,
-					...(parentId ? { browseRef: this.browseRefFor(activeSessionId, parentId) } : {}),
-					name: rich.sessionName,
-					runtimeKind: rich.runtimeKind,
-					rlmDepth: rich.rlmDepth,
-					created: rich.created,
-					isStreaming: rich.isStreaming ?? false,
-					// One source of truth with history rows and with the CLI: see
-					// rosterStatus. A subagent with no worker behind it is "inactive",
-					// which for a child means finished.
-					status: SessionController.rosterStatus(c),
-					...(c.statusLabel ? { statusLabel: c.statusLabel } : {}),
-					attachedClients: c.attachedClients ?? 0,
-				};
-			};
-			const isChildKind = (rich: Rich): boolean => !!rich.runtimeKind && rich.runtimeKind !== "root";
-			let children = sessions.filter((s) => {
-				const rich = s as Rich;
-				if (!isChildKind(rich)) return false;
-				if (attachment) {
-					return (
-						(s.parentActiveSessionId && s.parentActiveSessionId === parentActive) ||
-						(rich.parentSessionId === parentActive)
-					);
-				}
-				return parentUuid != null && rich.parentSessionId === parentUuid;
-			});
-
-			// Viewing context for the strip: parent + siblings (when the current
-			// session has a parent of its own), plus the viewed id for the
-			// highlight. Works for browsed subagents and terminal-live sessions.
-			let parent: SessionChild | undefined;
-			let siblingRefs: SessionSummaryRef[] | undefined;
-			const currentId = attachment ? parentActive : undefined;
-			const currentSummary = sessions.find((s) => byActive(s) === currentId) as (SessionSummaryRef & Rich) | undefined;
-			if (attachment && currentSummary) {
-				const parentActiveId = currentSummary.parentActiveSessionId;
-				const parentSummaryRef = parentActiveId
-					? sessions.find((s) => byActive(s) === parentActiveId)
-					: undefined;
-				if (parentSummaryRef) parent = asChild(parentSummaryRef);
-				if (parentActiveId) {
-					// The session being viewed stays in the list. Dropping it was what
-					// made the count fall by one on entry and left the green "currently
-					// viewing" highlight with no row to land on.
-					siblingRefs = sessions
-						.filter((s) => {
-							const rich = s as Rich;
-							return isChildKind(rich) && rich.parentActiveSessionId === parentActiveId;
-						})
-				}
-			}
-			const childRows = children.map((child) => {
-				const rich = child as Rich;
-				return asChild(child, child.parentActiveSessionId ?? rich.parentSessionId);
-			});
-			const siblings = siblingRefs?.map((sibling) => {
-				const rich = sibling as Rich;
-				return asChild(sibling, sibling.parentActiveSessionId ?? rich.parentSessionId);
-			});
-			// A row leaves the visual strip when its daemon relationship changes. Its
-			// old ref must stop being authority even if a stale webview still holds it.
-			const activeRefs = new Set([...childRows, ...(siblings ?? [])].flatMap((row) => (row.browseRef ? [row.browseRef] : [])));
-			for (const [ref, capability] of this.browseableChildren) {
-				if (activeRefs.has(ref)) continue;
-				this.browseableChildren.delete(ref);
-				if (this.browseRefByActiveId.get(capability.activeSessionId) === ref) this.browseRefByActiveId.delete(capability.activeSessionId);
-			}
-			if (this.disposed || epoch !== this.viewEpoch || this.attached !== attachment || this.observingId) return;
-			const flat = new Set<string>(children.map(stableId));
-			const prev = this.previousChildIds;
-			const spawnCards = prev === null
-				? []
-				: children
-						.filter((c) => !prev.has(stableId(c)))
-						.map((c) => {
-							const row = childRows.find((candidate) => candidate.activeSessionId === byActive(c));
-							return {
-								activeSessionId: byActive(c),
-								browseRef: row?.browseRef,
-								name: (c as Rich).sessionName,
-								created: (c as Rich).created,
-							};
-						});
-			this.previousChildIds = flat;
-			const payload: Extract<HostToWebview, { type: "sessionChildren" }> = {
-				type: "sessionChildren",
-				children: childRows,
-				parent,
-				siblings,
-				viewedActiveSessionId: currentId,
-				spawned: spawnCards,
-			};
-			// An unchanged roster must not be re-sent: the webview rebuilds the whole
-			// strip from the message, which throws away the operator's scroll position
-			// inside it. Spawn cards always go through — they are one-shot news.
-			const fingerprint = JSON.stringify({ ...payload, spawned: [] });
-			if (spawnCards.length === 0 && fingerprint === this.lastChildrenPayload) return;
-			this.lastChildrenPayload = fingerprint;
-			this.broadcast(payload);
-		} catch (err) {
-			// Stale layout is tolerated until the next refresh, but a programming
-			// error in the strip logic must not be indistinguishable from "daemon
-			// unavailable" — leave a trace instead of a silently frozen panel.
-			this.debugLog.append(`children-refresh failed: ${err instanceof Error ? err.message : String(err)}`);
-		}
-	}
-
-	/** Browse into a subagent (or any resident session): attach via the daemon. */
-	async browseChild(browseRef: string): Promise<boolean> {
-		if (this.guardObservedReadOnly("browsing a subagent")) return false;
-		const capability = this.browseableChildren.get(browseRef);
-		if (!capability || capability.contextId !== this.childrenContext) {
-			this.broadcast({ type: "notice", level: "error", text: "Invalid subagent reference." });
-			return false;
-		}
-		// Claim the navigation before either daemon round-trip. A second click wins;
-		// this older lookup may still finish, but it cannot attach over the newer view.
-		const previous = this.attached;
-		const epoch = this.beginNavigation();
-		let sidecar: DaemonSidecar;
-		let child: SessionSummaryRef | undefined;
-		try {
-			sidecar = await this.ensureSidecar({ reattach: false });
-			child = (await this.listSessions(sidecar)).find((candidate) => (candidate.activeSessionId ?? candidate.id) === capability.activeSessionId);
-		} catch {
-			if (epoch !== this.viewEpoch) return false;
-			this.restoreAttachedView(previous, epoch);
-			this.broadcast({ type: "notice", level: "error", text: "Could not verify that subagent session." });
-			return false;
-		}
-		if (this.disposed || epoch !== this.viewEpoch || capability.contextId !== this.childrenContext) return false;
-		const parentId = child?.parentActiveSessionId ?? (child as { parentSessionId?: string } | undefined)?.parentSessionId;
-		const rich = child as (SessionSummaryRef & { runtimeKind?: string }) | undefined;
-		if (!child || !rich || !rich.runtimeKind || rich.runtimeKind === "root" || parentId !== capability.parentId) {
-			this.broadcast({ type: "notice", level: "error", text: "That subagent is no longer part of this session." });
-			this.restoreAttachedView(previous, epoch);
-			return false;
-		}
-		// A descent pushes a breadcrumb; a lateral move must not.
-		//
-		// The strip offers exactly two kinds of row: children of the session on
-		// screen, and its siblings. Stepping to a sibling does not go anywhere
-		// deeper — B has the same parent A did — so the entry already on the stack
-		// is still the right way up, and pushing another made "‹ parent" walk back
-		// through the siblings the operator had visited instead of going up.
-		//
-		// From this window's own session there are no siblings, so every browsable
-		// row is a descent.
-		const descending = previous === null || capability.parentId === previous.activeSessionId;
-		// Install the breadcrumb before the target's final snapshot finishes. Back
-		// can then recover the parent if the user changes their mind mid-attach.
-		const breadcrumb = previous ? ({ kind: "attached", ...previous } as const) : ({ kind: "rpc" } as const);
-		if (descending) this.returnTargets.push(breadcrumb);
-		// Attach FIRST, let go second. Tearing the current session down up front
-		// meant a subagent the daemon can no longer rehydrate left the operator
-		// detached, with the strip and its "‹ parent" row destroyed and nothing
-		// left to click — the freeze reported in the build thread.
-		const attached = await this.attachViaDaemon(capability.activeSessionId, child.sessionFile ?? "", epoch);
-		if (this.disposed || epoch !== this.viewEpoch) {
-			if (descending && this.returnTargets.at(-1) === breadcrumb) this.returnTargets.pop();
-			return false;
-		}
-		if (!attached) {
-			this.broadcast({ type: "notice", level: "error", text: "Could not attach to that subagent session (it may be gone)." });
-			if (descending && this.returnTargets.at(-1) === breadcrumb) this.returnTargets.pop();
-			this.restoreAttachedView(previous, epoch);
-			this.scheduleChildrenRefresh();
-			return false;
-		}
-		if (previous && this.sidecar?.connected && epoch === this.viewEpoch && this.attached !== previous) {
-			try {
-				await this.detachDaemonSession(this.sidecar, previous.activeSessionId);
-			} catch {
-			// the daemon dropped it for us — nothing left to release
-			}
-		}
-		if (epoch !== this.viewEpoch) return false;
-		this.scheduleChildrenRefresh();
-		return true;
-	}
-
-	async backToParent(): Promise<void> {
-		const epoch = this.beginNavigation();
-		const target = this.returnTargets.at(-1) ?? { kind: "rpc" as const };
-		if (target.kind === "attached") {
-			const path = target.sessionPath;
-			const id = target.activeSessionId;
-			const current = this.attached;
-			if (!(await this.detachFromDaemon(current)) || epoch !== this.viewEpoch) return;
-			if (await this.attachViaDaemon(id, path, epoch)) {
-				if (epoch !== this.viewEpoch) return;
-				this.returnTargets.pop();
-				return;
-			}
-			if (epoch !== this.viewEpoch || this.attached !== null) return;
-			// The parent went away while we were inside the child. Land on our own
-			// session rather than on nothing — going up must never dead-end.
-			this.broadcast({ type: "notice", level: "warning", text: "The parent session is no longer live — returning to this window's session." });
-		}
-		// baseline: own RPC session.
-		//
-		// Browsing from this window's own session into a subagent leaves that CHILD
-		// attached and pushes an "rpc" breadcrumb, so going back arrives here
-		// holding an attachment that must be released first. Refusing whenever one
-		// existed — and asking detachFromDaemon to expect none — made "‹ parent" a
-		// silent no-op for the most common path there is: root -> child -> back.
-		// A newer navigation is still rejected, by the epoch guard that means it.
-		if (epoch !== this.viewEpoch) return;
-		const landing = this.attached;
-		if (!(await this.detachFromDaemon(landing)) || epoch !== this.viewEpoch || this.attached !== null) return;
-		this.returnTargets.pop();
-		// The strip belongs to whatever session we just landed on, and the spawn
-		// baseline still holds the child's (usually empty) set — leaving it would
-		// announce every one of the parent's subagents as freshly spawned.
-		this.resetChildrenBaseline();
-		this.beginRpcRestore();
-		if (await this.restoreOwnRpcView(epoch)) this.scheduleChildrenRefresh();
-	}
+	previousChildIds: Set<string> | null = null;
+	lastChildrenPayload: string | null = null;
 
 	/** Route daemon events for the attached session into the normal pipeline. */
-	private onDaemonEvent(message: DaemonServerMessage): void {
-		this.debugLog.append(`daemon-event: type=${message.type} sid=${String(message.activeSessionId).slice(0, 20)}${this.attached ? ` attached=${this.attached.activeSessionId.slice(0, 20)}` : " no-attach"}`);
-		// Global frames first: neither carries an activeSessionId, and both must
-		// be honored even when no session is attached (the daemon announces its
-		// own close on the bare connection, and roster push drives history + the
-		// subagents strip for the whole window).
-		if (message.type === "daemon_closing") {
-			this.onDaemonClosing(message.reason);
-			return;
-		}
-		if (message.type === "roster_update") {
-			this.onRosterUpdate(message);
-			return;
-		}
-		const attached = this.attached;
-		if (!attached || !this.isCurrentAttachment(attached)) return;
-		const msgSessionId = message.activeSessionId;
-		if (message.type === "session_event" && msgSessionId === attached.activeSessionId && message.event) {
-			this.onAgentEvent(message.event as AgentEvent);
-			return;
-		}
-		if (message.type === "session_status" && msgSessionId === attached.activeSessionId) {
-			void this.refreshAttachedState();
-			this.scheduleHistoryRefresh();
-			return;
-		}
-		// Catch-up frames REPLACE the live events the daemon withheld while our
-		// socket was backpressured or the worker was swapped. Dropping them loses
-		// every message from that window with no visible gap in the transcript.
-		if (message.type === "session_replaced" && msgSessionId === attached.activeSessionId) {
-			this.applyAttachedSnapshot({
-				state: message.state as Record<string, unknown> | undefined,
-				messages: message.messages as Array<Record<string, unknown>> | undefined,
-			});
-			void this.refreshAttachedState();
-			return;
-		}
-		if (message.type === "session_resynced" && msgSessionId === attached.activeSessionId) {
-			this.applyAttachedSnapshot(message.snapshot as AttachSnapshot | undefined);
-			return;
-		}
-			if (message.type === "session_closed" && msgSessionId === attached.activeSessionId) {
-				this.broadcast({ type: "notice", level: "warning", text: "The live session was closed by its other client." });
-					this.attached = null;
-					this.attachedEpoch = null;
-					this.attachAttempt = null;
-					this.attachAttemptEpoch = null;
-				this.rentedState = null;
-			// No agent_end is coming for a session that no longer exists.
-				this.clearRunFlags();
-				this.clearReattachTimer();
-				// The closed shared transcript must never become a writable-looking view
-				// of our hidden RPC session. Restore that session before controls return.
-				this.observationRestoring = true;
-				const epoch = ++this.viewEpoch;
-				this.pushStatus();
-				void this.restoreAfterObservationClosed(epoch);
-			}
-	}
-
-	/**
-	 * The daemon is about to close every client socket (its own shutdown, or a
-	 * self-update cutover). Announced BEFORE the EOF so "the view will come back"
-	 * and "the daemon went away" stop being the same mystery to the operator, and
-	 * so the close handler knows whether a reconnect ladder is even wanted.
-	 */
-	private onDaemonClosing(reason: string | undefined): void {
-		const closing = reason === "update" ? "update" : "shutdown";
-		this.daemonClosingReason = closing;
-		// Only promise a re-attach to a view that is actually following a daemon
-		// session; for a window on its own RPC session the daemon coming or going
-		// is background news.
-		const following = this.attached !== null || this.isReattaching();
-		this.broadcast({
-			type: "notice",
-			level: "info",
-			text:
-				closing === "update"
-					? following
-						? "The prime-agent daemon is updating — the view will re-attach automatically when it is back."
-						: "The prime-agent daemon is updating — it will be back on its own."
-					: "The prime-agent daemon is shutting down.",
-		});
-	}
-
-	/**
-	 * Roster push (rev 24+, capability "agent_roster"): subagent/history state
-	 * changed, so refresh from the ledger-served list at change cadence instead of
-	 * agent-event cadence. `resync:true` marks a wholesale replacement; both are
-	 * handled by the same throttled re-read, and the strip/history fingerprints
-	 * suppress the paint when nothing visible moved.
-	 */
-	private onRosterUpdate(_message: DaemonServerMessage): void {
-		this.scheduleHistoryRefresh();
-		this.scheduleChildrenRefresh();
-	}
-
-	/**
-	 * Subscribe this sidecar to agent-roster push when the daemon offers it.
-	 * Fire-and-forget safe: a refusal (older daemon, mid-update) just leaves the
-	 * host on the pull model it already has, and a later reconnect tries again.
-	 */
-	private async setupRosterSubscription(sidecar: DaemonSidecar): Promise<void> {
-		if (this.rosterSubscribedSidecar === sidecar) return;
-		this.rosterSubscribedSidecar = null;
-		// Older sidecar fakes (tests) and any pre-capability daemon lack the probe
-		// entirely — treat both as "push not offered, pull model continues".
-		if (!sidecar.connected || typeof sidecar.hasServerCapability !== "function" || !sidecar.hasServerCapability("agent_roster")) return;
-		try {
-			await sidecar.rosterSubscribe();
-			this.rosterSubscribedSidecar = sidecar;
-			this.debugLog.append(`roster: subscribed (schemaRevision ${sidecar.hello?.schemaRevision ?? "?"})`);
-		} catch (err) {
-			this.debugLog.append(`roster: subscribe failed (pull model continues): ${err instanceof Error ? err.message : String(err)}`);
-		}
-	}
-
-	private async refreshAttachedState(): Promise<void> {
-		const attached = this.attached;
-		if (!attached || !this.sidecar?.connected) return;
-		try {
-			const state = (await this.sidecar.getState(attached.activeSessionId)) as RpcSessionState;
-			if (!this.isCurrentAttachment(attached)) return;
-			this.rentedState = state;
-			// get_state answers with the daemon summary, which is where the uuid
-			// lives when the attach snapshot didn't carry one.
-			this.pushStatus();
-		} catch {
-			// keep current state
-		}
-	}
 
 	/** Effective model/status snapshot accounting for daemon-attached sessions. */
-
-	private async clearObservation(expectedId: string | null = this.observingId, epoch = this.viewEpoch): Promise<boolean> {
-		if (this.disposed || epoch !== this.viewEpoch) return false;
-		if (expectedId === null) return this.observingId === null;
-		if (this.observingId !== expectedId) return false;
-		const id = expectedId;
-		this.observingId = null;
-		this.observedSession = null;
-		const client = this.client;
-		if (client) {
-			try {
-				await client.request({ type: "unobserve", activeSessionId: id }, 10_000);
-			} catch {
-				// best effort
-			}
-		}
-		if (this.disposed || epoch !== this.viewEpoch) return false;
-		this.broadcast({ type: "observedClosed", sessionId: id });
-		return true;
-	}
-
-	async stopObserving(): Promise<void> {
-		if (!this.observingId) return;
-		// Clearing `observingId` has to happen before the daemon reply so observed
-		// events stop routing here; keep a separate restore lock over that gap so a
-		// prompt cannot fall through to this window's hidden RPC session.
-		const observedAtStart = this.observingId;
-		const epoch = this.beginNavigation();
-		this.observationRestoring = true;
-		this.pushStatus();
-		if (!(await this.clearObservation(observedAtStart, epoch))) {
-			// Never leave the restore lock latched behind a refused hand-off: the
-			// composer would stay disabled with no way back. A newer navigation owns
-			// the lock (and will clear it) only when it also took the epoch.
-			if (!this.disposed && epoch === this.viewEpoch && !this.attached) {
-				this.observationRestoring = false;
-				this.pushStatus();
-			}
-			return;
-		}
-		// Same trap as backToParent: we land on a different session, so the strip
-		// and the spawn baseline both belong to the one we just left.
-		this.beginRpcRestore();
-		if (await this.restoreOwnRpcView(epoch)) this.scheduleChildrenRefresh();
-	}
 
 	// ------------------------------------------------------------------
 	// Snapshot / status
@@ -3881,12 +2043,12 @@ export class SessionController implements vscode.Disposable {
 	 * webview keeps no children of its own. Drop the change filter so the next
 	 * refresh is allowed through even when the roster itself hasn't moved.
 	 */
-	private repaintChildrenStrip(): void {
+	repaintChildrenStrip(): void {
 		this.lastChildrenPayload = null;
 		this.scheduleChildrenRefresh();
 	}
 
-	private async refreshStateAndStats(): Promise<void> {
+	async refreshStateAndStats(): Promise<void> {
 		// Attached events describe the daemon session, not our RPC subprocess.
 		if (this.attached) {
 			await this.refreshAttachedState();
@@ -3906,16 +2068,16 @@ export class SessionController implements vscode.Disposable {
 		if (this.isCurrentRpcView(client, epoch)) this.pushStatus();
 	}
 
-	private lastStatsText = "";
-	private statsTimer: NodeJS.Timeout | null = null;
-	private statsFetching = false;
+	lastStatsText = "";
+	statsTimer: NodeJS.Timeout | null = null;
+	statsFetching = false;
 
 	/** Broadcast the status immediately using cached stats (cheap, per-event). */
-	private pushStatusLight(): void {
+	pushStatusLight(): void {
 		this.broadcast({ type: "status", status: this.buildStatus(this.lastStatsText) });
 	}
 
-	private async fetchStatsText(allowRestoring = false): Promise<string> {
+	async fetchStatsText(allowRestoring = false): Promise<string> {
 		const client = this.client;
 		const epoch = this.viewEpoch;
 		if (!client?.running) return "";
@@ -3957,7 +2119,7 @@ export class SessionController implements vscode.Disposable {
 	 * fetchStatsText() would answer for our idle background session, so the gauge
 	 * would read ~2% while the terminal session sits at 88%.
 	 */
-	private async fetchAttachedStats(): Promise<string> {
+	async fetchAttachedStats(): Promise<string> {
 		const attached = this.attached;
 		if (!attached || !this.sidecar?.connected) return this.lastStatsText;
 		try {
@@ -3986,19 +2148,19 @@ export class SessionController implements vscode.Disposable {
 		}
 	}
 
-	private lastUsage: { usageTotal?: number; costUsd?: number; contextTokens?: number | null; contextWindow?: number; contextPercent?: number | null } = {};
+	lastUsage: { usageTotal?: number; costUsd?: number; contextTokens?: number | null; contextWindow?: number; contextPercent?: number | null } = {};
 
 	/** True while the session on screen is busy, whoever started the turn. */
-	private effectiveStreaming(): boolean {
+	effectiveStreaming(): boolean {
 		if (this.attached) return this.streaming || (this.rentedState?.isStreaming ?? false);
 		return this.streaming || (this.state?.isStreaming ?? false);
 	}
 
-	private sessionChromeLabel(sessionName?: string): string {
+	sessionChromeLabel(sessionName?: string): string {
 		return deriveSessionLabel({ name: sessionName, firstPrompt: firstUserPrompt(this.cachedMessages) });
 	}
 
-	private buildStatus(statsText = this.lastStatsText): StatusSnapshot {
+	buildStatus(statsText = this.lastStatsText): StatusSnapshot {
 		if (this.isCreatingSession()) {
 			const st = (this.rentedState ?? this.state) as RpcSessionState | null;
 			const model = st?.model ?? null;
@@ -4192,188 +2354,7 @@ export class SessionController implements vscode.Disposable {
 	// Editor context helpers
 	// ------------------------------------------------------------------
 
-	getActiveSelection(): { path: string; startLine: number; endLine: number; text: string; languageId: string } | null {
-		const editor = vscode.window.activeTextEditor;
-		if (!editor) return null;
-		const doc = editor.document;
-		if (!this.isInWorkspaceRoot(doc.uri)) return null;
-		const sel = editor.selection;
-		if (sel.isEmpty) return null;
-		const text = doc.getText(sel);
-		if (text.length > 100_000) return null;
-		const relativePath = this.workspaceRelativePath(doc.uri);
-		if (!relativePath) return null;
-		return {
-			path: relativePath,
-			startLine: sel.start.line + 1,
-			endLine: sel.end.line + 1,
-			text,
-			languageId: doc.languageId,
-		};
-	}
-
-	getActiveFilePath(): string | null {
-		const editor = vscode.window.activeTextEditor;
-		if (!editor) return null;
-		return this.workspaceRelativePath(editor.document.uri);
-	}
-
-	async searchFiles(query: string, requestId: number, reply: (message: HostToWebview) => void = (message) => this.broadcast(message)): Promise<void> {
-		const epoch = this.viewEpoch;
-		const attached = this.attached;
-		const observingId = this.observingId;
-		const config = vscode.workspace.getConfiguration("primeAgent");
-		const configuredMax = config.get<number>("maxFileSearchResults", 40);
-		const max = Math.max(1, Math.min(100, Number.isFinite(configuredMax) ? Math.floor(configuredMax) : 40));
-		const trimmed = query.trim().slice(0, 512);
-		// This is a filename filter, not a glob-expression input. Drop glob syntax
-		// before building the VS Code glob so a hostile webview cannot widen an
-		// otherwise bounded search into an unexpectedly expensive one.
-		const literal = trimmed.replace(/[{}\[\]*?!\\]/g, "");
-		const pattern = literal ? `**/*${literal.replace(/[\s]+/g, "*")}*` : "**/*";
-		const exclude = "**/{node_modules,.git,dist,out,.turbo,.next,coverage}/**";
-		try {
-			const uris = await vscode.workspace.findFiles(pattern, exclude, max);
-			if (this.disposed || epoch !== this.viewEpoch || this.attached !== attached || this.observingId !== observingId) return;
-			const files = uris.map((uri) => this.workspaceRelativePath(uri)).filter((file): file is string => file !== null);
-			const dirs = await this.searchDirs(trimmed, Math.max(8, Math.floor(max / 4)));
-			if (this.disposed || epoch !== this.viewEpoch || this.attached !== attached || this.observingId !== observingId) return;
-			const combined = [
-				...dirs.map((path) => ({ path, isDir: true })),
-				...files.map((path) => ({ path, isDir: false })),
-			].sort((a, b) => a.path.localeCompare(b.path));
-			reply({ type: "fileSearchResults", requestId, files: combined });
-		} catch {
-			if (!this.disposed && epoch === this.viewEpoch && this.attached === attached && this.observingId === observingId) {
-				reply({ type: "fileSearchResults", requestId, files: [] });
-			}
-		}
-	}
-
 	/** Lightweight directory listing for @-folder mentions. Pruned, capped, fuzzy. */
-	private async searchDirs(query: string, max: number): Promise<string[]> {
-		const folder = vscode.workspace.workspaceFolders?.[0];
-		if (!folder) return [];
-		const out: string[] = [];
-		const prune = new Set(["node_modules", ".git", "dist", "out", ".turbo", ".next", "coverage", ".vscode-test"]);
-		const needle = query.toLowerCase();
-		const visit = async (relDir: string, uri: vscode.Uri, depth: number): Promise<void> => {
-				if (out.length >= max || depth > 5) return;
-				let entries: [string, vscode.FileType][];
-				try {
-					entries = await vscode.workspace.fs.readDirectory(uri);
-				} catch {
-					return;
-				}
-				for (const [name, type] of entries) {
-					if (type !== vscode.FileType.Directory || name.startsWith(".") || prune.has(name)) continue;
-					const rel = relDir ? `${relDir}/${name}` : name;
-					if ((needle === "" || rel.toLowerCase().includes(needle)) && out.length < max) {
-						out.push(rel);
-					}
-					await visit(rel, vscode.Uri.joinPath(uri, name), depth + 1);
-					if (out.length >= max) return;
-				}
-		};
-		await visit("", folder.uri, 0);
-		return out;
-	}
-
-	async pickImages(requestId: number, reply: (message: HostToWebview) => void = (message) => this.broadcast(message)): Promise<void> {
-		const epoch = this.viewEpoch;
-		const attached = this.attached;
-		const observingId = this.observingId;
-		const stillCurrent = (): boolean =>
-			!this.disposed && epoch === this.viewEpoch && this.attached === attached && this.observingId === observingId && !this.observationRestoring;
-		const uris = await vscode.window.showOpenDialog({
-			canSelectMany: true,
-			filters: { Images: ["png", "jpg", "jpeg", "gif", "webp"] },
-			openLabel: "Attach image",
-		});
-		if (!uris || uris.length === 0) {
-			if (stillCurrent()) reply({ type: "imagePicked", requestId, images: [] });
-			return;
-		}
-		const mimeByExt: Record<string, string> = {
-			png: "image/png",
-			jpg: "image/jpeg",
-			jpeg: "image/jpeg",
-			gif: "image/gif",
-			webp: "image/webp",
-		};
-		const MAX_IMAGES = 8;
-		// Matches webview/image-fit.ts: the provider ceiling is measured on the
-		// encoded payload, so the decoded cap must leave base64 headroom. The
-		// webview resizes anything over this before it ever reaches the wire.
-		const MAX_IMAGE_BYTES = 7 * 1024 * 1024;
-		const MAX_TOTAL_IMAGE_BYTES = 16 * 1024 * 1024;
-		const images: ImageAttachment[] = [];
-		let totalBytes = 0;
-		let skippedOversized = 0;
-		for (const uri of uris.slice(0, MAX_IMAGES)) {
-			try {
-				const bytes = await vscode.workspace.fs.readFile(uri);
-				if (bytes.byteLength > MAX_IMAGE_BYTES || totalBytes + bytes.byteLength > MAX_TOTAL_IMAGE_BYTES) {
-					skippedOversized += 1;
-					continue;
-				}
-				const ext = path.extname(uri.fsPath).slice(1).toLowerCase();
-				images.push({
-					data: Buffer.from(bytes).toString("base64"),
-					mimeType: mimeByExt[ext] ?? "image/png",
-					name: path.basename(uri.fsPath),
-				});
-				totalBytes += bytes.byteLength;
-			} catch {
-				// skip unreadable files
-			}
-		}
-		if (!stillCurrent()) return;
-		if (uris.length > MAX_IMAGES || skippedOversized > 0) {
-			reply({ type: "notice", level: "warning", text: "Some images were skipped (maximum 8 images, 7 MiB each, 16 MiB total)." });
-		}
-		reply({ type: "imagePicked", requestId, images });
-	}
-
-	async openFile(relPath: string, startLine?: number, endLine?: number): Promise<void> {
-		const uri = await this.resolveWorkspaceUri(relPath.replace(/\/$/, ""));
-		if (!uri) return;
-		try {
-			const stat = await vscode.workspace.fs.stat(uri);
-			if (stat.type === vscode.FileType.Directory) {
-				await vscode.commands.executeCommand("revealInExplorer", uri);
-				return;
-			}
-			const doc = await vscode.workspace.openTextDocument(uri);
-			const editor = await vscode.window.showTextDocument(doc);
-			if (startLine !== undefined) {
-				const start = new vscode.Position(Math.max(0, startLine - 1), 0);
-				const end = endLine !== undefined ? new vscode.Position(Math.max(0, endLine - 1), 0) : start;
-				editor.selection = new vscode.Selection(start, end);
-				editor.revealRange(new vscode.Range(start, end), vscode.TextEditorRevealType.InCenter);
-			}
-		} catch {
-			this.broadcast({ type: "notice", level: "error", text: `Could not open ${relPath}` });
-		}
-	}
-
-	private async resolveWorkspaceUri(relPath: string): Promise<vscode.Uri | null> {
-		if (!relPath || path.isAbsolute(relPath) || relPath.split(/[\\/]+/).some((part) => part === "..")) return null;
-		const folder = vscode.workspace.workspaceFolders?.[0];
-		if (!folder) return null;
-		const candidate = vscode.Uri.joinPath(folder.uri, relPath);
-		try {
-			const [root, resolved] = await Promise.all([fs.realpath(folder.uri.fsPath), fs.realpath(candidate.fsPath)]);
-			const relative = path.relative(root, resolved);
-			return relative && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative) ? vscode.Uri.file(resolved) : null;
-		} catch {
-			return null;
-		}
-	}
 }
 
-function formatNumber(value: number): string {
-	if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-	if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
-	return String(value);
-}
+Object.assign(SessionController.prototype, historyCatalogMethods, daemonAttachMethods, compactMethods, workspaceMethods);
