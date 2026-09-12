@@ -3,7 +3,7 @@
  * steering behavior picker, context meter, and Send/Stop controls.
  *
  * Slash items from the agent catalog are inserted and sent as prompts.
- * `/model`, `/effort`, `/thinking`, and `/stash` are local UI commands:
+ * `/model`, `/effort`, `/thinking`, `/stash`, and `/new` are local UI commands:
  * they never go to the model.
  */
 
@@ -25,13 +25,14 @@ const MAX_IMAGE_BYTES = MAX_DECODED_IMAGE_BYTES;
 const MAX_TOTAL_IMAGE_BYTES = 16 * 1024 * 1024;
 const SUPPORTED_IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif"]);
 
-type UiSlashAction = "model" | "effort" | "stash";
+type UiSlashAction = "model" | "effort" | "stash" | "new";
 
 const UI_SLASH_COMMANDS: Array<{ name: string; description: string; action: UiSlashAction }> = [
 	{ name: "model", description: "Select model", action: "model" },
 	{ name: "effort", description: "Select thinking level", action: "effort" },
 	{ name: "thinking", description: "Select thinking level", action: "effort" },
 	{ name: "stash", description: "Stash or restore the current prompt", action: "stash" },
+	{ name: "new", description: "Start a new session", action: "new" },
 ];
 
 const UI_SLASH_BY_NAME = new Map(UI_SLASH_COMMANDS.map((command) => [command.name, command.action]));
@@ -81,6 +82,7 @@ export interface ComposerDeps {
 	onOpenFile: (path: string, startLine?: number, endLine?: number) => void;
 	onDraftChanged: (text: string) => void;
 	onSetCompactThreshold: (percent: number | null) => void;
+	onNewSession: () => void;
 }
 
 export class Composer {
@@ -1667,6 +1669,11 @@ export class Composer {
 	private runUiSlashAction(action: UiSlashAction, args: string): void {
 		if (action === "stash") {
 			this.handleStashCommand();
+			return;
+		}
+		if (action === "new") {
+			this.textarea.value = this.lastNonSlashDraft.text;
+			this.deps.onNewSession();
 			return;
 		}
 		const snapshot = this.snapshotComposer();

@@ -115,6 +115,7 @@ const composerDeps = {
 	onSetThinking: (level: string) => post({ type: "setThinkingLevel", level }),
 	onToggleFavorite: (provider: string, modelId: string) => post({ type: "toggleFavoriteModel", provider, modelId }),
 	onOpenFile: (path: string, startLine?: number, endLine?: number) => post({ type: "openFile", path, startLine, endLine }),
+	onNewSession: () => requestNewSession(),
 };
 const composer = new Composer(composerDeps);
 
@@ -123,11 +124,7 @@ const transcript = new Transcript(scroller, {
 	onOpenFile: (path, startLine, endLine) => post({ type: "openFile", path, startLine, endLine }),
 	onForkFromUser: (ordinal) => post({ type: "forkFromUser", ordinal }),
 	onSpawnedCardClick: (browseRef) => post({ type: "browseChild", browseRef }),
-	onNewSession: () => {
-		composer.flushDraft();
-		startNewThread();
-		post({ type: "newSession" });
-	},
+	onNewSession: () => requestNewSession(),
 	onShowHistory: () => openHistory(),
 	onFocusComposer: () => composer.focus(),
 	onOptimisticConfirmed: (clientRequestId) => pendingPrompts.delete(clientRequestId),
@@ -266,6 +263,12 @@ function showView(view: "chat" | "history"): void {
 	if (view === "history") historyView.showLoading();
 }
 
+function requestNewSession(): void {
+	composer.flushDraft();
+	startNewThread();
+	post({ type: "newSession" });
+}
+
 function startNewThread(): void {
 	showView("chat");
 	subagents.resetForNewThread();
@@ -304,11 +307,7 @@ const newChatBtn = document.createElement("button");
 newChatBtn.className = "icon-btn chrome-action";
 newChatBtn.title = "New session";
 newChatBtn.setAttribute("aria-label", "New session");
-newChatBtn.addEventListener("click", () => {
-	composer.flushDraft();
-	startNewThread();
-	post({ type: "newSession" });
-});
+newChatBtn.addEventListener("click", () => requestNewSession());
 const historyBtn = document.createElement("button");
 historyBtn.className = "icon-btn chrome-action";
 historyBtn.title = "Sessions in this workspace";
