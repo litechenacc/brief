@@ -6,15 +6,15 @@
 import { randomBytes } from "node:crypto";
 import * as vscode from "vscode";
 
-declare const PRIME_AGENT_BUILD_REV: string | undefined;
-const WEBVIEW_REV = typeof PRIME_AGENT_BUILD_REV === "string" ? PRIME_AGENT_BUILD_REV : "dev";
+declare const BRIEF_BUILD_REV: string | undefined;
+const WEBVIEW_REV = typeof BRIEF_BUILD_REV === "string" ? BRIEF_BUILD_REV : "dev";
 import type { HostToWebview, WebviewToHost } from "./protocol.js";
 export { parseWebviewMessage } from "./webview-message.js";
 import { parseWebviewMessage } from "./webview-message.js";
 import type { SessionController } from "./session-controller.js";
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
-	public static readonly viewType = "primeAgent.chat";
+	public static readonly viewType = "brief.chat";
 	private view: vscode.WebviewView | null = null;
 	private sinkAttachment: vscode.Disposable | null = null;
 	private readonly dynamicSink: { post: (message: HostToWebview) => void };
@@ -151,7 +151,7 @@ export class ChatPanel {
 			ChatPanel.current.panel.reveal(vscode.ViewColumn.Active);
 			return ChatPanel.current;
 		}
-		const panel = vscode.window.createWebviewPanel("primeAgent.chatPanel", "Prime Agent", vscode.ViewColumn.Active, {
+		const panel = vscode.window.createWebviewPanel("brief.chatPanel", "Brief", vscode.ViewColumn.Active, {
 			enableScripts: true,
 			retainContextWhenHidden: true,
 			localResourceRoots: [vscode.Uri.joinPath(extensionUri, "media")],
@@ -185,7 +185,7 @@ function wireWebview(webview: vscode.Webview, controller: SessionController): vs
 	const attachment = controller.attach(sink);
 	const receiver = webview.onDidReceiveMessage(
 		(message: unknown) => {
-			const marker = process.env.PRIME_AGENT_VSCODE_LOG;
+			const marker = process.env.BRIEF_VSCODE_LOG;
 			if (marker) {
 				try {
 					require("node:fs").appendFileSync(marker, `recv ${(message as { type?: string }).type}\n`);
@@ -369,7 +369,7 @@ function buildHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
 	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data: blob:; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';" />
 	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 	<link href="${styleUri}?v=${WEBVIEW_REV}" rel="stylesheet" />
-	<title>Prime Agent</title>
+	<title>Brief</title>
 </head>
 <body>
 	<div id="app"></div>

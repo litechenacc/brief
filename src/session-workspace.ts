@@ -39,7 +39,7 @@ async searchFiles(this: SessionController, query: string, requestId: number, rep
 	const epoch = this.viewEpoch;
 	const attached = this.attached;
 	const observingId = this.observingId;
-	const config = vscode.workspace.getConfiguration("primeAgent");
+	const config = vscode.workspace.getConfiguration("brief");
 	const configuredMax = config.get<number>("maxFileSearchResults", 40);
 	const max = Math.max(1, Math.min(100, Number.isFinite(configuredMax) ? Math.floor(configuredMax) : 40));
 	const trimmed = query.trim().slice(0, 512);

@@ -156,7 +156,7 @@ export class Composer {
 		const card = el("div", "composer-card");
 		this.textarea = document.createElement("textarea");
 		this.textarea.rows = 1;
-		this.textarea.placeholder = "Message Prime Agent…";
+		this.textarea.placeholder = "Message Brief…";
 
 		const rail = el("div", "composer-rail");
 		const attachBtn = iconButton("plus", "Attach @file, selection, image…", 15);
@@ -358,8 +358,8 @@ export class Composer {
 		this.textarea.placeholder = this.observing
 			? "Watching a live session — read-only"
 			: this.enabled
-				? "Message Prime Agent…"
-				: (this.blockedReason ?? "Not connected — prime-agent isn't answering");
+				? "Message Brief…"
+				: (this.blockedReason ?? "Not connected — the agent runtime isn't answering");
 		this.updateSendState();
 	}
 
@@ -447,7 +447,7 @@ export class Composer {
 		this.streaming = streaming;
 		this.applyRunControls();
 		// Back to the configured default between runs — not hard-coded "steer",
-		// which silently overrode primeAgent.defaultStreamingBehavior=followUp.
+		// which silently overrode brief.defaultStreamingBehavior=followUp.
 		if (!streaming) this.behavior = this.steerDefault;
 		this.updateBehaviorLabel();
 	}
@@ -639,7 +639,7 @@ export class Composer {
 		// handle at 80 while the readout beside it said 94.
 		const ceiling = Math.max(80, this.compactDefaultPercent ?? 80);
 		if (slider) slider.max = String(ceiling);
-		if (titleEl) titleEl.title = `When the context window reaches this fill, Prime Agent compacts it automatically. Range: 20%–${ceiling}%.`;
+		if (titleEl) titleEl.title = `When the context window reaches this fill, Brief compacts it automatically. Range: 20%–${ceiling}%.`;
 		if (this.compactThreshold != null) {
 			if (titleEl) titleEl.textContent = `Force session auto-compact ≥ ${this.compactThreshold}%`;
 			if (slider) slider.value = String(this.compactThreshold);

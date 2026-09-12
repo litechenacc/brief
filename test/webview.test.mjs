@@ -59,7 +59,7 @@ check("welcome screen visible", !!document.querySelector(".welcome"));
 const splash = document.querySelector(".boot-splash");
 check("boot splash covers the panel before any status", !!splash && !splash.className.includes("gone"), splash?.className ?? "<none>");
 check("splash shows the Brief mark and name",
-	!!splash?.querySelector('svg[viewBox="0 0 178 178"]') && document.querySelector(".boot-splash-name")?.textContent === "Brief");
+	!!splash?.querySelector('svg[viewBox="0 0 24 24"]') && document.querySelector(".boot-splash-name")?.textContent === "Brief");
 check("splash says what it is waiting for", (document.querySelector(".boot-splash-sub")?.textContent ?? "").includes("connecting"),
 	document.querySelector(".boot-splash-sub")?.textContent ?? "<none>");
 hostMessage({ type: "uiState", title: "early agent title", statusText: "warming up" });
@@ -521,7 +521,7 @@ document.querySelector(".subagents-strip .subagents-back-row").dispatchEvent(new
 check("back-row click posts backToParent", posted.some((m) => m.type === "backToParent"));
 
 // --- #34: once connected the splash is done for good. A dropout mid-conversation
-// may only move the status strip — a butterfly fading back over a live transcript
+// may only move the status strip — the Brief mark fading back over a live transcript
 // is exactly what the operator ruled out.
 hostMessage({ type: "status", status: { ...baseStatus, connected: true, modelProvider: "chutes", modelId: "glm", modelLabel: "chutes/glm" } });
 hostMessage({ type: "status", status: { ...baseStatus, connected: false } });
@@ -1610,7 +1610,7 @@ hostMessage({
 	state: { model: { provider: "chutes", id: "kimi" }, thinkingLevel: "max" },
 	status: { ...baseStatus, sessionId: "session-created", sessionName: "", restoring: false },
 });
-check("the created session unlocks the composer", !textarea.disabled && textarea.placeholder === "Message Prime Agent…", `${textarea.disabled} ${textarea.placeholder}`);
+check("the created session unlocks the composer", !textarea.disabled && textarea.placeholder === "Message Brief…", `${textarea.disabled} ${textarea.placeholder}`);
 
 // --- #5/C10: steer vs queue while a run is live, and a Stop that really aborts ---
 const behaviorPill = document.querySelector(".composer-rail .rail-pill.behavior");

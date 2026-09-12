@@ -1,14 +1,12 @@
 {
   "name": "brief",
   "displayName": "Brief",
-  "description": "Prime Agent in VS Code, as the Brief POC 1 runtime shell.",
+  "description": "Brief is a persistent AI coding agent for VS Code.",
   "version": "0.2.4",
   "publisher": "litechenacc",
   "license": "MIT",
   "icon": "media/icon.png",
   "keywords": [
-    "prime agent",
-    "prime intellect",
     "ai agent",
     "coding agent",
     "chat",
@@ -45,16 +43,16 @@
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "prime-agent",
+          "id": "brief",
           "title": "Brief",
           "icon": "media/activity.svg"
         }
       ]
     },
     "views": {
-      "prime-agent": [
+      "brief": [
         {
-          "id": "primeAgent.chat",
+          "id": "brief.chat",
           "type": "webview",
           "name": "Brief"
         }
@@ -62,73 +60,67 @@
     },
     "commands": [
       {
-        "command": "primeAgent.openChat",
+        "command": "brief.openChat",
         "title": "Open Chat in Editor Tab",
         "icon": "$(comment-discussion)",
         "category": "Brief"
       },
       {
-        "command": "primeAgent.focusChat",
+        "command": "brief.focusChat",
         "title": "Focus Chat",
         "icon": "$(comment-discussion)",
         "category": "Brief"
       },
       {
-        "command": "primeAgent.newSession",
+        "command": "brief.newSession",
         "title": "New Session",
         "icon": "$(add)",
         "category": "Brief"
       },
       {
-        "command": "primeAgent.abort",
+        "command": "brief.abort",
         "title": "Stop Agent",
         "icon": "$(debug-stop)",
         "category": "Brief"
       },
       {
-        "command": "primeAgent.compact",
+        "command": "brief.compact",
         "title": "Compact Context",
         "icon": "$(fold)",
         "category": "Brief"
       },
       {
-        "command": "primeAgent.exportChat",
-        "title": "Export Chat\u2026",
+        "command": "brief.exportChat",
+        "title": "Export Chat…",
         "icon": "$(export)",
         "category": "Brief"
       },
       {
-        "command": "primeAgent.history",
+        "command": "brief.history",
         "title": "Sessions in this workspace",
         "icon": "$(history)",
         "category": "Brief"
       },
       {
-        "command": "primeAgent.renameSession",
+        "command": "brief.renameSession",
         "title": "Rename Session",
         "icon": "$(edit)",
         "category": "Brief"
       },
       {
-        "command": "primeAgent.openPrimeIntellect",
-        "title": "Visit Prime Intellect",
-        "icon": "$(link-external)",
-        "category": "Brief"
-      },
-      {
-        "command": "primeAgent.restart",
+        "command": "brief.restart",
         "title": "Restart Agent Process",
         "icon": "$(debug-restart)",
         "category": "Brief"
       },
       {
-        "command": "primeAgent.addSelectionToChat",
+        "command": "brief.addSelectionToChat",
         "title": "Add Selection to Chat",
         "icon": "$(symbol-snippet)",
         "category": "Brief"
       },
       {
-        "command": "primeAgent.addActiveFileToChat",
+        "command": "brief.addActiveFileToChat",
         "title": "Add Active File to Chat",
         "icon": "$(file)",
         "category": "Brief"
@@ -137,100 +129,95 @@
     "menus": {
       "editor/context": [
         {
-          "command": "primeAgent.addSelectionToChat",
+          "command": "brief.addSelectionToChat",
           "when": "editorHasSelection",
-          "group": "9_primeagent@1"
+          "group": "9_brief@1"
         },
         {
-          "command": "primeAgent.addActiveFileToChat",
+          "command": "brief.addActiveFileToChat",
           "when": "!editorHasSelection",
-          "group": "9_primeagent@2"
+          "group": "9_brief@2"
         }
       ],
       "view/title": [
         {
-          "command": "primeAgent.newSession",
-          "when": "view == primeAgent.chat",
+          "command": "brief.newSession",
+          "when": "view == brief.chat",
           "group": "navigation@1"
         },
         {
-          "command": "primeAgent.history",
-          "when": "view == primeAgent.chat",
+          "command": "brief.history",
+          "when": "view == brief.chat",
           "group": "navigation@2"
         },
         {
-          "command": "primeAgent.renameSession",
-          "when": "view == primeAgent.chat",
+          "command": "brief.renameSession",
+          "when": "view == brief.chat",
           "group": "navigation@3"
         },
         {
-          "command": "primeAgent.compact",
-          "when": "view == primeAgent.chat",
+          "command": "brief.compact",
+          "when": "view == brief.chat",
           "group": "1_session@2"
         },
         {
-          "command": "primeAgent.exportChat",
-          "when": "view == primeAgent.chat",
+          "command": "brief.exportChat",
+          "when": "view == brief.chat",
           "group": "1_session@3"
         },
         {
-          "command": "primeAgent.restart",
-          "when": "view == primeAgent.chat",
+          "command": "brief.restart",
+          "when": "view == brief.chat",
           "group": "1_session@4"
-        },
-        {
-          "command": "primeAgent.openPrimeIntellect",
-          "when": "view == primeAgent.chat",
-          "group": "2_links@1"
         }
       ],
       "editor/title": [
         {
-          "command": "primeAgent.focusChat",
+          "command": "brief.focusChat",
           "when": "editorTextFocus",
           "group": "navigation@99"
         },
         {
-          "command": "primeAgent.newSession",
-          "when": "activeWebviewPanelId == 'primeAgent.chatPanel'",
+          "command": "brief.newSession",
+          "when": "activeWebviewPanelId == 'brief.chatPanel'",
           "group": "navigation@1"
         },
         {
-          "command": "primeAgent.history",
-          "when": "activeWebviewPanelId == 'primeAgent.chatPanel'",
+          "command": "brief.history",
+          "when": "activeWebviewPanelId == 'brief.chatPanel'",
           "group": "navigation@2"
         }
       ],
       "commandPalette": [
         {
-          "command": "primeAgent.addSelectionToChat",
+          "command": "brief.addSelectionToChat",
           "when": "editorHasSelection"
         }
       ]
     },
     "keybindings": [
       {
-        "command": "primeAgent.focusChat",
+        "command": "brief.focusChat",
         "key": "ctrl+alt+meta+p",
         "mac": "ctrl+alt+cmd+p"
       },
       {
-        "command": "primeAgent.addSelectionToChat",
+        "command": "brief.addSelectionToChat",
         "key": "alt+cmd+k",
         "when": "editorHasSelection"
       }
     ],
     "configuration": {
-      "title": "Prime Agent",
+      "title": "Brief",
       "properties": {
-        "primeAgent.command": {
+        "brief.command": {
           "type": "string",
           "default": "prime-agent",
           "scope": "machine",
           "ignoreSync": true,
-          "description": "Command used to start the Prime Agent CLI. Set to an absolute path (e.g. /path/to/prime-agent.sh) when prime-agent is not on PATH."
+          "description": "Command used to start Brief's agent runtime. Set an absolute path when `prime-agent` is not on PATH."
         },
-        "primeAgent.args": {
+        "brief.args": {
           "type": "array",
           "items": {
             "type": "string"
@@ -240,24 +227,24 @@
           "ignoreSync": true,
           "description": "Extra CLI arguments appended after `--mode rpc` (e.g. [\"--provider\", \"chutes\"])."
         },
-        "primeAgent.model": {
+        "brief.model": {
           "type": "string",
           "default": "",
           "scope": "machine",
           "ignoreSync": true,
           "description": "Model passed as --model when the agent starts (provider/id pattern). Empty uses the default model."
         },
-        "primeAgent.maxFileSearchResults": {
+        "brief.maxFileSearchResults": {
           "type": "number",
           "default": 40,
           "description": "Maximum results returned for @ file mention search."
         },
-        "primeAgent.sendSelectionSnippet": {
+        "brief.sendSelectionSnippet": {
           "type": "boolean",
           "default": true,
           "description": "Include the selected code as context when using 'Add Selection to Chat'."
         },
-        "primeAgent.defaultStreamingBehavior": {
+        "brief.defaultStreamingBehavior": {
           "type": "string",
           "enum": [
             "steer",
@@ -266,22 +253,22 @@
           "default": "steer",
           "description": "How messages sent while the agent is working are delivered: steer interrupts after the current turn, followUp waits until the run ends. Toggleable per-run in the chat rail."
         },
-        "primeAgent.liveTranscript": {
+        "brief.liveTranscript": {
           "type": "boolean",
           "default": false,
           "description": "Paint thinking and tool-call arguments as they stream. Off (default) keeps unfinished parts behind the working row until thinking settles, a tool starts running, or reply text appears."
         },
-        "primeAgent.showThoughtProcess": {
+        "brief.showThoughtProcess": {
           "type": "boolean",
           "default": false,
           "description": "顯示回覆的 Thought process 區塊（預設隱藏）。僅控制顯示，不改變模型的 thinking level。"
         },
-        "primeAgent.showUsageDetails": {
+        "brief.showUsageDetails": {
           "type": "boolean",
           "default": false,
           "description": "顯示每則回覆的用量明細入口（預設關閉）。不影響錯誤訊息、複製按鈕與 session 費用。"
         },
-        "primeAgent.streamToolOutput": {
+        "brief.streamToolOutput": {
           "type": "boolean",
           "default": false,
           "description": "Paint tool output as it arrives. Off (default) waits until the tool finishes. Independent of liveTranscript."

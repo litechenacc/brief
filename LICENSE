@@ -24,6 +24,6 @@ NOTICE
 
 This extension is an independent, community-built client for the Prime Agent
 CLI. It is not published by, endorsed by, or affiliated with Prime Intellect.
-The Prime Agent name and the butterfly mark are Prime Intellect's trademarks
-and are used here only to identify the CLI this extension drives; the license
-above covers this extension's own code and grants no rights in those marks.
+The Prime Agent name is a Prime Intellect trademark and is used here only to
+identify the CLI this extension drives; the license above covers this
+extension's own code and grants no rights in that mark.

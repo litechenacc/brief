@@ -38,7 +38,7 @@ const extensionConfig = {
 	target: "node18",
 	outfile: "dist/extension.js",
 	external: ["vscode"],
-	define: { PRIME_AGENT_BUILD_REV: JSON.stringify(buildRev) },
+	define: { BRIEF_BUILD_REV: JSON.stringify(buildRev) },
 };
 
 const webviewConfig = {
@@ -49,7 +49,7 @@ const webviewConfig = {
 	platform: "browser",
 	target: "es2022",
 	outfile: "media/main.js",
-	define: { PRIME_AGENT_BUILD_REV: JSON.stringify(buildRev) },
+	define: { BRIEF_BUILD_REV: JSON.stringify(buildRev) },
 };
 
 const controllerConfig = {

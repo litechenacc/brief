@@ -1,9 +1,9 @@
 /**
- * Prime Agent chat webview: layout, host message dispatch, view switching.
+ * Brief chat webview: layout, host message dispatch, view switching.
  */
 
 import { Composer } from "./composer.js";
-import { butterfly, el, icon } from "./dom.js";
+import { brandMark, el, icon } from "./dom.js";
 import { HistoryView } from "./history.js";
 import { SubagentsStrip } from "./subagents.js";
 import { Transcript } from "./transcript.js";
@@ -46,7 +46,7 @@ noticesDock.appendChild(notices);
 const observeBanner = el("div", "observe-banner");
 observeBanner.style.display = "none";
 {
-	const mark = butterfly(14);
+	const mark = brandMark(14);
 	mark.classList.add("working-mark");
 	observeBanner.appendChild(mark);
 	observeBanner.appendChild(el("span", "observe-text", "Live in another client — read-only"));
@@ -207,8 +207,8 @@ function renderInstallBanner(url: string, reason: string): void {
 	installPromptShown = true;
 	installBanner.textContent = "";
 	const card = el("div", "install-card");
-	card.appendChild(el("div", "install-title", "Prime Agent CLI not detected"));
-	card.appendChild(el("div", "install-body", `We couldn't reach prime-agent — ${reason}. Install it (takes a minute), then click Retry below.`));
+	card.appendChild(el("div", "install-title", "Agent runtime not detected"));
+	card.appendChild(el("div", "install-body", `We couldn't reach the agent runtime — ${reason}. Install it (takes a minute), then click Retry below.`));
 	// The one-liner itself, copyable, so the common case needs no round trip to a
 	// browser at all.
 	const command = el("code", "install-cmd", "curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | sh");
@@ -232,7 +232,7 @@ function renderInstallBanner(url: string, reason: string): void {
 	const retry = document.createElement("button");
 	retry.className = "install-cta";
 	retry.textContent = "Retry";
-	retry.title = "Try starting prime-agent again";
+	retry.title = "Try starting the agent runtime again";
 	retry.addEventListener("click", () => {
 		installPromptShown = false;
 		installBanner.classList.remove("visible");
@@ -346,11 +346,11 @@ function adoptAuthoritativeSession(sessionId: string | undefined): boolean {
 }
 
 // Boot splash: until the FIRST live connection, hide the composer and show the
-// breathing Prime Agent mark. Disconnections after that only touch the status strip.
+// breathing Brief mark. Disconnections after that only touch the status strip.
 let everConnected = false;
 let bootSplashRetired = false;
 const bootSplash = el("div", "boot-splash");
-bootSplash.appendChild(el("div", "boot-splash-mark")).appendChild(butterfly(44));
+bootSplash.appendChild(el("div", "boot-splash-mark")).appendChild(brandMark(44));
 bootSplash.appendChild(el("div", "boot-splash-name", "Brief"));
 const bootSplashSub = el("div", "boot-splash-sub", "connecting…");
 bootSplash.appendChild(bootSplashSub);
@@ -369,7 +369,7 @@ function retireBootSplash(): void {
 // hasn't landed in 12s, say so honestly instead of breathing forever.
 setTimeout(() => {
 	if (!everConnected && !bootSplashRetired) {
-		bootSplashSub.textContent = "still connecting — checking for the prime-agent CLI…";
+		bootSplashSub.textContent = "still connecting — checking for the agent runtime…";
 	}
 }, 12_000);
 // Hard ceiling. The splash is opaque and covers the notices, the install card and
@@ -446,7 +446,7 @@ function applyStatus(incomingStatus: StatusSnapshot): void {
 			? (status.statusText === "creating session…" ? "Creating session…" : "Reconnecting…")
 			: status.connected
 				? null
-				: "Not connected — prime-agent isn't answering",
+				: "Not connected — the agent runtime isn't answering",
 	);
 	composer.setContext(status.contextPercent, status.contextTokens, status.contextWindow);
 	// Unconditional: skipping this on a status that carries no override left the
@@ -747,9 +747,9 @@ function formatNumber(value: number): string {
 // Boot
 // ---------------------------------------------------------------------------
 
-declare const PRIME_AGENT_BUILD_REV: string | undefined;
-if (typeof PRIME_AGENT_BUILD_REV === "string") {
-	document.body.dataset.paBuild = PRIME_AGENT_BUILD_REV;
+declare const BRIEF_BUILD_REV: string | undefined;
+if (typeof BRIEF_BUILD_REV === "string") {
+	document.body.dataset.briefBuild = BRIEF_BUILD_REV;
 }
 
 transcript.showWelcome();

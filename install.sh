@@ -1,15 +1,13 @@
 #!/bin/sh
-# Quick-install the Prime Agent VS Code extension from source.
+# Quick-install the Brief VS Code extension from source.
 #
 #   sh install.sh                                clone -> build -> install
 #   LOCAL_DIR=/path/to/checkout sh install.sh    build from an existing checkout (dev)
 #
-# The released build is on the Marketplace and needs none of this:
-#   code --install-extension sirouk.prime-agent-vscode
 set -eu
 
-REPO_URL="https://github.com/sirouk/prime-agent-vscode"
-PKG_NAME="prime-agent-vscode"
+REPO_URL="https://github.com/litechenacc/brief"
+PKG_NAME="brief"
 
 fail() {
     echo "install.sh: error: $*" >&2
@@ -71,6 +69,6 @@ echo "Installing $VSIX ..."
 code --install-extension "$VSIX" --force
 
 echo
-echo "Success: Prime Agent installed into VS Code."
-echo "Open VS Code and click the butterfly icon in the activity bar — no reload usually needed;"
+echo "Success: Brief installed into VS Code."
+echo "Open VS Code and click the Brief icon in the activity bar — no reload usually needed;"
 echo "otherwise run \"Developer: Reload Window\" from the Command Palette."

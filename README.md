@@ -4,7 +4,7 @@ Fork of [sirouk/prime-agent-vscode](https://github.com/sirouk/prime-agent-vscode
 
 This repository exists because of that work. Thank you to [sirouk](https://github.com/sirouk) for building a usable VS Code frontend on top of [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent), and for publishing it as a community project.
 
-**Community project.** Neither this fork nor the original extension is an official Prime Intellect release. The Prime Agent name and the butterfly mark are Prime Intellect's, used here to identify the CLI the extension drives.
+**Community project.** Brief is independent and is not published by, endorsed by, or affiliated with Prime Intellect. Prime Agent is named only as the CLI that Brief drives.
 
 ## What this repo is right now
 
@@ -28,7 +28,7 @@ POC stages in the PRD:
 2. Markdown structure + parser
 3. Markdown-native conversation
 
-Expect this repository to diverge substantially from [sirouk/prime-agent-vscode](https://github.com/sirouk/prime-agent-vscode) as those stages land. Features, UI, and packaging names will change to match Brief rather than remaining a Prime Agent chat clone.
+Expect this repository to diverge substantially from [sirouk/prime-agent-vscode](https://github.com/sirouk/prime-agent-vscode) as those stages land. The product UI and package now use the Brief identity throughout.
 
 ## Install (current tree)
 
@@ -58,7 +58,7 @@ Requires VS Code 1.90+, `node` >= 22, and the `code` CLI on `PATH`.
 
 ## Settings and commands
 
-Settings remain under `primeAgent.*` until the Brief surface is renamed. Commands are under the **Brief** category in the Command Palette (`Brief: Focus Chat`, `New Session`, `Stop Agent`, …).
+Settings use `brief.*`. Commands are under the **Brief** category in the Command Palette (`Brief: Focus Chat`, `New Session`, `Stop Agent`, …).
 
 See origin's README for the current chat-UI feature list; this tree still has that behavior, plus local work such as the working-row spinner and New Session empty-page lock.
 
@@ -76,4 +76,4 @@ Open this folder and press `F5` for an Extension Development Host.
 
 ## License
 
-MIT — original copyright [sirouk](https://github.com/sirouk); see [LICENSE](LICENSE). The butterfly mark and the Prime Agent name are Prime Intellect's trademarks, used only to identify the CLI this extension drives.
+MIT — original copyright [sirouk](https://github.com/sirouk); see [LICENSE](LICENSE). Prime Agent is a Prime Intellect trademark and is named only to identify the CLI this extension drives.

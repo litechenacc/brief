@@ -24,7 +24,7 @@ export function buildMarkdownExport(
 	const lines: string[] = [];
 	const title = state?.sessionName ? `"${state.sessionName}"` : "session";
 	const model = state?.model ? `${state.model.provider}/${state.model.id}` : "unknown model";
-	lines.push(`# Prime Agent chat export — ${title}`);
+	lines.push(`# Brief chat export — ${title}`);
 	lines.push("");
 	lines.push(`_Exported ${new Date().toLocaleString()} · model ${model}_`);
 	lines.push("");
@@ -68,7 +68,7 @@ export function buildMarkdownExport(
 			lines.push("");
 		} else if (role === "assistant") {
 			const parts = Array.isArray(content) ? (content as Array<Record<string, unknown>>) : [];
-			lines.push(`## Prime Agent`);
+			lines.push(`## Brief`);
 			lines.push("");
 			for (const part of parts) {
 				if (part.type === "text") {

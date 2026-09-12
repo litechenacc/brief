@@ -1,6 +1,6 @@
 /**
  * Small file logger used for diagnosing host-side behavior from e2e runs when
- * PRIME_AGENT_VSCODE_LOG points at a file. No-op otherwise.
+ * BRIEF_VSCODE_LOG points at a file. No-op otherwise.
  */
 import * as fs from "node:fs";
 
@@ -8,7 +8,7 @@ export class DebugFileLog {
 	private stream: fs.WriteStream | null = null;
 
 	constructor() {
-		const target = process.env.PRIME_AGENT_VSCODE_LOG;
+		const target = process.env.BRIEF_VSCODE_LOG;
 		if (target && target.trim().length > 0 && !this.stream) {
 			try {
 				const stream = fs.createWriteStream(target, { flags: "a" });

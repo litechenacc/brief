@@ -479,7 +479,7 @@ applyAttachedSnapshot(this: SessionController, snapshot: AttachSnapshot | undefi
 		messages: this.cachedMessages,
 		state: this.rentedState,
 		status: this.buildStatus(),
-		steerDefault: vscode.workspace.getConfiguration("primeAgent").get<"steer" | "followUp">("defaultStreamingBehavior", "steer"),
+		steerDefault: vscode.workspace.getConfiguration("brief").get<"steer" | "followUp">("defaultStreamingBehavior", "steer"),
 	});
 	// The in-flight assistant message is NOT in snapshot.messages, and its
 	// message_start fired before we attached. Replay it so the deltas already
@@ -1123,9 +1123,9 @@ onDaemonClosing(this: SessionController, reason: string | undefined): void {
 		text:
 			closing === "update"
 				? following
-					? "The prime-agent daemon is updating — the view will re-attach automatically when it is back."
-					: "The prime-agent daemon is updating — it will be back on its own."
-				: "The prime-agent daemon is shutting down.",
+					? "The agent runtime is updating — the view will re-attach automatically when it is back."
+					: "The agent runtime is updating — it will be back on its own."
+				: "The agent runtime is shutting down.",
 	});
 },
 

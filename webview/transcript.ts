@@ -3,7 +3,7 @@
  */
 
 import { parseIpythonBashCell, previewBashCommand, previewIpythonCode } from "./code-preview.js";
-import { butterfly, el, icon } from "./dom.js";
+import { brandMark, el, icon } from "./dom.js";
 import { copyToClipboard, renderMarkdown } from "./markdown.js";
 import { renderPythonCode } from "./python-highlight.js";
 import { pickSpinnerVerb } from "./spinner-verbs.js";
@@ -418,7 +418,7 @@ export class Transcript {
 		if (this.hasContent || this.welcome) return;
 		const root = el("div", "welcome");
 		const mark = el("div", "welcome-mark");
-		mark.appendChild(butterfly(52));
+		mark.appendChild(brandMark(52));
 		root.appendChild(mark);
 		root.appendChild(el("div", "welcome-title", "Brief"));
 		root.appendChild(el("div", "welcome-tag", "RLM agent with a persistent Python kernel,\nskills, subagents, and living sessions."));
@@ -850,7 +850,7 @@ export class Transcript {
 		const row = el("div", "working-row");
 		row.setAttribute("aria-live", "polite");
 		row.setAttribute("aria-busy", "true");
-		const mark = butterfly(15, "working-mark");
+		const mark = brandMark(15, "working-mark");
 		row.appendChild(mark);
 		const spinner = el("span", "working-spinner");
 		spinner.setAttribute("aria-hidden", "true");

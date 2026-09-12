@@ -1,5 +1,5 @@
 /**
- * Prime Agent VS Code extension entry point.
+ * Brief VS Code extension entry point.
  */
 
 import * as fs from "node:fs";
@@ -10,7 +10,7 @@ import { SessionController } from "./session-controller.js";
 let controller: SessionController | null = null;
 
 export function activate(context: vscode.ExtensionContext): void {
-	const marker = process.env.PRIME_AGENT_VSCODE_LOG;
+	const marker = process.env.BRIEF_VSCODE_LOG;
 	if (marker) {
 		try {
 			fs.appendFileSync(marker, `activate ${Date.now()}\n`);
@@ -18,7 +18,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			// ignore
 		}
 	}
-	const output = vscode.window.createOutputChannel("Prime Agent");
+	const output = vscode.window.createOutputChannel("Brief");
 	controller = new SessionController(context, output);
 	context.subscriptions.push(controller, output);
 
@@ -35,7 +35,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	context.subscriptions.push(provider);
 
 	const reveal = () => {
-		void vscode.commands.executeCommand("primeAgent.chat.focus").then(
+		void vscode.commands.executeCommand("brief.chat.focus").then(
 			() => provider.reveal(),
 			() => provider.reveal(),
 		);
@@ -52,23 +52,23 @@ export function activate(context: vscode.ExtensionContext): void {
 	};
 
 	context.subscriptions.push(
-		vscode.commands.registerCommand("primeAgent.focusChat", () => {
+		vscode.commands.registerCommand("brief.focusChat", () => {
 			reveal();
 			provider.focusComposer();
 		}),
-		vscode.commands.registerCommand("primeAgent.openChat", () => {
+		vscode.commands.registerCommand("brief.openChat", () => {
 			ChatPanel.createOrShow(context.extensionUri, controller!);
 		}),
-		vscode.commands.registerCommand("primeAgent.newSession", () => runCommand("New session", () => controller!.newSession())),
-		vscode.commands.registerCommand("primeAgent.abort", () => runCommand("Stop", () => controller!.abort())),
-		vscode.commands.registerCommand("primeAgent.compact", () => runCommand("Compact", () => controller!.compact())),
-		vscode.commands.registerCommand("primeAgent.exportChat", () => runCommand("Export chat", () => controller!.exportChat())),
-		vscode.commands.registerCommand("primeAgent.restart", () => runCommand("Restart", () => controller!.restart())),
-		vscode.commands.registerCommand("primeAgent.history", () => {
+		vscode.commands.registerCommand("brief.newSession", () => runCommand("New session", () => controller!.newSession())),
+		vscode.commands.registerCommand("brief.abort", () => runCommand("Stop", () => controller!.abort())),
+		vscode.commands.registerCommand("brief.compact", () => runCommand("Compact", () => controller!.compact())),
+		vscode.commands.registerCommand("brief.exportChat", () => runCommand("Export chat", () => controller!.exportChat())),
+		vscode.commands.registerCommand("brief.restart", () => runCommand("Restart", () => controller!.restart())),
+		vscode.commands.registerCommand("brief.history", () => {
 			reveal();
 			controller!.showHistoryView();
 		}),
-		vscode.commands.registerCommand("primeAgent.renameSession", () =>
+		vscode.commands.registerCommand("brief.renameSession", () =>
 			runCommand("Rename session", async () => {
 				const current = controller!.currentSessionName();
 				const name = await vscode.window.showInputBox({
@@ -82,10 +82,7 @@ export function activate(context: vscode.ExtensionContext): void {
 				await controller!.renameSession(name);
 			}),
 		),
-		vscode.commands.registerCommand("primeAgent.openPrimeIntellect", () => {
-			void vscode.env.openExternal(vscode.Uri.parse("https://app.primeintellect.ai"));
-		}),
-		vscode.commands.registerCommand("primeAgent.addSelectionToChat", () => {
+		vscode.commands.registerCommand("brief.addSelectionToChat", () => {
 			const selection = controller!.getActiveSelection();
 			if (!selection) {
 				void vscode.window.showInformationMessage("Select some code first.");
@@ -94,7 +91,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			controller!.broadcastInsertSelection(selection);
 			reveal();
 		}),
-		vscode.commands.registerCommand("primeAgent.addActiveFileToChat", () => {
+		vscode.commands.registerCommand("brief.addActiveFileToChat", () => {
 			const file = controller!.getActiveFilePath();
 			if (!file) return;
 			controller!.broadcastInsertMention(file);

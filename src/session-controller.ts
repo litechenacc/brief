@@ -263,10 +263,10 @@ export class SessionController implements vscode.Disposable {
 		this.disposables.push(
 			vscode.workspace.onDidChangeConfiguration((event) => {
 				if (
-					event.affectsConfiguration("primeAgent.liveTranscript") ||
-					event.affectsConfiguration("primeAgent.streamToolOutput") ||
-					event.affectsConfiguration("primeAgent.showUsageDetails") ||
-					event.affectsConfiguration("primeAgent.showThoughtProcess")
+					event.affectsConfiguration("brief.liveTranscript") ||
+					event.affectsConfiguration("brief.streamToolOutput") ||
+					event.affectsConfiguration("brief.showUsageDetails") ||
+					event.affectsConfiguration("brief.showThoughtProcess")
 				) {
 					this.pushStatusLight();
 				}
@@ -275,19 +275,19 @@ export class SessionController implements vscode.Disposable {
 	}
 
 	liveTranscript(): boolean {
-		return vscode.workspace.getConfiguration("primeAgent").get<boolean>("liveTranscript", false) === true;
+		return vscode.workspace.getConfiguration("brief").get<boolean>("liveTranscript", false) === true;
 	}
 
 	showThoughtProcess(): boolean {
-		return vscode.workspace.getConfiguration("primeAgent").get<boolean>("showThoughtProcess", false) === true;
+		return vscode.workspace.getConfiguration("brief").get<boolean>("showThoughtProcess", false) === true;
 	}
 
 	showUsageDetails(): boolean {
-		return vscode.workspace.getConfiguration("primeAgent").get<boolean>("showUsageDetails", false) === true;
+		return vscode.workspace.getConfiguration("brief").get<boolean>("showUsageDetails", false) === true;
 	}
 
 	streamToolOutput(): boolean {
-		return vscode.workspace.getConfiguration("primeAgent").get<boolean>("streamToolOutput", false) === true;
+		return vscode.workspace.getConfiguration("brief").get<boolean>("streamToolOutput", false) === true;
 	}
 
 	get workspaceRoot(): string {
@@ -360,7 +360,7 @@ export class SessionController implements vscode.Disposable {
 	async ensureStarted(): Promise<void> {
 		if (this.disposed) return;
 		if (!this.workspaceRoot) {
-			this.broadcast({ type: "notice", level: "warning", text: "Open a workspace folder before starting Prime Agent." });
+			this.broadcast({ type: "notice", level: "warning", text: "Open a workspace folder before starting Brief." });
 			return;
 		}
 		this.debugLog.append("ensureStarted");
@@ -370,7 +370,7 @@ export class SessionController implements vscode.Disposable {
 		this.startingPromise = this.start()
 			.catch((err) => {
 				this.output.appendLine(`[prime-agent] failed to start: ${String(err)}`);
-				this.broadcast({ type: "notice", level: "error", text: `Failed to start Prime Agent: ${String(err)}` });
+				this.broadcast({ type: "notice", level: "error", text: `Failed to start Brief: ${String(err)}` });
 			})
 			.finally(() => {
 				this.startingPromise = null;
@@ -381,11 +381,11 @@ export class SessionController implements vscode.Disposable {
 	// ---- install prompt: one smart banner when prime-agent can't be detected ----
 
 	installPromptDismissed(): boolean {
-		return this.context.workspaceState.get<boolean>("pa-install-prompt-dismissed", false);
+		return this.context.workspaceState.get<boolean>("brief-install-prompt-dismissed", false);
 	}
 
 	async dismissInstallPrompt(): Promise<void> {
-		await this.context.workspaceState.update("pa-install-prompt-dismissed", true);
+		await this.context.workspaceState.update("brief-install-prompt-dismissed", true);
 	}
 
 	maybeShowInstallPrompt(reason: string): void {
@@ -411,25 +411,25 @@ export class SessionController implements vscode.Disposable {
 			// binary that spawns fine and then never answers a single RPC, which
 			// `client.running` reports as perfectly healthy forever.
 			if (this.reachable) return;
-			const reason = `prime-agent did not answer within 25s (command: ${vscode.workspace.getConfiguration("primeAgent").get<string>("command", "prime-agent")})`;
+			const reason = `prime-agent did not answer within 25s (command: ${vscode.workspace.getConfiguration("brief").get<string>("command", "prime-agent")})`;
 			this.maybeShowInstallPrompt(reason);
 			// Dismissing the card hides the recommendation, not the failure —
 			// otherwise the second start after a dismissal is silently dead.
 			if (this.installPromptDismissed()) {
-				this.broadcast({ type: "notice", level: "warning", text: `Prime Agent isn't responding — ${reason}` });
+				this.broadcast({ type: "notice", level: "warning", text: `Brief isn't responding — ${reason}` });
 			}
 		}, 25_000);
 	}
 
 	async start(): Promise<void> {
-		if (!this.workspaceRoot) throw new Error("Open a workspace folder before starting Prime Agent.");
-		const config = vscode.workspace.getConfiguration("primeAgent");
+		if (!this.workspaceRoot) throw new Error("Open a workspace folder before starting Brief.");
+		const config = vscode.workspace.getConfiguration("brief");
 		const configuredCommand = config.get<unknown>("command", "prime-agent");
 		const command = typeof configuredCommand === "string" && configuredCommand.trim() ? configuredCommand.trim() : "prime-agent";
-		if (command.includes("\0")) throw new Error("primeAgent.command contains an invalid character");
+		if (command.includes("\0")) throw new Error("brief.command contains an invalid character");
 		const configuredArgs = config.get<unknown>("args", []);
 		if (!Array.isArray(configuredArgs) || configuredArgs.some((arg) => typeof arg !== "string" || arg.includes("\0"))) {
-			throw new Error("primeAgent.args must be an array of strings");
+			throw new Error("brief.args must be an array of strings");
 		}
 		const extraArgs = configuredArgs as string[];
 		const model = config.get<string>("model", "").trim();
@@ -486,7 +486,7 @@ export class SessionController implements vscode.Disposable {
 				this.broadcast({
 					type: "notice",
 					level: "error",
-					text: `Could not start "${command}". Install Prime Agent or set primeAgent.command in settings.`,
+					text: `Could not start "${command}". Install the agent runtime or set brief.command in Settings.`,
 				});
 			}
 			// A spawn failure is definitive — don't make a first-time operator wait
@@ -785,7 +785,7 @@ export class SessionController implements vscode.Disposable {
 						: request.notifyType === "warning"
 							? vscode.window.showWarningMessage
 							: vscode.window.showInformationMessage;
-				void show(`Prime Agent: ${request.message}`);
+				void show(`Brief: ${request.message}`);
 				return;
 			}
 			case "setStatus": {
@@ -835,7 +835,7 @@ export class SessionController implements vscode.Disposable {
 			messages: [],
 			state: null,
 			status: this.buildStatus(),
-			steerDefault: vscode.workspace.getConfiguration("primeAgent").get<"steer" | "followUp">("defaultStreamingBehavior", "steer"),
+			steerDefault: vscode.workspace.getConfiguration("brief").get<"steer" | "followUp">("defaultStreamingBehavior", "steer"),
 		});
 		this.pushStatus();
 	}
@@ -850,7 +850,7 @@ export class SessionController implements vscode.Disposable {
 			messages: previousMessages,
 			state: this.rentedState ?? this.state,
 			status: this.buildStatus(),
-			steerDefault: vscode.workspace.getConfiguration("primeAgent").get<"steer" | "followUp">("defaultStreamingBehavior", "steer"),
+			steerDefault: vscode.workspace.getConfiguration("brief").get<"steer" | "followUp">("defaultStreamingBehavior", "steer"),
 		});
 		this.restoreDraft();
 		this.pushStatus();
@@ -966,7 +966,7 @@ export class SessionController implements vscode.Disposable {
 			messages: [],
 			state: null,
 			status: this.buildStatus(),
-			steerDefault: vscode.workspace.getConfiguration("primeAgent").get<"steer" | "followUp">("defaultStreamingBehavior", "steer"),
+			steerDefault: vscode.workspace.getConfiguration("brief").get<"steer" | "followUp">("defaultStreamingBehavior", "steer"),
 		});
 		this.pushStatus();
 	}
@@ -1121,7 +1121,7 @@ export class SessionController implements vscode.Disposable {
 
 	composeMessageText(payload: PromptPayload): string {
 		let text = payload.text;
-		const includeSnippets = vscode.workspace.getConfiguration("primeAgent").get<boolean>("sendSelectionSnippet", true);
+		const includeSnippets = vscode.workspace.getConfiguration("brief").get<boolean>("sendSelectionSnippet", true);
 		for (const sel of payload.selections) {
 			if (includeSnippets && sel.text) {
 				text += `\n\n<attachment file="${sel.path}" lines="${sel.startLine}-${sel.endLine}">\n${sel.text}\n</attachment>`;
@@ -1487,7 +1487,7 @@ export class SessionController implements vscode.Disposable {
 	// ---- sticky composer drafts (per session, survive view reloads) ----
 
 	draftKey(): string {
-		return `pa-draft:${this.sessionKey()}`;
+		return `brief-draft:${this.sessionKey()}`;
 	}
 
 	persistDraft(text: string, sessionId: string): void {
@@ -1506,7 +1506,7 @@ export class SessionController implements vscode.Disposable {
 	// ---- auto-compact threshold (per session, client-side trigger) ----
 
 	thresholdKey(): string {
-		return `pa-ct:${this.sessionKey()}`;
+		return `brief-ct:${this.sessionKey()}`;
 	}
 
 	compactThreshold(): number | null {
@@ -1566,7 +1566,7 @@ export class SessionController implements vscode.Disposable {
 			return;
 		}
 		const md = buildMarkdownExport(source.messages, includeTools, source.state);
-		const target = vscode.Uri.file(path.join(this.workspaceRoot, `prime-agent-session-${Date.now()}.md`));
+		const target = vscode.Uri.file(path.join(this.workspaceRoot, `brief-session-${Date.now()}.md`));
 		const picked = await vscode.window.showSaveDialog({ defaultUri: target, filters: { Markdown: ["md"] } });
 		if (!picked || this.disposed || epoch !== this.viewEpoch || this.attached !== attached || this.observingId || this.observationRestoring) return;
 		await vscode.workspace.fs.writeFile(picked, Buffer.from(md, "utf8"));
@@ -1730,7 +1730,7 @@ export class SessionController implements vscode.Disposable {
 	// ------------------------------------------------------------------
 
 	favorites(): ModelRef[] {
-		return this.context.globalState.get<ModelRef[]>("primeAgent.favoriteModels", []);
+		return this.context.globalState.get<ModelRef[]>("brief.favoriteModels", []);
 	}
 
 	sendFavorites(): void {
@@ -1743,7 +1743,7 @@ export class SessionController implements vscode.Disposable {
 		const next = exists
 			? current.filter((f) => !(f.provider === provider && f.modelId === modelId))
 			: [...current, { provider, modelId }];
-		await this.context.globalState.update("primeAgent.favoriteModels", next);
+		await this.context.globalState.update("brief.favoriteModels", next);
 		this.sendFavorites();
 	}
 
@@ -1993,7 +1993,7 @@ export class SessionController implements vscode.Disposable {
 				messages: this.cachedMessages,
 				state: this.rentedState,
 				status: this.buildStatus(),
-				steerDefault: vscode.workspace.getConfiguration("primeAgent").get<"steer" | "followUp">("defaultStreamingBehavior", "steer"),
+				steerDefault: vscode.workspace.getConfiguration("brief").get<"steer" | "followUp">("defaultStreamingBehavior", "steer"),
 			});
 			if (options.keepDraft !== true) this.restoreDraft();
 			this.pushStatus();
@@ -2028,7 +2028,7 @@ export class SessionController implements vscode.Disposable {
 			const stats = await this.fetchStatsText(allowRestoring);
 			if (!this.isCurrentRpcView(client, epoch, allowRestoring)) return false;
 			const steerDefault = vscode.workspace
-				.getConfiguration("primeAgent")
+				.getConfiguration("brief")
 				.get<"steer" | "followUp">("defaultStreamingBehavior", "steer");
 			this.broadcast({
 				type: "snapshot",
@@ -2174,7 +2174,7 @@ export class SessionController implements vscode.Disposable {
 		if (this.isCreatingSession()) {
 			const st = (this.rentedState ?? this.state) as RpcSessionState | null;
 			const model = st?.model ?? null;
-			const label = model ? `${model.provider}/${model.id}` : "prime-agent";
+			const label = model ? `${model.provider}/${model.id}` : "Agent";
 			return {
 				connected: this.reachable || Boolean(this.attached) || Boolean(this.sidecar?.connected),
 				streaming: false,

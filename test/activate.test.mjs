@@ -93,18 +93,17 @@ Module._load = function (request, ...rest) {
 const extension = require("./dist/extension.js");
 
 const expectedCommands = [
-	"primeAgent.focusChat",
-	"primeAgent.openChat",
-	"primeAgent.newSession",
-	"primeAgent.abort",
-	"primeAgent.compact",
-	"primeAgent.exportChat",
-	"primeAgent.restart",
-	"primeAgent.history",
-	"primeAgent.renameSession",
-	"primeAgent.openPrimeIntellect",
-	"primeAgent.addSelectionToChat",
-	"primeAgent.addActiveFileToChat",
+	"brief.focusChat",
+	"brief.openChat",
+	"brief.newSession",
+	"brief.abort",
+	"brief.compact",
+	"brief.exportChat",
+	"brief.restart",
+	"brief.history",
+	"brief.renameSession",
+	"brief.addSelectionToChat",
+	"brief.addActiveFileToChat",
 ];
 
 const _mem = new Map();
@@ -123,8 +122,8 @@ if (missing.length > 0) {
 	console.error("MISSING COMMANDS:", missing);
 	process.exit(1);
 }
-if (!registeredViews.includes("primeAgent.chat")) {
-	console.error("MISSING VIEW primeAgent.chat");
+if (!registeredViews.includes("brief.chat")) {
+	console.error("MISSING VIEW brief.chat");
 	process.exit(1);
 }
 console.log(`commands registered: ${registeredCommands.length}/${expectedCommands.length}`);

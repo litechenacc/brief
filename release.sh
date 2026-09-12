@@ -2,7 +2,7 @@
 #
 # release.sh
 #
-# Strict pre-flight gate + publisher for the Prime Agent VS Code extension.
+# Strict pre-flight gate + publisher for the Brief VS Code extension.
 # Mirrors the chutes-dropzone release discipline, adapted for this repo:
 # - repo/branch/remote checks (must be on master, tree clean, remote in sync)
 # - tag proposal from prior vX.Y.Z tags (+optional override)
@@ -367,7 +367,7 @@ if [ -n "$unexpected" ]; then
 fi
 # Exact name, not `ls -t`: stale vsix files pile up in this directory and an
 # mtime race would publish the wrong bundle under the new tag.
-vsix="prime-agent-vscode-${chosen_tag#v}.vsix"
+vsix="brief-${chosen_tag#v}.vsix"
 if [ "$DRY_RUN" = true ]; then
     vsix_line="$vsix (not built — dry run)"
 else
