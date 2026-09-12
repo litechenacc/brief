@@ -95,7 +95,7 @@ export function iconButton(name: IconName, title: string, size = 16): HTMLButton
 	return btn;
 }
 
-const BRIEF_MARK = "M5 3h7.2c4 0 6.3 1.8 6.3 4.7 0 1.8-.9 3.1-2.4 3.9 2 .7 3.2 2.2 3.2 4.2 0 3.3-2.6 5.2-7 5.2H5V3zm4 3v4h3c1.6 0 2.5-.7 2.5-2S13.6 6 12 6H9zm0 7v5h3.4c1.8 0 2.8-.9 2.8-2.5S14.2 13 12.4 13H9z";
+const BRIEF_MARK = "M7 2h10a4 4 0 0 1 4 4v10a4 4 0 0 1-4 4H8.5l-4.6 3.2a.6.6 0 0 1-.9-.5V6a4 4 0 0 1 4-4ZM8 5v12h5a3.4 3.4 0 0 0 2-6.2A3 3 0 0 0 13 5H8Zm2.3 2.5H13a1.1 1.1 0 0 1 0 2.2h-2.7V7.5Zm0 4.6H13a1.2 1.2 0 0 1 0 2.4h-2.7v-2.4Z";
 
 export function brandMark(size = 18, className = ""): SVGSVGElement {
 	const svg = document.createElementNS(SVG_NS, "svg");
@@ -105,6 +105,7 @@ export function brandMark(size = 18, className = ""): SVGSVGElement {
 	if (className) svg.setAttribute("class", className);
 	const path = document.createElementNS(SVG_NS, "path");
 	path.setAttribute("d", BRIEF_MARK);
+	path.setAttribute("fill-rule", "evenodd");
 	path.setAttribute("fill", "currentColor");
 	svg.appendChild(path);
 	return svg;

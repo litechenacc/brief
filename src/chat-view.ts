@@ -230,7 +230,10 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 
 	private makeView(panel?: vscode.WebviewPanel, sidebar?: vscode.WebviewView): ChatView {
 		const webview = (panel ?? sidebar!).webview;
-		if (panel) panel.iconPath = new vscode.ThemeIcon("comment-discussion");
+		if (panel) panel.iconPath = {
+			light: vscode.Uri.joinPath(this.context.extensionUri, "media", "tab-light.svg"),
+			dark: vscode.Uri.joinPath(this.context.extensionUri, "media", "tab-dark.svg"),
+		};
 		if (sidebar) sidebar.title = "Brief";
 		webview.options = { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, "media")] };
 		let ready!: () => void;

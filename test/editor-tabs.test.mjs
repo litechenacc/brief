@@ -108,8 +108,8 @@ try {
 	await manager.newSession(); await manager.newSession();
 	const [a, b] = panels, [ca, cb] = controllers;
 	assert.notEqual(ca, cb);
-	assert.equal(a.iconPath.id, "comment-discussion");
-	assert.equal(b.iconPath.id, "comment-discussion");
+	assert.deepEqual(a.iconPath, { light: { fsPath: join(process.cwd(), "media/tab-light.svg") }, dark: { fsPath: join(process.cwd(), "media/tab-dark.svg") } });
+	assert.deepEqual(b.iconPath, { light: { fsPath: join(process.cwd(), "media/tab-light.svg") }, dark: { fsPath: join(process.cwd(), "media/tab-dark.svg") } });
 	a.send({ type: "ready" }); b.send({ type: "ready" }); await tick();
 	assert.equal(ca.calls.filter(([name]) => name === "start").length, 1);
 	assert.equal(cb.calls.filter(([name]) => name === "start").length, 1);
@@ -197,7 +197,7 @@ try {
 	assert.ok(controllers[3].calls.some(([name]) => name === "abort"), "closed last tab falls back to live tab");
 	const restored = makePanel();
 	await manager.deserializeWebviewPanel(restored, { session: { sessionId: "session-r", sessionFile: "/known/r.jsonl" } });
-	assert.equal(restored.iconPath.id, "comment-discussion", "restored tabs use the chat icon too");
+	assert.deepEqual(restored.iconPath, { light: { fsPath: join(process.cwd(), "media/tab-light.svg") }, dark: { fsPath: join(process.cwd(), "media/tab-dark.svg") } });
 	const cr = controllers.at(-1);
 	let resolveModels;
 	cr.modelGate = new Promise((resolve) => { resolveModels = resolve; });
@@ -244,7 +244,7 @@ try {
 	await manager.toggleLocation();
 	const movedEditor = panels.at(-1);
 	assert.equal(chatLocation, "editor");
-	assert.equal(movedEditor.iconPath.id, "comment-discussion");
+	assert.deepEqual(movedEditor.iconPath, { light: { fsPath: join(process.cwd(), "media/tab-light.svg") }, dark: { fsPath: join(process.cwd(), "media/tab-dark.svg") } });
 	assert.equal(controllers.length, controllerCountBeforeMove + 1, "history uses a catalog controller without starting a runtime");
 	const catalog = controllers.at(-1);
 	assert.deepEqual(catalog.calls, [["history"]]);

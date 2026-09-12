@@ -1,14 +1,18 @@
-
 const { chromium } = require("playwright");
+const { readFileSync } = require("node:fs");
+
 (async () => {
-  let svg = require("fs").readFileSync("media/icon.svg", "utf8");
-  svg = svg.replaceAll("#C5C5C5", "#85ED75").replace('width="24"', 'width="560"').replace('height="24"', 'height="560"');
+  const svg = readFileSync("media/icon.svg", "utf8");
   const browser = await chromium.launch();
-  const page = await browser.newPage({ viewport: { width: 1024, height: 1024 } });
-  await page.setContent(`<!doctype html><html><body style="margin:0">
-    <div style="width:1024px;height:1024px;background:#0f0f0f;border-radius:160px;display:flex;align-items:center;justify-content:center">${svg}</div>
-  </body></html>`);
-  await page.screenshot({ path: "media/icon.png", omitBackground: true, clip: { x: 0, y: 0, width: 1024, height: 1024 } });
-  await browser.close();
-  console.log("rendered");
-})();
+  try {
+    const page = await browser.newPage({ deviceScaleFactor: 1 });
+    for (const size of [512, 256, 128, 64, 32]) {
+      await page.setViewportSize({ width: size, height: size });
+      await page.setContent(`<!doctype html><style>body{margin:0}svg{display:block;width:100vw;height:100vh}</style>${svg}`);
+      await page.screenshot({ path: size === 512 ? "media/icon.png" : `media/icon-${size}.png`, omitBackground: true });
+    }
+  } finally {
+    await browser.close();
+  }
+  console.log("Rendered Brief app icons: 512, 256, 128, 64, 32 px");
+})().catch((error) => { console.error(error); process.exitCode = 1; });

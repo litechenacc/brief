@@ -46,13 +46,13 @@
       {
         "command": "brief.openChat",
         "title": "Open Chat in Editor Tab",
-        "icon": "$(comment-discussion)",
+        "icon": { "light": "media/tab-light.svg", "dark": "media/tab-dark.svg" },
         "category": "Brief"
       },
       {
         "command": "brief.focusChat",
         "title": "Focus Chat",
-        "icon": "$(comment-discussion)",
+        "icon": { "light": "media/tab-light.svg", "dark": "media/tab-dark.svg" },
         "category": "Brief"
       },
       {
@@ -318,7 +318,7 @@
         {
           "id": "brief",
           "title": "Brief",
-          "icon": "$(comment-discussion)"
+          "icon": "media/activity.svg"
         }
       ]
     },
