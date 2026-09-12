@@ -304,7 +304,7 @@ check("expanding sweeps the selection over the revealed thinking text",
 	`end=${swept.endContainer.nodeValue ?? swept.endContainer.nodeName}`);
 check("session id shown", document.querySelector(".session-id").textContent === "#019fd749");
 check("live badge", document.querySelector(".live-label").textContent === "live");
-check("context meter labeled", document.querySelector(".context-label").textContent === "Context ~23%");
+check("context meter labeled", document.querySelector(".context-label").textContent === "Context 23% · 60K / 262K");
 
 // --- model menu with favorites ---
 hostMessage({
@@ -674,8 +674,8 @@ hostMessage({ type: "setHistoryMode", enabled: false });
 	observer.disconnect();
 	check("status renders context label once", addedTextNodes === 1, `${addedTextNodes} text replacements per status`);
 }
-check("context label names estimated capacity", document.querySelector(".context-label").textContent === "Context ~23%");
-check("context shows used and total tokens", document.querySelector(".context-tokens").textContent === "~60,000 / 262,144 tokens");
+check("context label shows capacity", document.querySelector(".context-label").textContent === "Context 23% · 60K / 262K");
+check("context tooltip shows used and total tokens", document.querySelector(".context-meter").title === "Context 23% · 60,000 / 262,144 tokens");
 const sessionUsage = document.querySelector("details.stats-label");
 check("session fee is labeled and details collapsed", !sessionUsage.open && sessionUsage.querySelector("summary").textContent === "This session $0.0040");
 check("session details state scope and cumulative usage", sessionUsage.textContent.includes("4.5k tokens") && sessionUsage.textContent.includes("subagents") && sessionUsage.textContent.includes("$0.0040"));
@@ -685,11 +685,11 @@ check("zero cost remains visible", !sessionUsage.hidden && sessionUsage.querySel
 hostMessage({ type: "status", status: { ...baseStatus, costUsd: undefined, usageTotal: undefined } });
 check("missing usage hides session stats", sessionUsage.hidden);
 hostMessage({ type: "status", status: { ...baseStatus, contextPercent: null, contextTokens: null } });
-check("unknown context is pending not zero", document.querySelector(".context-label").textContent === "Context pending" && document.querySelector(".context-fill").style.display === "none");
+check("unknown context is pending not zero", document.querySelector(".context-label").textContent === "Context pending · pending / 262K" && !document.querySelector(".context-fill, .context-tokens"));
 hostMessage({ type: "status", status: { ...baseStatus, contextPercent: 90, compactDefaultPercent: 94 } });
-check("context below effective threshold has no hardcoded warning", !document.querySelector(".context-fill").classList.contains("warm") && !document.querySelector(".context-fill").classList.contains("hot"));
+check("context below effective threshold has no hardcoded warning", !document.querySelector(".context-label").classList.contains("warm") && !document.querySelector(".context-label").classList.contains("hot"));
 hostMessage({ type: "compactThreshold", percent: 85 });
-check("threshold-only update refreshes context warning", document.querySelector(".context-fill").classList.contains("warm"));
+check("threshold-only update refreshes context warning", document.querySelector(".context-label").classList.contains("warm"));
 hostMessage({ type: "status", status: { ...baseStatus, compactDefaultPercent: 94 } });
 sessionUsage.open = false;
 
@@ -700,13 +700,13 @@ meter.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
 check("context has no controls or threshold tick", !meter.querySelector("input, button, .context-tick, .threshold-flyout"));
 check("context click does not post settings", !posted.some((m) => m.type === "setCompactThreshold"));
 hostMessage({ type: "status", status: { ...baseStatus, streaming: true, contextTokens: 0, contextPercent: 0 } });
-check("zero context is visible", meter.querySelector(".context-tokens").textContent === "~0 / 262,144 tokens" && meter.querySelector(".context-label").textContent === "Context ~0%");
+check("zero context is visible", meter.title === "Context 0% · 0 / 262,144 tokens" && meter.querySelector(".context-label").textContent === "Context 0% · 0K / 262K");
 hostMessage({ type: "status", status: { ...baseStatus, contextTokens: null, contextPercent: null } });
-check("pending usage keeps total capacity visible", meter.querySelector(".context-tokens").textContent === "pending / 262,144 tokens");
+check("pending usage keeps total capacity visible", meter.title === "Context pending · pending / 262,144 tokens");
 hostMessage({ type: "status", status: { ...baseStatus, contextTokens: null, contextPercent: null, contextWindow: undefined } });
 check("missing capacity hides stale context", meter.style.display === "none");
 hostMessage({ type: "status", status: baseStatus });
-check("context usage returns on status", meter.style.display !== "none" && meter.querySelector(".context-tokens").textContent === "~60,000 / 262,144 tokens");
+check("context usage returns on status", meter.style.display !== "none" && meter.title === "Context 23% · 60,000 / 262,144 tokens");
 
 // --- install prompt banner ---
 check("install banner hidden initially", !document.querySelector(".install-banner.visible"));
@@ -1681,6 +1681,7 @@ check("two optimistic rows render before either verdict", scroller.querySelector
 check("send paints a working indicator before the first token", !!scroller.querySelector(".working-row .working-mark") && (scroller.querySelector(".working-label")?.textContent ?? "").length > 0 && !/Sending/.test(scroller.querySelector(".working-label")?.textContent ?? ""), scroller.querySelector(".working-label")?.textContent ?? "none");
 const workingLabel = scroller.querySelector(".working-label");
 const workingLetters = [...workingLabel.querySelectorAll(".working-letter")];
+check("working icon is a decorative B, not a brand SVG", scroller.querySelector(".working-mark")?.textContent === "B" && scroller.querySelector(".working-mark")?.tagName === "SPAN" && scroller.querySelector(".working-mark")?.getAttribute("aria-hidden") === "true");
 check("working verb renders one span per character", workingLetters.length === Array.from(workingLabel.textContent).length && workingLetters.every(letter => letter.textContent.length === 1));
 check("working letters have staggered animation delays", new Set(workingLetters.map(letter => letter.style.animationDelay)).size === workingLetters.length);
 await new Promise(resolve => window.setTimeout(resolve, 450));

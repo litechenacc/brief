@@ -7,11 +7,12 @@ try {
 	const page = await browser.newPage({ reducedMotion: "no-preference" });
 	await page.setContent(`<body style="--vscode-foreground: #ccc; --vscode-descriptionForeground: #ccc">
 		<div class="working-row" role="status" aria-label="Working">
-			<svg class="working-mark" width="15" height="15"><circle cx="7" cy="7" r="6" fill="currentColor" /></svg>
+			<span class="working-mark" aria-hidden="true">B</span>
 			<span class="working-label">${Array.from("Thinking", (char, index) =>
 				`<span class="working-letter" style="animation-delay: ${(index + 1) * 0.1 - 1.4}s">${char}</span>`).join("")}</span><span class="working-elapsed">7s</span>
 		</div></body>`);
 	await page.addStyleTag({ path: "media/main.css" });
+	assert.equal(await page.locator(".working-mark").evaluate(el => getComputedStyle(el).fontWeight), "800");
 	for (const [selector, midpoint] of [[".working-mark", 420], [".working-letter:first-child", 520]]) {
 		const samples = await page.locator(selector).evaluate((element, midpoint) => {
 			const animation = element.getAnimations()[0];

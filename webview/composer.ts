@@ -92,9 +92,7 @@ export class Composer {
 	private stopBtn: HTMLButtonElement;
 	private behaviorBtn: HTMLButtonElement;
 	private contextWrap: HTMLElement;
-	private contextFill: HTMLElement;
 	private contextLabel: HTMLElement;
-	private contextTokens: HTMLElement;
 	private modelBtn: HTMLButtonElement;
 	private modelLabelEl: HTMLElement;
 	private brainBtn: HTMLButtonElement;
@@ -193,10 +191,8 @@ export class Composer {
 		this.behaviorBtn.addEventListener("click", () => this.toggleBehavior());
 
 		this.contextWrap = el("div", "context-meter");
-		this.contextFill = el("div", "context-fill");
 		this.contextLabel = el("span", "context-label", "");
-		this.contextTokens = el("span", "context-tokens", "");
-		this.contextWrap.append(this.contextFill, this.contextLabel, this.contextTokens);
+		this.contextWrap.append(this.contextLabel);
 
 		this.sendBtn = document.createElement("button");
 		this.sendBtn.className = "send-btn muted";
@@ -500,14 +496,14 @@ export class Composer {
 		const percent = contextWindow == null ? null : this.contextPercentCurrent;
 		const effective = this.compactThreshold ?? this.compactDefaultPercent;
 		this.contextWrap.style.display = contextWindow == null ? "none" : "";
-		this.contextFill.style.display = percent == null ? "none" : "";
-		this.contextFill.style.width = percent == null ? "" : `${Math.min(100, Math.max(0, percent))}%`;
-		this.contextFill.className = `context-fill${percent != null && effective != null && percent >= effective ? " warm" : ""}`;
-		this.contextLabel.textContent = percent == null ? "Context pending" : `Context ~${Math.round(percent)}%`;
-		const used = this.contextTokensCurrent == null ? "pending" : `~${this.contextTokensCurrent.toLocaleString("en-US")}`;
+		this.contextLabel.classList.toggle("warm", percent != null && effective != null && percent >= effective);
+		const label = percent == null ? "Context pending" : `Context ${Math.round(percent)}%`;
+		const usedK = this.contextTokensCurrent == null ? "pending" : `${Math.round(this.contextTokensCurrent / 1000)}K`;
+		const totalK = contextWindow == null ? "pending" : `${Math.round(contextWindow / 1000)}K`;
+		this.contextLabel.textContent = `${label} · ${usedK} / ${totalK}`;
+		const used = this.contextTokensCurrent == null ? "pending" : this.contextTokensCurrent.toLocaleString("en-US");
 		const total = contextWindow == null ? "pending" : contextWindow.toLocaleString("en-US");
-		this.contextTokens.textContent = `${used} / ${total} tokens`;
-		this.contextWrap.title = `${this.contextLabel.textContent} · ${this.contextTokens.textContent}`;
+		this.contextWrap.title = `${label} · ${used} / ${total} tokens`;
 	}
 
 	private contextPercentCurrent: number | null = null;

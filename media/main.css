@@ -392,6 +392,9 @@ textarea::-webkit-scrollbar {
 }
 
 .working-mark {
+	font-size: 15px;
+	font-weight: 800;
+	line-height: 1;
 	color: var(--pa-text, inherit);
 	flex-shrink: 0;
 	animation: working-letter-pulse 1.4s ease-in-out infinite;
@@ -1158,47 +1161,20 @@ body.vscode-high-contrast-light .history-item.current {
 }
 
 .context-meter {
-	position: relative;
-	display: flex;
-	flex-direction: column;
 	flex-shrink: 0;
-	gap: 2px;
-	padding-top: 6px;
-	margin: 0 6px;
+	margin: 0 9px 0 6px;
 	cursor: default;
 }
 
-.context-meter::before,
-.context-fill {
-	position: absolute;
-	left: 0;
-	top: 0;
-	height: 3px;
-	border-radius: 2px;
-}
-
-.context-meter::before {
-	content: "";
-	width: 100%;
-	background: var(--pa-surface-2);
-}
-
-.context-fill {
-	background: var(--pa-accent);
-	transition: width 0.2s ease;
-}
-
-.context-fill.warm {
-	background: var(--pa-warn);
-}
-
-.context-label,
-.context-tokens {
-	font-size: 9px;
+.context-label {
+	font-size: 11px;
 	color: var(--pa-dim);
-	text-align: center;
 	white-space: nowrap;
 	font-variant-numeric: tabular-nums;
+}
+
+.context-label.warm {
+	color: var(--pa-warn);
 }
 
 .send-btn {

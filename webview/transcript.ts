@@ -901,7 +901,8 @@ export class Transcript {
 		row.setAttribute("role", "status");
 		row.setAttribute("aria-label", "Working");
 		row.setAttribute("aria-busy", "true");
-		const mark = brandMark(15, "working-mark");
+		const mark = el("span", "working-mark", "B");
+		mark.setAttribute("aria-hidden", "true");
 		row.appendChild(mark);
 		const label = el("span", "working-label");
 		label.setAttribute("aria-hidden", "true");
