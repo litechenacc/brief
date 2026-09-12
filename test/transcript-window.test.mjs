@@ -143,19 +143,28 @@ hostMessage({
 	status, state: null,
 	messages: [{
 		role: "assistant",
-		content: [{ type: "text", text: "[a](javascript:alert(1)) [b](http://example.com/x) [c](https://ok.example/y) [d](rel/path.md) [e](//evil.example/x)" }],
+		content: [{ type: "text", text: "[a](javascript:alert(1)) [b](http://example.com/x) [c](https://ok.example/y) [d](rel/path.md) [e](//evil.example/x) [f](./AGENTS.md) [g](/tmp/AGENTS.md) [h](../AGENTS.md) [i](docs/my%20file.md) [j](command:workbench.action.closeWindow) [k](vscode://file/tmp/a) [l](%2F%2Fevil.example/x)" }],
 	}],
 });
 const anchors = [...document.querySelectorAll(".md a")];
 const hrefs = anchors.map((a) => a.getAttribute("href"));
 check("javascript: target is inert", hrefs[0] === "#", String(hrefs[0]));
-check("relative target is inert (never resolved against the webview origin)", hrefs[3] === "#", String(hrefs[3]));
+check("relative file target is clickable", hrefs[3] === "rel/path.md" && !anchors[3].classList.contains("md-link-inert"), String(hrefs[3]));
 check("protocol-relative target is inert", hrefs[4] === "#", String(hrefs[4]));
 check("http/https targets stay absolute", hrefs[1] === "http://example.com/x" && hrefs[2] === "https://ok.example/y", `${hrefs[1]} ${hrefs[2]}`);
 posted.length = 0;
 for (const anchor of anchors) anchor.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
 const opened = posted.filter((m) => m.type === "openExternal").map((m) => m.url);
 check("only allow-listed absolute URLs reach the host", JSON.stringify(opened) === JSON.stringify(["http://example.com/x", "https://ok.example/y"]), JSON.stringify(opened));
+const openedFiles = posted.filter((m) => m.type === "openFile").map((m) => m.path);
+check("file links go to the editor with decoded paths", JSON.stringify(openedFiles) === JSON.stringify([
+	"rel/path.md", "./AGENTS.md", "/tmp/AGENTS.md", "../AGENTS.md", "docs/my file.md",
+]), JSON.stringify(openedFiles));
+check("command, vscode and encoded network links stay inert", hrefs.slice(9).every((href) => href === "#"));
+posted.length = 0;
+anchors[3].dispatchEvent(new window.MouseEvent("auxclick", { bubbles: true, cancelable: true }));
+check("middle click does not dispatch file opens", posted.length === 0);
+
 
 // ---- an unmatched delimiter must not make rendering quadratic --------------
 const started = Date.now();

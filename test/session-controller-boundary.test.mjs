@@ -12,6 +12,7 @@ import * as path from "node:path";
 const require = createRequire(import.meta.url);
 require("./vscode-stub.cjs");
 const { vscodeStub } = require("./vscode-stub.cjs");
+vscodeStub.FileType = { File: 1, Directory: 2 };
 const { SessionController } = require("../dist/controller.cjs");
 
 const workdir = fs.mkdtempSync(path.join(os.tmpdir(), "prime-agent-controller-boundary-"));
@@ -357,10 +358,56 @@ if (process.platform !== "win32") {
 		selection: { isEmpty: false, start: { line: 0 }, end: { line: 0 } },
 	};
 	check("workspace symlink selections cannot expose an external target", controller.getActiveSelection() === null);
-	check("workspace symlink paths cannot be opened from a webview message", (await controller.resolveWorkspaceUri("workspace-link.txt")) === null);
+	check("user-clicked symlink paths can open in the editor without forwarding contents", (await controller.resolveWorkspaceUri("workspace-link.txt"))?.fsPath === linkedPath);
 	vscodeStub.window.activeTextEditor = priorEditor;
 	fs.unlinkSync(secretPath);
 }
+
+// File-link navigation is editor-only and permits explicit paths outside the workspace.
+const priorStat = vscodeStub.workspace.fs.stat;
+const priorOpen = vscodeStub.workspace.openTextDocument;
+const priorShow = vscodeStub.window.showTextDocument;
+const priorExecute = vscodeStub.commands.executeCommand;
+const editorPaths = [];
+const editorCommands = [];
+vscodeStub.commands.executeCommand = async (command, uri) => {
+	editorCommands.push(command);
+	editorPaths.push(uri.fsPath);
+};
+vscodeStub.workspace.fs.stat = async () => ({ type: 1 });
+vscodeStub.workspace.openTextDocument = async (uri) => { editorPaths.push(uri.fsPath); return {}; };
+vscodeStub.window.showTextDocument = async () => ({});
+await controller.openFile("./AGENTS.md");
+await controller.openFile(path.join(os.tmpdir(), "absolute-link.md"));
+await controller.openFile("../parent-link.md");
+check("relative and absolute file links open in the VS Code editor", JSON.stringify(editorPaths) === JSON.stringify([
+	path.join(workdir, "AGENTS.md"), path.join(os.tmpdir(), "absolute-link.md"), path.resolve(workdir, "../parent-link.md"),
+]), JSON.stringify(editorPaths));
+for (const target of ["command:evil", "javascript:evil", "https://example.com", "//server/share", "bad\0path", "#heading"]) {
+	await controller.openFile(target);
+}
+check("file opens reject URI schemes, network paths and invalid paths", editorPaths.length === 3);
+// Binary links must use the native opener, never openTextDocument.
+vscodeStub.workspace.openTextDocument = async () => { throw new Error("binary file"); };
+await controller.openFile("media/design-drafts/preview.png");
+check("PNG links use the native VS Code editor selector", editorCommands.at(-1) === "vscode.open"
+	&& editorPaths.at(-1) === path.join(workdir, "media/design-drafts/preview.png"));
+const textPaths = [];
+let revealedRange;
+const textEditor = { revealRange: (range) => { revealedRange = range; } };
+vscodeStub.workspace.openTextDocument = async (uri) => { textPaths.push(uri.fsPath); return {}; };
+vscodeStub.window.showTextDocument = async () => textEditor;
+await controller.openFile("src/app.ts", 3, 5);
+check("line links still select and reveal the requested text range", textPaths[0] === path.join(workdir, "src/app.ts")
+	&& textEditor.selection?.start.line === 2 && textEditor.selection?.end.line === 4 && revealedRange?.start.line === 2);
+posts.length = 0;
+vscodeStub.workspace.fs.stat = async () => { throw new Error("not found"); };
+await controller.openFile("missing.md");
+check("missing file links show an error notice", posts.some((m) => m.type === "notice" && m.level === "error" && m.text.includes("missing.md")));
+vscodeStub.workspace.fs.stat = priorStat;
+vscodeStub.workspace.openTextDocument = priorOpen;
+vscodeStub.window.showTextDocument = priorShow;
+vscodeStub.commands.executeCommand = priorExecute;
 
 // Every operation that waits for process startup must remain owned by the view
 // that initiated it. Otherwise a prompt begun on A can be delivered to B when

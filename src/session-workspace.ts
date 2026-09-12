@@ -2,7 +2,7 @@
  * Workspace editor helpers: file search, image pick, open-at-line.
  * Assigned onto SessionController.prototype — no extra class layer.
  */
-import * as fs from "node:fs/promises";
+import { isFilePath } from "./file-link.js";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import type { FileSearchItem, HostToWebview, ImageAttachment } from "./protocol.js";
@@ -152,12 +152,20 @@ async pickImages(this: SessionController, requestId: number, reply: (message: Ho
 },
 
 async openFile(this: SessionController, relPath: string, startLine?: number, endLine?: number): Promise<void> {
-	const uri = await this.resolveWorkspaceUri(relPath.replace(/\/$/, ""));
-	if (!uri) return;
+	const uri = await this.resolveWorkspaceUri(relPath);
+	if (!uri) {
+		this.broadcast({ type: "notice", level: "error", text: `Could not open ${relPath}` });
+		return;
+	}
 	try {
 		const stat = await vscode.workspace.fs.stat(uri);
 		if (stat.type === vscode.FileType.Directory) {
 			await vscode.commands.executeCommand("revealInExplorer", uri);
+			return;
+		}
+		if (startLine === undefined) {
+			// Let VS Code choose the editor, including image and custom previews.
+			await vscode.commands.executeCommand("vscode.open", uri);
 			return;
 		}
 		const doc = await vscode.workspace.openTextDocument(uri);
@@ -174,16 +182,10 @@ async openFile(this: SessionController, relPath: string, startLine?: number, end
 },
 
 async resolveWorkspaceUri(this: SessionController, relPath: string): Promise<vscode.Uri | null> {
-	if (!relPath || path.isAbsolute(relPath) || relPath.split(/[\\/]+/).some((part) => part === "..")) return null;
-	const folder = vscode.workspace.workspaceFolders?.[0];
-	if (!folder) return null;
-	const candidate = vscode.Uri.joinPath(folder.uri, relPath);
-	try {
-		const [root, resolved] = await Promise.all([fs.realpath(folder.uri.fsPath), fs.realpath(candidate.fsPath)]);
-		const relative = path.relative(root, resolved);
-		return relative && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative) ? vscode.Uri.file(resolved) : null;
-	} catch {
-		return null;
-	}
+	// Opening a user-clicked link does not forward file contents to the agent.
+	// Absolute paths and parent-relative paths may intentionally leave the workspace.
+	if (!isFilePath(relPath)) return null;
+	if (!path.isAbsolute(relPath) && !this.workspaceRoot) return null;
+	return vscode.Uri.file(path.resolve(this.workspaceRoot, relPath));
 }
 };

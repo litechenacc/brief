@@ -150,7 +150,10 @@ const composerDeps = {
 const composer = new Composer(composerDeps);
 
 const transcript = new Transcript(scroller, {
-	onOpenLink: (href) => post({ type: "openExternal", url: href }),
+	onOpenLink: (href) => {
+		if (/^(https?:|mailto:)/i.test(href)) post({ type: "openExternal", url: href });
+		else post({ type: "openFile", path: decodeURIComponent(href) });
+	},
 	onOpenFile: (path, startLine, endLine) => post({ type: "openFile", path, startLine, endLine }),
 	onForkFromUser: (ordinal) => post({ type: "forkFromUser", ordinal }),
 	onSpawnedCardClick: (browseRef) => post({ type: "browseChild", browseRef }),

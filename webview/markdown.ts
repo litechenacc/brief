@@ -4,6 +4,7 @@
  */
 
 import { el } from "./dom.js";
+import { isFilePath } from "../src/file-link.js";
 
 export function copyToClipboard(text: string, onDone?: () => void): void {
 	const fallback = () => {
@@ -32,11 +33,8 @@ const ALLOWED_LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
 
 function sanitizeHref(href: string): string {
 	try {
-		// Deliberately NO base URL. Resolving against one turned a relative or
-		// protocol-relative target ("docs/x.md", "//evil.example") into an
-		// "allowed" https link whose real destination the text never named — and
-		// which the host then refuses anyway. Only an explicit, absolute,
-		// allow-listed URL becomes a link; anything else stays inert.
+		if (isFilePath(href) && isFilePath(decodeURIComponent(href))) return href;
+		// External URLs still require an explicit allow-listed scheme.
 		const url = new URL(href);
 		if (ALLOWED_LINK_PROTOCOLS.has(url.protocol)) return url.href;
 	} catch {
@@ -85,9 +83,7 @@ function renderInline(text: string, parent: HTMLElement, onOpenLink: (href: stri
 			const href = sanitizeHref(rawHref);
 			const openable = href !== "#";
 			a.href = href;
-			// Hand the HOST the sanitized absolute URL, never the raw text: the two
-			// must agree on the destination, or a click opens something the link
-			// never claimed (and a relative target only earns an error notice).
+			// The callback routes file paths to the editor, URLs to the browser.
 			a.title = openable ? rawHref : `${rawHref} — not an openable link`;
 			if (!openable) a.className = "md-link-inert";
 			a.addEventListener("click", (event) => {
