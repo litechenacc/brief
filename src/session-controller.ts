@@ -120,6 +120,7 @@ export interface SessionController {
 	restoreHistoryUiState(): void;
 	persistHistoryUiState(): void;
 	overlayCachedHistory(): void;
+	paintHistory(): void;
 	viewedSessionPath(): string | undefined;
 	markHistoryWaitingForUser(sessionPath?: string): void;
 	markHistorySessionOpened(sessionPath: string): void;
@@ -1785,15 +1786,30 @@ export class SessionController implements vscode.Disposable {
 	 */
 	async archiveSession(sessionPath: string, sessionId: string): Promise<void> {
 		if (this.guardObservedReadOnly("archiving a session")) return;
-		const session = await this.resolveHistorySession(sessionPath, sessionId);
-		if (!session) return;
-		sessionPath = session.path;
-		sessionId = session.id;
-		const fileId = session.fileId;
 		if ((!this.attached && sessionId === this.state?.sessionId) || sessionId === this.attached?.sessionId) {
 			this.broadcast({ type: "notice", level: "warning", text: "You can't archive the session you're in. Start a new one first." });
 			return;
 		}
+		const target = normalizeFsPath(sessionPath);
+		const known = (this.actionHistory ?? this.lastHistory)?.some(
+			(row) => row.id === sessionId && normalizeFsPath(row.path) === target,
+		) ?? false;
+		if (known) this.markHistoryArchived(sessionPath);
+		const rollback = (): void => {
+			if (!known) return;
+			this.historyArchived.delete(this.historyPathKey(sessionPath));
+			this.persistHistoryUiState();
+			this.overlayCachedHistory();
+			this.paintHistory();
+		};
+		const session = await this.resolveHistorySession(sessionPath, sessionId);
+		if (!session) {
+			rollback();
+			return;
+		}
+		sessionPath = session.path;
+		sessionId = session.id;
+		const fileId = session.fileId;
 		try {
 			const sidecar = await this.ensureSidecar();
 			const resident = (await this.listSessions(sidecar)).find(
@@ -1811,17 +1827,17 @@ export class SessionController implements vscode.Disposable {
 			// file append could be overwritten by its owner. Refuse rather than claim
 			// an archive that the daemon can immediately undo.
 			if (await isSessionActive(sessionPath)) {
+				rollback();
 				this.broadcast({ type: "notice", level: "error", text: `Could not archive the live session: ${err instanceof Error ? err.message : String(err)}` });
 				return;
 			}
 		}
 		const result = await archiveSessionFile(sessionPath, fileId);
 		if (result.ok) {
-			this.broadcast({ type: "notice", level: "info", text: "Session archived — hidden from the active list; expand Archive to find it again." });
 			this.savedCatalog = null;
-			this.markHistoryArchived(sessionPath);
-			await this.listHistory();
+			void this.listHistory();
 		} else {
+			rollback();
 			this.broadcast({ type: "notice", level: "error", text: `Could not archive session: ${result.error ?? "unknown error"}` });
 		}
 	}

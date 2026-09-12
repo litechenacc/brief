@@ -219,19 +219,20 @@ export class HistoryView {
 		if (isCurrent) item.classList.add("current");
 		const top = el("div", "history-item-top");
 		const name = historyLabel(session);
-		const resume = isCurrent ? el("div", "history-resume") : document.createElement("button");
+		const resume = document.createElement("button");
 		resume.className = "history-resume";
 		resume.title = isCurrent ? `${name} (current session)` : `Resume ${name}`;
-		if (!isCurrent) resume.setAttribute("aria-label", resume.title);
-		resume.appendChild(el("span", "history-item-name", isCurrent ? `${name} (current)` : name));
-		resume.appendChild(
+		resume.setAttribute("aria-label", resume.title);
+		resume.appendChild(el("span", "history-item-name", name));
+		const meta = el("div", "history-item-meta");
+		meta.appendChild(
 			el(
 				"span",
 				"history-item-time",
 				relativeTime(session.modifiedMs != null ? new Date(session.modifiedMs).toISOString() : session.timestamp),
 			),
 		);
-		// Status dot next to the name, the same three the CLI names. Shown for the
+		// Status dot on the right, the same three the CLI names. Shown for the
 		// current session too — attaching to a live run must not make the run look
 		// finished on the next visit to history. Older hosts send only `running`,
 		// so fall back to it rather than inventing a liveness we were not told.
@@ -252,39 +253,37 @@ export class HistoryView {
 					? "Finished — waiting for you"
 					: "Opened";
 		mark.appendChild(el("span", "running-dot"));
-		resume.appendChild(mark);
+		meta.appendChild(mark);
+		resume.append(meta);
 		const actions = el("div", "history-actions");
+		if (session.running) {
+			const stop = document.createElement("button");
+			stop.className = "history-action";
+			stop.title = "Stop this session (aborts the live run)";
+			stop.appendChild(icon("stop", 10));
+			stop.addEventListener("click", (event) => {
+				event.stopPropagation();
+				this.deps.onStop(session.path, session.id);
+			});
+			actions.appendChild(stop);
+		}
+		const rename = document.createElement("button");
+		rename.className = "history-action";
+		rename.title = "Rename session";
+		rename.appendChild(icon("pencil", 11));
+		rename.addEventListener("click", (event) => {
+			event.stopPropagation();
+			this.armRename(item, session);
+		});
+		actions.appendChild(rename);
 		if (!isCurrent) {
-			if (session.running) {
-				const stop = document.createElement("button");
-				stop.className = "history-action";
-				stop.title = "Stop this session (aborts the live run)";
-				stop.appendChild(icon("stop", 10));
-				stop.addEventListener("click", (event) => {
-					event.stopPropagation();
-					this.deps.onStop(session.path, session.id);
-				});
-				actions.appendChild(stop);
-			}
 			const archive = document.createElement("button");
 			archive.className = "history-action";
 			archive.title = "Archive session (hides it in the Archive section)";
 			archive.appendChild(icon("archive", 11));
 			archive.addEventListener("click", (event) => {
 				event.stopPropagation();
-				this.armConfirm(item, session, actions, {
-					label: "Archive",
-					className: "history-action",
-					run: () => this.deps.onArchive(session.path, session.id),
-				});
-			});
-			const rename = document.createElement("button");
-			rename.className = "history-action";
-			rename.title = "Rename session";
-			rename.appendChild(icon("pencil", 11));
-			rename.addEventListener("click", (event) => {
-				event.stopPropagation();
-				this.armRename(item, session);
+				this.deps.onArchive(session.path, session.id);
 			});
 			const del = document.createElement("button");
 			del.className = "history-action";
@@ -298,11 +297,10 @@ export class HistoryView {
 					run: () => this.deps.onDelete(session.path, session.id),
 				});
 			});
-			// Order is the one the operator asked for — stop, rename, delete — with
-			// archive slotted next to delete as the non-destructive neighbour of the
+			// Archive sits next to delete as the non-destructive neighbour of the
 			// two retire actions. Delete stays last: the furthest from a stray click.
-			if (session.archived) actions.append(rename, del);
-			else actions.append(rename, archive, del);
+			if (session.archived) actions.append(del);
+			else actions.append(archive, del);
 		}
 		top.append(resume, actions);
 		item.appendChild(top);
@@ -318,17 +316,18 @@ export class HistoryView {
 				: undefined;
 			if (sub) item.appendChild(el("div", "history-item-sub", sub));
 		}
-		if (!isCurrent) {
-			const resumeSession = (): void => this.deps.onResume(session.path, session.id);
-			resume.addEventListener("click", resumeSession);
-			// Preserve click-anywhere row behavior without stealing clicks intended
-			// for a nested action or rename input.
-			item.addEventListener("click", (event) => {
-				const target = event.target as HTMLElement | null;
-				if (target?.closest?.("button, input, select, textarea, a, [contenteditable='true']")) return;
-				resumeSession();
-			});
-		}
+		const openSession = (): void => {
+			if (isCurrent) this.deps.onBack();
+			else this.deps.onResume(session.path, session.id);
+		};
+		resume.addEventListener("click", openSession);
+		// Preserve click-anywhere row behavior without stealing clicks intended
+		// for a nested action or rename input.
+		item.addEventListener("click", (event) => {
+			const target = event.target as HTMLElement | null;
+			if (target?.closest?.("button, input, select, textarea, a, [contenteditable='true']")) return;
+			openSession();
+		});
 		return item;
 	}
 

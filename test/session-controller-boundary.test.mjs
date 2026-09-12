@@ -852,6 +852,30 @@ controller.scheduleChildrenRefresh = originalIdentityChildrenRefresh;
 		}]).some((r) => r.id === "hist-other" && r.archived !== true));
 }
 
+{
+	const idlePath = path.join(workdir, "hist-archive-now.jsonl");
+	fs.writeFileSync(idlePath, '{"type":"session","id":"root"}\n');
+	controller.lastHistory = [{
+		id: "hist-archive-now",
+		path: idlePath,
+		cwd: workdir,
+		timestamp: new Date().toISOString(),
+		inWorkspace: true,
+	}];
+	controller.actionHistory = controller.lastHistory;
+	controller.sidecar = { connected: true, list: async () => [], request: async () => ({}), dispose: () => {} };
+	posts.length = 0;
+	const pending = controller.archiveSession(idlePath, "hist-archive-now");
+	const painted = posts.find((m) => m.type === "history");
+	check("archive paints the overlay before the file write finishes",
+		painted?.sessions?.find((r) => r.id === "hist-archive-now")?.archived === true,
+		JSON.stringify(painted?.sessions?.map((r) => ({ id: r.id, archived: r.archived }))));
+	await pending;
+	check("successful archive does not toast",
+		!posts.some((m) => m.type === "notice" && String(m.text ?? "").includes("Session archived")),
+		JSON.stringify(posts.filter((m) => m.type === "notice")));
+}
+
 // The last lifecycle fixture intentionally leaves a lightweight RPC stand-in
 // installed; dispose() owns a real client's stop() method, so remove it first.
 controller.client = null;

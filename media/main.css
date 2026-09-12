@@ -794,21 +794,25 @@ details.thinking .thinking-body {
 
 .history-item-top {
 	display: flex;
-	align-items: baseline;
+	align-items: center;
 	justify-content: space-between;
 	gap: 8px;
 }
 
 .history-resume {
 	display: flex;
-	align-items: baseline;
+	align-items: center;
 	gap: 8px;
 	min-width: 0;
 	flex: 1;
+	width: 100%;
 	text-align: left;
 }
 
 .history-item-name {
+	flex: 0 1 auto;
+	min-width: 0;
+	max-width: 58%;
 	font-size: 12px;
 	font-weight: 550;
 	overflow: hidden;
@@ -816,10 +820,20 @@ details.thinking .thinking-body {
 	white-space: nowrap;
 }
 
+.history-item-meta {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	flex-shrink: 0;
+	margin-left: auto;
+}
+
 .history-item-time {
 	font-size: 10px;
 	color: var(--pa-dim);
 	flex-shrink: 0;
+	text-align: right;
+	font-variant-numeric: tabular-nums;
 }
 
 .history-item-sub {
@@ -1589,10 +1603,13 @@ pre.term {
 }
 
 .history-actions {
+	position: absolute;
+	right: 8px;
+	top: 50%;
+	transform: translateY(-50%);
 	display: none;
 	align-items: center;
 	gap: 2px;
-	flex-shrink: 0;
 }
 
 .history-item:hover .history-actions,
@@ -1601,15 +1618,9 @@ pre.term {
 	display: inline-flex;
 }
 
-.history-item:hover .history-item-time {
-	visibility: hidden;
-}
-
-.history-item:focus-within .history-item-time {
-	visibility: hidden;
-}
-
-.history-item.confirming .history-item-time {
+.history-item:hover .history-item-meta,
+.history-item:focus-within .history-item-meta,
+.history-item.confirming .history-item-meta {
 	visibility: hidden;
 }
 
@@ -2641,7 +2652,8 @@ pre.term {
 .running-mark {
 	display: inline-flex;
 	align-items: center;
-	margin-left: 4px;
+	flex-shrink: 0;
+	margin-left: 0;
 }
 
 .running-dot {

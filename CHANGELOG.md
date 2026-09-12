@@ -13,6 +13,10 @@ After a cut, add the new version's compare link at the bottom and re-point [Unre
 
 ## [Unreleased]
 
+- **History archive is one click, and the rename icon matches the title-bar pencil.** Archive no longer asks for a second confirm click. The history rename glyph is the same pencil as `$(edit)` on the main session title bar.
+- **The current history row is clickable and its time/status sit on the right.** Clicking the open session closes history without reloading it. Titles ellipsize so the timestamp and status lamp stay aligned.
+- **History archive moves the row immediately and no longer toasts.** The list paints into Archive on click; the file write continues in the background. Failures still show an error. Success no longer posts the info banner.
+
 - **Python tool cards now syntax-highlight the cell.** Keywords, names, strings, comments, and numbers take their colors from the current VS Code Color Theme (`--vscode-symbolIcon-*` / debug-token colors), so Dark+, Light+, and High Contrast stay consistent with the editor. Shell cards are unchanged.
 
 - **Split the host and chat webview by responsibility.** Session history, daemon attach, compact, workspace helpers, webview message parsing, and the subagent strip each live in their own file. Chat, RPC, daemon attach, history, and subagents stay.

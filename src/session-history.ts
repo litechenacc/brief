@@ -70,6 +70,11 @@ overlayCachedHistory(this: SessionController): void {
 	if (this.actionHistory) this.actionHistory = this.actionHistory.map((row) => this.decorateHistoryRow(row));
 },
 
+paintHistory(this: SessionController): void {
+	const sessions = this.actionHistory ?? this.lastHistory;
+	if (sessions) this.broadcast({ type: "history", sessions });
+},
+
 viewedSessionPath(this: SessionController): string | undefined {
 	if (this.attached?.sessionPath) return this.historyPathKey(this.attached.sessionPath);
 	if (this.state?.sessionFile) return this.historyPathKey(this.state.sessionFile);
@@ -103,6 +108,7 @@ markHistoryArchived(this: SessionController, sessionPath: string): void {
 	this.historyArchived.add(this.historyPathKey(sessionPath));
 	this.persistHistoryUiState();
 	this.overlayCachedHistory();
+	this.paintHistory();
 },
 
 /**

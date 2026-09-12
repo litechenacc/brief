@@ -445,6 +445,33 @@ posted.length = 0;
 document.querySelectorAll(".history-item")[1].dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
 check("resume switches session", posted.some((m) => m.type === "switchSession" && m.path === "/tmp/b.jsonl"));
 
+// Current session uses the same row chrome as every other row. Clicking it
+// closes history without asking the host to reload the thread.
+hostMessage({
+	type: "history",
+	sessions: [
+		{ id: "019fd749-x", path: "/tmp/current.jsonl", cwd: "/ws", timestamp: new Date().toISOString(), name: "current thread", inWorkspace: true },
+		{ id: "hist-a", path: "/tmp/a.jsonl", cwd: "/ws", timestamp: new Date().toISOString(), name: "local chat", inWorkspace: true },
+	],
+});
+{
+	const currentRow = [...document.querySelectorAll(".history-item")].find((i) => i.textContent.includes("current thread"));
+	check("current row is marked current", currentRow?.classList.contains("current"));
+	check("current row title is not suffixed", currentRow?.querySelector(".history-item-name")?.textContent === "current thread");
+	check("current row still has time + status on the right", !!currentRow?.querySelector(".history-item-meta .history-item-time") && !!currentRow?.querySelector(".history-item-meta .running-mark"));
+	check("current row still has a resume control", currentRow?.querySelector("button.history-resume") instanceof window.HTMLButtonElement);
+	posted.length = 0;
+	currentRow.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+	check("clicking current session closes history without a switch", document.querySelector(".history-view")?.style.display === "none" && !posted.some((m) => m.type === "switchSession"), JSON.stringify(posted.map((m) => m.type)));
+}
+hostMessage({
+	type: "history",
+	sessions: [
+		{ id: "hist-a", path: "/tmp/a.jsonl", cwd: "/ws", timestamp: new Date().toISOString(), name: "local chat", inWorkspace: true },
+		{ id: "hist-b", path: "/tmp/b.jsonl", cwd: "/other/proj", timestamp: new Date().toISOString(), firstPrompt: "work on proj", inWorkspace: false },
+	],
+});
+
 // --- subagents strip: renders children, browses into one, returns via parent ---
 check("subagents strip hidden with no children", !document.querySelector(".subagents-strip.visible"));
 
