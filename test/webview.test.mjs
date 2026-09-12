@@ -1656,6 +1656,21 @@ check("a prompt sent in this panel is recalled first", textarea.value === "just 
 textarea.value = "";
 textarea.dispatchEvent(new window.Event("input", { bubbles: true }));
 
+// --- agent_end must not render an already completed assistant twice --------
+const finalReply = { role: "assistant", model: "kimi", stopReason: "stop", content: [{ type: "text", text: "final reply" }] };
+for (const completed of [true, false]) {
+	hostMessage({ type: "snapshot", status: baseStatus, state: null, messages: [] });
+	hostMessage({ type: "event", event: { type: "agent_start" } });
+	hostMessage({ type: "event", event: { type: "message_start", message: { ...finalReply, content: [] } } });
+	hostMessage({ type: "event", event: { type: "message_update", message: { ...finalReply, content: [{ type: "text", text: "partial reply" }] } } });
+	if (completed) hostMessage({ type: "event", event: { type: "message_end", message: finalReply } });
+	const replyRow = scroller.querySelector(".row-assistant");
+	hostMessage({ type: "event", event: { type: "agent_end", messages: [finalReply] } });
+	check(`agent_end ${completed ? "keeps completed" : "finishes partial"} reply in the same single row`,
+		scroller.querySelectorAll(".row-assistant").length === 1 && scroller.querySelector(".row-assistant") === replyRow && replyRow.textContent.includes("final reply"));
+	check("agent_end removes the working row", !scroller.querySelector(".working-row"));
+}
+
 // --- Empty thinking parts must not draw an empty "Thought process" box -------
 hostMessage({
 	type: "snapshot",

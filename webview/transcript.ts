@@ -689,7 +689,8 @@ export class Transcript {
 					([...((event.messages ?? []) as AgentMessage[])].reverse().find((message) => message.role === "assistant") as AssistantMessage | undefined) ??
 					this.lastPartialAssistant ??
 					undefined;
-				if (lastAssistant) {
+				// message_end already finalized and cleared the partial reply.
+				if (this.lastPartialAssistant && lastAssistant) {
 					this.adoptStreamingBubble(lastAssistant, false);
 					if (this.streamingBubble) {
 						this.fillAssistantRow(this.streamingBubble, lastAssistant, false);
