@@ -1755,11 +1755,11 @@ pre.term {
 	opacity: 1;
 }
 
-/* 按需展開用量，錯誤與訊息操作維持在外層。 */
+/* Expand usage on demand; keep errors and message actions in the outer row. */
 .usage-line { align-items: flex-start; flex-wrap: wrap; }
 .messages:not(.show-usage-details) .model-usage { display: none; }
 .messages:not(.show-thought-process) .thinking { display: none; }
-/* 隱藏內容不留空列；複製操作浮在回覆旁，不另佔 footer 高度。 */
+/* Hidden content leaves no empty row; copy floats beside the reply without extra footer height. */
 .messages:not(.show-thought-process):not(.show-usage-details) .row-assistant:not(:has(.md, .tool, .usage-status)) {
 	display: none;
 }

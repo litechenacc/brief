@@ -481,12 +481,12 @@ export class Composer {
 		this.contextFill.style.display = percent == null ? "none" : "";
 		this.contextFill.style.width = percent == null ? "" : `${Math.min(100, Math.max(0, percent))}%`;
 		this.contextFill.className = `context-fill${percent != null && effective != null && percent >= effective ? " warm" : ""}`;
-		this.contextLabel.textContent = percent == null ? "Context 待更新" : `Context 約 ${Math.round(percent)}%`;
-		const usage = percent == null ? "Context 使用量待更新" : `Context 估計使用量：約 ${Math.round(percent)}%`;
-		const tokens = percent != null && this.contextTokensCurrent != null ? `約 ${this.contextTokensCurrent.toLocaleString("en-US")} tokens / ` : "";
+		this.contextLabel.textContent = percent == null ? "Context pending" : `Context ~${Math.round(percent)}%`;
+		const usage = percent == null ? "Context usage pending" : `Estimated context usage: ~${Math.round(percent)}%`;
+		const tokens = percent != null && this.contextTokensCurrent != null ? `~${this.contextTokensCurrent.toLocaleString("en-US")} tokens / ` : "";
 		const capacity = contextWindow != null ? ` · ${tokens}Context window ${contextWindow.toLocaleString("en-US")} tokens` : "";
-		const threshold = effective != null ? ` · 自動壓縮門檻 ${effective}%` : "";
-		this.contextWrap.title = `${usage}${capacity}${threshold} — 點擊設定自動壓縮門檻`;
+		const threshold = effective != null ? ` · auto-compact threshold ${effective}%` : "";
+		this.contextWrap.title = `${usage}${capacity}${threshold} — click to set the auto-compact threshold`;
 	}
 
 	// ---- auto-compact threshold flyout ----

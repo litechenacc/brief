@@ -1457,13 +1457,13 @@ export class Transcript {
 		}
 		if (usage) {
 			const details = el("details", "model-usage");
-			details.appendChild(el("summary", "", "用量明細"));
-			const bits = ["單次模型呼叫（非工具執行費用）"];
-			if (message.model) bits.push(`模型：${message.model}`);
+			details.appendChild(el("summary", "", "Usage details"));
+			const bits = ["Single model call (not tool-run cost)"];
+			if (message.model) bits.push(`Model: ${message.model}`);
 			for (const [label, value] of [["Input", usage.input], ["Cache read", usage.cacheRead], ["Cache write", usage.cacheWrite], ["Output", usage.output], ["Total", usage.totalTokens]] as const) {
 				if (value != null) bits.push(`${label}: ${formatNumber(value)} tokens`);
 			}
-			if (usage.cost?.total != null) bits.push(`回報費用：$${usage.cost.total.toFixed(4)}（非帳戶扣款）`);
+			if (usage.cost?.total != null) bits.push(`Reported cost: $${usage.cost.total.toFixed(4)} (not an account charge)`);
 			details.appendChild(el("div", "usage-detail", bits.join("\n")));
 			line.appendChild(details);
 		}

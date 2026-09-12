@@ -313,9 +313,9 @@ export interface StatusSnapshot {
 	liveTranscript?: boolean;
 	/** When true, tool output paints on each partial. Default is false. */
 	streamToolOutput?: boolean;
-	/** 顯示每則回覆的用量明細入口，預設關閉。 */
+	/** Show the usage-details entry on each reply. Default is off. */
 	showUsageDetails?: boolean;
-	/** 顯示 Thought process 區塊，預設隱藏。 */
+	/** Show the Thought process block. Default is hidden. */
 	showThoughtProcess?: boolean;
 }
 

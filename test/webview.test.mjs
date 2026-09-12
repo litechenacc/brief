@@ -216,7 +216,7 @@ check("edit copy emits the output once, not twice", clipboard.split("edited src/
 	hostMessage({ type: "status", status: { ...baseStatus, liveTranscript: false } });
 }
 
-// 訊息本身不顯示估算或 input 費用；模型明細預設收合。
+// Messages themselves do not show estimates or input cost; model details stay collapsed by default.
 check("user footer has no token estimate or input price", !scroller.querySelector(".uf-tokens, .uf-cost"));
 check("user copy and fork remain", scroller.querySelectorAll(".row-user .user-footer .uf-icon").length >= 2);
 check("reply usage is off by default", !scroller.classList.contains("show-usage-details"));
@@ -224,7 +224,7 @@ check("stylesheet hides only model details by default", fs.readFileSync(new URL(
 hostMessage({ type: "status", status: { ...baseStatus, showUsageDetails: true } });
 check("usage config enables existing replies immediately", scroller.classList.contains("show-usage-details"));
 const modelUsage = scroller.querySelector("details.model-usage");
-check("model usage is collapsed with a neutral summary", !!modelUsage && !modelUsage.open && modelUsage.querySelector("summary").textContent === "用量明細");
+check("model usage is collapsed with a neutral summary", !!modelUsage && !modelUsage.open && modelUsage.querySelector("summary").textContent === "Usage details");
 check("model usage includes input output total and reported cost", /Input: 4.6k tokens/.test(modelUsage.textContent) && /Output: 348 tokens/.test(modelUsage.textContent) && modelUsage.textContent.includes("$0.0189"));
 modelUsage.open = true;
 check("model usage can be expanded", modelUsage.open);
@@ -233,7 +233,7 @@ hostMessage({ type: "status", status: { ...baseStatus, showUsageDetails: false }
 check("usage config disables existing replies immediately", !scroller.classList.contains("show-usage-details"));
 check("disabling reply usage keeps copy and session fee", !!scroller.querySelector(".usage-copy") && !document.querySelector(".stats-label").hidden);
 
-// Thought process 的可見性獨立於用量明細與 thinking level。
+// Thought process visibility is independent of usage details and thinking level.
 check("thought process defaults to hidden", !scroller.classList.contains("show-thought-process"));
 check("stylesheet hides thought process by default", fs.readFileSync(new URL("../media/main.css", import.meta.url), "utf8").includes(".messages:not(.show-thought-process) .thinking { display: none; }"));
 const thoughtBlock = scroller.querySelector("details.thinking");
@@ -279,7 +279,7 @@ check("expanding sweeps the selection over the revealed thinking text",
 	`end=${swept.endContainer.nodeValue ?? swept.endContainer.nodeName}`);
 check("session id shown", document.querySelector(".session-id").textContent === "#019fd749");
 check("live badge", document.querySelector(".live-label").textContent === "live");
-check("context meter labeled", document.querySelector(".context-label").textContent === "Context 約 23%");
+check("context meter labeled", document.querySelector(".context-label").textContent === "Context ~23%");
 
 // --- model menu with favorites ---
 hostMessage({
@@ -551,20 +551,20 @@ document.querySelector(".history-search").value = "";
 document.querySelector(".history-search").dispatchEvent(new window.Event("input", { bubbles: true }));
 check("search cleared restores both groups", document.querySelectorAll(".history-item").length === 2);
 
-// Context 容量與 session 成本分開，累計 tokens 只在明細。
+// Context capacity is separate from session cost; cumulative tokens stay in the details.
 hostMessage({ type: "status", status: { ...baseStatus, compactDefaultPercent: 94 } });
-check("context label names estimated capacity", document.querySelector(".context-label").textContent === "Context 約 23%");
+check("context label names estimated capacity", document.querySelector(".context-label").textContent === "Context ~23%");
 check("context tooltip keeps token detail", document.querySelector(".context-meter").title.includes("60,000 tokens"));
 const sessionUsage = document.querySelector("details.stats-label");
-check("session fee is labeled and details collapsed", !sessionUsage.open && sessionUsage.querySelector("summary").textContent === "本 session 費用 $0.0040");
-check("session details state scope and cumulative usage", sessionUsage.textContent.includes("4.5k tokens") && sessionUsage.textContent.includes("Subagents") && sessionUsage.textContent.includes("$0.0040"));
+check("session fee is labeled and details collapsed", !sessionUsage.open && sessionUsage.querySelector("summary").textContent === "This session $0.0040");
+check("session details state scope and cumulative usage", sessionUsage.textContent.includes("4.5k tokens") && sessionUsage.textContent.includes("subagents") && sessionUsage.textContent.includes("$0.0040"));
 sessionUsage.open = true;
 hostMessage({ type: "status", status: { ...baseStatus, costUsd: 0 } });
 check("zero cost remains visible", !sessionUsage.hidden && sessionUsage.querySelector("summary").textContent.includes("$0.00"));
 hostMessage({ type: "status", status: { ...baseStatus, costUsd: undefined, usageTotal: undefined } });
 check("missing usage hides session stats", sessionUsage.hidden);
 hostMessage({ type: "status", status: { ...baseStatus, contextPercent: null, contextTokens: null } });
-check("unknown context is pending not zero", document.querySelector(".context-label").textContent === "Context 待更新" && document.querySelector(".context-fill").style.display === "none");
+check("unknown context is pending not zero", document.querySelector(".context-label").textContent === "Context pending" && document.querySelector(".context-fill").style.display === "none");
 hostMessage({ type: "status", status: { ...baseStatus, contextPercent: 90, compactDefaultPercent: 94 } });
 check("context below effective threshold has no hardcoded warning", !document.querySelector(".context-fill").classList.contains("warm") && !document.querySelector(".context-fill").classList.contains("hot"));
 hostMessage({ type: "compactThreshold", percent: 85 });
@@ -1569,11 +1569,8 @@ const archBtn = [...archRow.querySelectorAll(".history-action")].find((b) => (b.
 check("history row offers archive alongside delete", !!archBtn);
 posted.length = 0;
 archBtn.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-check("archive arms its own confirm", archRow.classList.contains("confirming"));
-const archConfirm = [...archRow.querySelectorAll(".history-action")].find((b) => b.textContent.includes("Archive"));
-check("archive confirm is not styled destructive", !archConfirm.classList.contains("destructive"));
-archConfirm.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-check("confirm posts archiveSession", posted.some((m) => m.type === "archiveSession" && m.sessionId === "arch-1"), JSON.stringify(posted));
+check("archive posts on the first click", posted.some((m) => m.type === "archiveSession" && m.sessionId === "arch-1"), JSON.stringify(posted));
+check("archive does not arm a confirm", !archRow.classList.contains("confirming"));
 check("archive does not post deleteSession", !posted.some((m) => m.type === "deleteSession"));
 hostMessage({
 	type: "history",

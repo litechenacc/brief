@@ -422,12 +422,12 @@ function applyStatus(incomingStatus: StatusSnapshot): void {
 	sessionIdLabel.title = status.sessionFile ?? "";
 
 	statsLabel.hidden = status.costUsd == null && status.usageTotal == null;
-	statsSummary.textContent = status.costUsd != null ? `本 session 費用 $${status.costUsd.toFixed(4)}` : "本 session 費用待更新";
+	statsSummary.textContent = status.costUsd != null ? `This session $${status.costUsd.toFixed(4)}` : "This session cost pending";
 	statsDetail.textContent = [
-		"範圍：目前 session state 的模型用量；不是永久歷史帳單。",
-		"Subagents 是否完整包含尚未確認；此處不代表所有 agents 合計。",
-		status.usageTotal != null ? `累計處理量：${formatNumber(status.usageTotal)} tokens（含 cache）` : "累計處理量：待更新",
-		status.costUsd != null ? `回報費用：$${status.costUsd.toFixed(4)}（非帳戶扣款）` : "回報費用：待更新",
+		"Scope: model usage from the current session state; not a permanent billing history.",
+		"Whether subagents are fully included is unconfirmed; this is not a total across all agents.",
+		status.usageTotal != null ? `Cumulative usage: ${formatNumber(status.usageTotal)} tokens (including cache)` : "Cumulative usage: pending",
+		status.costUsd != null ? `Reported cost: $${status.costUsd.toFixed(4)} (not an account charge)` : "Reported cost: pending",
 	].join("\n");
 
 	composer.setModel(status.modelLabel, status.modelProvider, status.modelId);

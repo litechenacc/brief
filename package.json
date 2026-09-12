@@ -261,12 +261,12 @@
         "brief.showThoughtProcess": {
           "type": "boolean",
           "default": false,
-          "description": "顯示回覆的 Thought process 區塊（預設隱藏）。僅控制顯示，不改變模型的 thinking level。"
+          "description": "Show the Thought process block on replies (hidden by default). Display only; does not change the model thinking level."
         },
         "brief.showUsageDetails": {
           "type": "boolean",
           "default": false,
-          "description": "顯示每則回覆的用量明細入口（預設關閉）。不影響錯誤訊息、複製按鈕與 session 費用。"
+          "description": "Show the usage-details entry on each reply (off by default). Does not affect error messages, the copy button, or session cost."
         },
         "brief.streamToolOutput": {
           "type": "boolean",
