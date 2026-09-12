@@ -169,22 +169,10 @@ const elapsed = Date.now() - started;
 // milliseconds. 400 ms separates the two without being flaky on a busy machine.
 check("40k bare '[' render without a quadratic stall", elapsed < 400, `${elapsed}ms`);
 
-// ---- the threshold flyout must free its outside-click listener -------------
-hostMessage({ type: "status", status: { ...status, contextPercent: 42, contextWindow: 200_000, contextTokens: 84_000 } });
+// Context is read-only; threshold updates must not create a settings flyout.
 const gauge = document.querySelector(".context-meter");
-const before = liveDocListeners;
-for (let i = 0; i < 5; i += 1) {
-	gauge.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-	gauge.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-}
-await new Promise((resolve) => setTimeout(resolve, 10));
-check("closing the threshold flyout by the gauge frees its document listener", liveDocListeners <= before, `before=${before} after=${liveDocListeners}`);
-
-// ---- the host's own default percent must not be dropped --------------------
-hostMessage({ type: "compactThreshold", percent: null, defaultPercent: 94 });
 gauge.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-check("the default percent sent WITH the threshold message is used", (document.querySelector(".threshold-flyout")?.textContent ?? "").includes("94"),
-	(document.querySelector(".threshold-flyout")?.textContent ?? "").slice(0, 48));
+check("context meter has no threshold flyout", !document.querySelector(".threshold-flyout"));
 
 // ---- observing a session must not suppress later spawn cards ---------------
 const spawn = { activeSessionId: "child-1", browseRef: "ref-1", name: "kid", created: new Date().toISOString() };
