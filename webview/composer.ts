@@ -81,7 +81,6 @@ export interface ComposerDeps {
 	onToggleFavorite: (provider: string, modelId: string) => void;
 	onOpenFile: (path: string, startLine?: number, endLine?: number) => void;
 	onDraftChanged: (text: string) => void;
-	onSetCompactThreshold: (percent: number | null) => void;
 	onNewSession: () => void;
 }
 
@@ -95,6 +94,7 @@ export class Composer {
 	private contextWrap: HTMLElement;
 	private contextFill: HTMLElement;
 	private contextLabel: HTMLElement;
+	private contextTokens: HTMLElement;
 	private modelBtn: HTMLButtonElement;
 	private modelLabelEl: HTMLElement;
 	private brainBtn: HTMLButtonElement;
@@ -193,14 +193,10 @@ export class Composer {
 		this.behaviorBtn.addEventListener("click", () => this.toggleBehavior());
 
 		this.contextWrap = el("div", "context-meter");
-		this.contextWrap.title = "Context window usage — click to set the auto-compact threshold for this session";
 		this.contextFill = el("div", "context-fill");
 		this.contextLabel = el("span", "context-label", "");
-		this.contextWrap.addEventListener("click", (event) => {
-			event.stopPropagation();
-			this.toggleThresholdFlyout();
-		});
-		this.contextWrap.append(this.contextFill, this.contextLabel);
+		this.contextTokens = el("span", "context-tokens", "");
+		this.contextWrap.append(this.contextFill, this.contextLabel, this.contextTokens);
 
 		this.sendBtn = document.createElement("button");
 		this.sendBtn.className = "send-btn muted";
@@ -293,7 +289,6 @@ export class Composer {
 		this.modelMenu?.hide();
 		this.thinkingMenu?.hide();
 		this.closeAutocomplete();
-		this.closeThresholdFlyout();
 		this.flushDraft();
 		return {
 			draft: this.snapshotComposer(), stash: this.promptStash ? cloneStash(this.promptStash) : null,
@@ -504,226 +499,27 @@ export class Composer {
 		const contextWindow = this.contextWindowCurrent;
 		const percent = contextWindow == null ? null : this.contextPercentCurrent;
 		const effective = this.compactThreshold ?? this.compactDefaultPercent;
-		// Keep an open threshold flyout mounted, but never retain a stale estimate.
-		this.contextWrap.style.display = contextWindow == null && !this.thresholdFlyoutOpen() ? "none" : "";
+		this.contextWrap.style.display = contextWindow == null ? "none" : "";
 		this.contextFill.style.display = percent == null ? "none" : "";
 		this.contextFill.style.width = percent == null ? "" : `${Math.min(100, Math.max(0, percent))}%`;
 		this.contextFill.className = `context-fill${percent != null && effective != null && percent >= effective ? " warm" : ""}`;
 		this.contextLabel.textContent = percent == null ? "Context pending" : `Context ~${Math.round(percent)}%`;
-		const usage = percent == null ? "Context usage pending" : `Estimated context usage: ~${Math.round(percent)}%`;
-		const tokens = percent != null && this.contextTokensCurrent != null ? `~${this.contextTokensCurrent.toLocaleString("en-US")} tokens / ` : "";
-		const capacity = contextWindow != null ? ` · ${tokens}Context window ${contextWindow.toLocaleString("en-US")} tokens` : "";
-		const threshold = effective != null ? ` · auto-compact threshold ${effective}%` : "";
-		this.contextWrap.title = `${usage}${capacity}${threshold} — click to set the auto-compact threshold`;
+		const used = this.contextTokensCurrent == null ? "pending" : `~${this.contextTokensCurrent.toLocaleString("en-US")}`;
+		const total = contextWindow == null ? "pending" : contextWindow.toLocaleString("en-US");
+		this.contextTokens.textContent = `${used} / ${total} tokens`;
+		this.contextWrap.title = `${this.contextLabel.textContent} · ${this.contextTokens.textContent}`;
 	}
-
-	// ---- auto-compact threshold flyout ----
 
 	private contextPercentCurrent: number | null = null;
 	private contextTokensCurrent: number | null = null;
 	private contextWindowCurrent: number | undefined;
 	private compactThreshold: number | null = null;
 	private compactDefaultPercent: number | null = null;
-	private thresholdFlyout: HTMLElement | null = null;
-	private contextTick: HTMLElement | null = null;
-	/** Signature of the state last painted into the flyout; see renderThresholdFlyout. */
-	private thresholdPainted: string | null = null;
-	/** True from grabbing the slider until the drag is committed or abandoned. */
-	private thresholdInteracting = false;
 
 	setCompactThreshold(percent: number | null, defaultPercent: number | null = null): void {
 		this.compactThreshold = percent;
 		this.compactDefaultPercent = defaultPercent;
-		// Status updates set context first; threshold-only echoes also need a repaint.
 		this.renderContext();
-		this.renderThresholdFlyout();
-		this.renderContextTick();
-	}
-
-	private renderContextTick(): void {
-		const effective = this.compactThreshold ?? this.compactDefaultPercent;
-		if (effective == null) {
-			this.contextTick?.remove();
-			this.contextTick = null;
-			return;
-		}
-		if (!this.contextTick) {
-			this.contextTick = el("span", "context-tick");
-		}
-		this.contextTick.className = `context-tick${this.compactThreshold != null ? " override" : ""}`;
-		this.contextTick.style.left = `${Math.min(100, Math.max(0, effective))}%`;
-		this.contextTick.title =
-			this.compactThreshold != null
-				? `Auto-compact at ${this.compactThreshold}% (override for this session)`
-				: `Agent auto-compact default ~${this.compactDefaultPercent}%`;
-		if (this.contextTick.parentElement !== this.contextWrap) this.contextWrap.appendChild(this.contextTick);
-	}
-
-	/** The flyout is built lazily; state renders into it. */
-	private ensureThresholdFlyout(): HTMLElement {
-		if (this.thresholdFlyout) return this.thresholdFlyout;
-		const panel = el("div", "threshold-flyout");
-		// The panel lives INSIDE the gauge, whose click handler toggles it. Without
-		// this every interaction — including the click Chromium fires at the end of
-		// a slider drag — bubbles up and shuts the popover on the operator.
-		panel.addEventListener("click", (event) => event.stopPropagation());
-		panel.innerHTML = "";
-		const title = el("div", "threshold-title", "");
-		const row = el("div", "threshold-row");
-		const slider = document.createElement("input");
-		slider.type = "range";
-		slider.min = "20";
-		slider.max = "80";
-		slider.step = "5";
-		slider.className = "threshold-slider";
-		const valueEl = el("span", "threshold-value", "");
-		const offBtn = el("button", "threshold-reset") as HTMLButtonElement;
-		offBtn.title = "Reset to the agent default compaction";
-		offBtn.appendChild(icon("reset", 12));
-		// The drag owns the control from the moment it starts. "input" is the
-		// backstop: happy-dom and keyboard adjustment never send a pointer event.
-		const holdSlider = (): void => {
-			this.thresholdInteracting = true;
-		};
-		const releaseSlider = (): void => {
-			this.thresholdInteracting = false;
-		};
-		slider.addEventListener("pointerdown", holdSlider);
-		slider.addEventListener("pointerup", releaseSlider);
-		slider.addEventListener("pointercancel", releaseSlider);
-		slider.addEventListener("blur", releaseSlider);
-		slider.addEventListener("input", () => {
-			holdSlider();
-			valueEl.textContent = `${slider.value}%`;
-		});
-		slider.addEventListener("change", () => {
-			releaseSlider();
-			// Invite the repaint that the host's echo brings: a drag renders a bare
-			// "40%", and the settled panel wants the full title and token count. Only
-			// matters when the drag lands back on the value already painted, which
-			// would otherwise read as "nothing new" and leave the bare text standing.
-			this.thresholdPainted = null;
-			this.deps.onSetCompactThreshold(Number(slider.value));
-		});
-		const resetFlyoutToDefault = (): void => {
-			this.compactThreshold = null;
-			this.renderContext();
-			// The operator's own click, and it runs with the panel open, so this is
-			// exactly the case the open-flyout guard has to make an exception for.
-			this.renderThresholdFlyout(true);
-			this.renderContextTick();
-		};
-		offBtn.addEventListener("click", (event) => {
-			event.stopPropagation();
-			event.preventDefault();
-			this.deps.onSetCompactThreshold(null);
-			resetFlyoutToDefault();
-		});
-		row.append(slider, valueEl, offBtn);
-		panel.append(title, row);
-		this.contextWrap.appendChild(panel);
-		this.thresholdFlyout = panel;
-		return panel;
-	}
-
-	private abbrevTokens(n: number | undefined): string {
-		if (n == null || n <= 0) return "";
-		return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `${Math.round(n / 1_000)}k` : `${n}`;
-	}
-
-	private thresholdFlyoutOpen(): boolean {
-		return this.thresholdFlyout?.classList.contains("visible") ?? false;
-	}
-
-	/**
-	 * Paint host state into the flyout.
-	 *
-	 * An open flyout is refused two kinds of repaint, because both write the
-	 * stored percentage back over the slider the operator is holding:
-	 *
-	 *  - one that carries nothing new. Status pushes land several times a second
-	 *    during a stream, each repeating the same threshold, and each one used to
-	 *    snap the handle back out from under the drag — which is what made the
-	 *    setting impossible to change while the agent was answering.
-	 *  - any repaint at all while the slider is actually being worked, even one
-	 *    carrying a genuine change.
-	 *
-	 * A real change while the operator is not touching it still lands, so a
-	 * default arriving after the panel opened, or a threshold set from elsewhere,
-	 * shows up as it always did. `force` is for this panel's own actions.
-	 */
-	private renderThresholdFlyout(force = false): void {
-		const panel = this.thresholdFlyout;
-		if (!panel) return;
-		const signature = `${this.compactThreshold}|${this.compactDefaultPercent}|${this.contextWindowCurrent}`;
-		if (!force && this.thresholdFlyoutOpen() && (this.thresholdInteracting || signature === this.thresholdPainted)) return;
-		this.thresholdPainted = signature;
-		const tokensAt = (pct: number | null): string =>
-			pct != null && this.contextWindowCurrent ? ` · ${this.abbrevTokens(Math.round((pct / 100) * this.contextWindowCurrent))}` : "";
-		const titleEl = panel.querySelector(".threshold-title") as HTMLElement | null;
-		const slider = panel.querySelector(".threshold-slider") as HTMLInputElement | null;
-		const valueEl = panel.querySelector(".threshold-value");
-		const effective = this.compactThreshold ?? this.compactDefaultPercent;
-		// The agent default sits above 80 on a big window (~94% at 262k). A range
-		// input silently clamps out-of-range values, so a fixed max=80 pinned the
-		// handle at 80 while the readout beside it said 94.
-		const ceiling = Math.max(80, this.compactDefaultPercent ?? 80);
-		if (slider) slider.max = String(ceiling);
-		if (titleEl) titleEl.title = `When the context window reaches this fill, Brief compacts it automatically. Range: 20%–${ceiling}%.`;
-		if (this.compactThreshold != null) {
-			if (titleEl) titleEl.textContent = `Force session auto-compact ≥ ${this.compactThreshold}%`;
-			if (slider) slider.value = String(this.compactThreshold);
-			if (valueEl) valueEl.textContent = `${this.compactThreshold}%${tokensAt(this.compactThreshold)}`;
-		} else {
-			if (titleEl) titleEl.textContent = effective != null ? `Agent auto-compact (default ~${effective}%)` : "Agent auto-compact (default)";
-			if (slider && effective != null) slider.value = String(effective);
-			if (valueEl) valueEl.textContent = effective != null ? `${effective}%${tokensAt(effective)}` : "default";
-		}
-		const offBtn = panel.querySelector(".threshold-reset");
-		offBtn?.classList.toggle("active", this.compactThreshold === null);
-	}
-
-	/** Outside-click closer for the open flyout, owned so every close path frees it. */
-	private thresholdCloser: ((event: MouseEvent) => void) | null = null;
-
-	/**
-	 * Close the threshold flyout and drop its document listener. Closing by
-	 * clicking the gauge again, or across a session boundary, used to leave the
-	 * capture-phase listener installed for the life of the webview — one leak per
-	 * open/close cycle.
-	 */
-	private closeThresholdFlyout(): void {
-		// A close during a drag (a session switch, say) would otherwise leave the
-		// control marked as held forever, and nothing could repaint it again.
-		this.thresholdInteracting = false;
-		this.thresholdFlyout?.classList.remove("visible");
-		if (this.thresholdCloser) {
-			document.removeEventListener("mousedown", this.thresholdCloser, true);
-			this.thresholdCloser = null;
-		}
-	}
-
-	private toggleThresholdFlyout(): void {
-		const panel = this.ensureThresholdFlyout();
-		if (panel.classList.contains("visible")) {
-			this.closeThresholdFlyout();
-			return;
-		}
-		// Opening is the one moment host state should win: seed the controls from it
-		// before the panel becomes the operator's.
-		this.renderThresholdFlyout(true);
-		panel.classList.add("visible");
-		setTimeout(() => {
-			// A second open may have raced this frame; keep exactly one listener.
-			if (this.thresholdCloser || !panel.classList.contains("visible")) return;
-			const closeOnce = (event: MouseEvent) => {
-				if (this.thresholdFlyout && !this.thresholdFlyout.contains(event.target as Node) && !this.contextWrap.contains(event.target as Node)) {
-					this.closeThresholdFlyout();
-				}
-			};
-			this.thresholdCloser = closeOnce;
-			document.addEventListener("mousedown", closeOnce, true);
-		}, 0);
 	}
 
 	addSelection(selection: SelectionAttachment): void {
@@ -875,7 +671,6 @@ export class Composer {
 		this.modelMenu = null;
 		this.thinkingMenu?.hide();
 		this.thinkingMenu = null;
-		this.closeThresholdFlyout();
 		window.clearTimeout(this.hintTimer);
 		this.hintEl?.classList.remove("visible");
 

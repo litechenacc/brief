@@ -429,6 +429,7 @@ export type HostToWebview =
 	| { type: "models"; models: RpcModel[] }
 	| { type: "commands"; commands: RpcSlashCommand[] }
 	| { type: "history"; sessions: RecentSession[] }
+	| { type: "historySelection"; sessionId?: string }
 	| { type: "showHistory" }
 	| { type: "newThread" }
 	| { type: "promptAccepted"; kind: "prompt" | "steer" | "followUp" }

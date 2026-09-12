@@ -43,7 +43,18 @@ type ChatView = {
 export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSerializer, vscode.WebviewViewProvider {
 	static readonly viewType = "brief.chatPanel";
 	private readonly tabs = new Set<ChatTab>();
-	private lastActive: ChatTab | undefined;
+	private focusedTab: ChatTab | undefined;
+	private get lastActive(): ChatTab | undefined { return this.focusedTab; }
+	private set lastActive(tab: ChatTab | undefined) {
+		this.focusedTab = tab;
+		this.syncHistorySelection();
+	}
+
+	private syncHistorySelection(): void {
+		if (this.sidebar && !this.sidebar.tab && !this.sidebar.closed) {
+			void this.sidebar.webview.postMessage({ type: "historySelection", sessionId: this.lastActive?.session?.sessionId });
+		}
+	}
 	private sidebar: ChatView | undefined;
 	private sidebarSession: ChatTab | undefined;
 	private historyController: SessionController | undefined;
@@ -171,6 +182,7 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 	private async showSidebarHistory(view: ChatView): Promise<void> {
 		await view.webview.postMessage({ type: "setHistoryMode", enabled: true });
 		await this.history().listHistory();
+		this.syncHistorySelection();
 	}
 
 	private create(session?: SessionReference): ChatTab {
@@ -186,6 +198,7 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 				const label = (status.sessionLabel ?? status.sessionName)?.trim() || (status.sessionId ? `Session ${status.sessionId.slice(0, 8)}` : "New Session");
 				tab.title = label;
 				this.updateTitle(tab);
+				if (this.lastActive === tab) this.syncHistorySelection();
 			}
 			if (message.type === "history" && this.sidebar && !this.sidebar.tab && !this.sidebar.closed) {
 				void this.sidebar.webview.postMessage(message);

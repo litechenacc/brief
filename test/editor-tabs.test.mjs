@@ -250,6 +250,13 @@ try {
 	assert.deepEqual(catalog.calls, [["history"]]);
 	assert.ok(sidebar.webview.html, "moving to editor keeps the sidebar rendered");
 	assert.deepEqual(sidebar.webview.messages.filter(m => m.type === "setHistoryMode").at(-1), { type: "setHistoryMode", enabled: true });
+	assert.equal(sidebar.webview.messages.filter(m => m.type === "historySelection").at(-1).sessionId, "session-a");
+	restored.activate();
+	assert.equal(sidebar.webview.messages.filter(m => m.type === "historySelection").at(-1).sessionId, "session-r");
+	otherPanel.activate();
+	assert.equal(sidebar.webview.messages.filter(m => m.type === "historySelection").at(-1).sessionId, undefined);
+	movedEditor.send({ type: "viewFocused" });
+	assert.equal(sidebar.webview.messages.filter(m => m.type === "historySelection").at(-1).sessionId, "session-a");
 	const panelCount = panels.length;
 	sidebar.send({ type: "switchSession", path: "/known/a.jsonl", sessionId: "session-a" }); await tick();
 	assert.equal(panels.length, panelCount);

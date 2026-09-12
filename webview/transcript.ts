@@ -713,7 +713,7 @@ export class Transcript {
 			this.startWorking();
 			return;
 		}
-		this.stopWorking();
+		if (isPartial) this.startWorking();
 		this.streamingBubble = this.buildAssistantRow(message, isPartial);
 		this.place(this.streamingBubble);
 		this.hasContent = true;
@@ -775,8 +775,7 @@ export class Transcript {
 				// Dropping it froze the transcript for the rest of the turn.
 				this.adoptStreamingBubble(message, true);
 				if (this.streamingBubble) this.fillAssistantRow(this.streamingBubble, message, true);
-				if (this.assistantHasVisibleContent(message, true)) this.stopWorking();
-				else this.resumeWorkingIfNeeded();
+				this.resumeWorkingIfNeeded();
 				break;
 			}
 			case "message_end": {
@@ -793,7 +792,7 @@ export class Transcript {
 				break;
 			}
 			case "tool_execution_start": {
-				this.stopWorking();
+				this.resumeWorkingIfNeeded();
 				const block = this.ensureToolBlock(event.toolCallId, event.toolName, event.args ?? {});
 				block.root.dataset.part = `tool-${event.toolCallId}`;
 				if (!block.root.isConnected) {
@@ -948,15 +947,9 @@ export class Transcript {
 		if (elapsed.textContent !== text) elapsed.textContent = text;
 	}
 
-	private hasRunningTool(): boolean {
-		for (const block of this.toolBlocks.values()) {
-			if (block.state === "running") return true;
-		}
-		return false;
-	}
-
 	private resumeWorkingIfNeeded(): void {
-		if (this.streaming && !this.hasRunningTool()) this.startWorking();
+		// Keep the same indicator and timer until agent_end, including tool execution.
+		if (this.streaming) this.startWorking();
 	}
 
 	private stopWorking(): void {
@@ -991,7 +984,7 @@ export class Transcript {
 		this.updateJumpButton();
 	}
 
-	/** Immediate local feedback between Enter and the first visible reply token. */
+	/** Immediate local feedback before agent_start takes over the run indicator. */
 	markSending(): void {
 		if (this.streamingBubble) return;
 		this.startWorking();

@@ -1159,20 +1159,31 @@ body.vscode-high-contrast-light .history-item.current {
 
 .context-meter {
 	position: relative;
-	height: 4px;
-	width: 72px;
-	border-radius: 2px;
-	background: var(--pa-surface-2);
-	overflow: visible;
+	display: flex;
+	flex-direction: column;
+	flex-shrink: 0;
+	gap: 2px;
+	padding-top: 6px;
 	margin: 0 6px;
+	cursor: default;
 }
 
+.context-meter::before,
 .context-fill {
 	position: absolute;
 	left: 0;
 	top: 0;
-	bottom: 0;
+	height: 3px;
 	border-radius: 2px;
+}
+
+.context-meter::before {
+	content: "";
+	width: 100%;
+	background: var(--pa-surface-2);
+}
+
+.context-fill {
 	background: var(--pa-accent);
 	transition: width 0.2s ease;
 }
@@ -1181,19 +1192,13 @@ body.vscode-high-contrast-light .history-item.current {
 	background: var(--pa-warn);
 }
 
-.context-fill.hot {
-	background: var(--pa-error);
-}
-
-.context-label {
-	position: absolute;
-	top: 5px;
-	left: 0;
-	right: 0;
+.context-label,
+.context-tokens {
 	font-size: 9px;
 	color: var(--pa-dim);
 	text-align: center;
 	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
 }
 
 .send-btn {
@@ -1972,78 +1977,6 @@ pre.term {
 	max-width: none;
 }
 
-/* ---------- context meter + threshold flyout ---------- */
-
-.context-meter {
-	cursor: pointer;
-	position: relative;
-}
-
-.threshold-flyout {
-	display: none;
-	position: absolute;
-	right: 0;
-	bottom: calc(100% + 8px);
-	width: 240px;
-	/* The sidebar can be dragged narrower than the flyout; never overflow it. */
-	max-width: calc(100vw - 16px);
-	padding: 9px 11px 10px;
-	background: var(--pa-surface-2, var(--vscode-editorWidget-background));
-	border: 1px solid var(--pa-border);
-	border-radius: 9px;
-	box-shadow: 0 8px 24px var(--vscode-widget-shadow, transparent);
-	z-index: 90;
-}
-
-.threshold-flyout.visible {
-	display: block;
-}
-
-.threshold-title {
-	font-size: 10px;
-	font-weight: 600;
-	color: var(--pa-dim);
-	margin-bottom: 7px;
-}
-
-.threshold-row {
-	display: flex;
-	align-items: center;
-	gap: 7px;
-}
-
-.threshold-slider {
-	flex: 1;
-	/* The slider, not the readout, gives up space when the panel is squeezed. */
-	min-width: 0;
-	accent-color: var(--pa-accent);
-	height: 14px;
-}
-
-/* Sized for the widest readout ("80% · 1.5M"); the 28px that fitted "94%" alone
-   broke the value across three lines once the token count was appended. */
-.threshold-value {
-	font-size: 10px;
-	min-width: 62px;
-	flex-shrink: 0;
-	white-space: nowrap;
-	text-align: right;
-	font-variant-numeric: tabular-nums;
-}
-
-.threshold-off {
-	font-size: 10px;
-	padding: 1px 7px;
-	border-radius: 6px;
-	color: var(--pa-dim);
-	border: 1px solid var(--pa-border);
-}
-
-.threshold-off.active {
-	color: var(--pa-accent);
-	border-color: var(--pa-accent-dim);
-}
-
 /* ---------- tool header copy-all ---------- */
 
 .tool-copy-all {
@@ -2226,32 +2159,6 @@ pre.term {
 .hl-python .tok-num { color: var(--vscode-debugTokenExpression-number, inherit); }
 .hl-python .tok-op { color: var(--vscode-symbolIcon-operatorForeground, inherit); }
 .hl-python .tok-dec { color: var(--vscode-symbolIcon-colorForeground, inherit); }
-
-/* ---------- threshold flyout (reset icon) ---------- */
-
-.threshold-row .threshold-reset {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	width: 16px;
-	height: 16px;
-	padding: 0;
-	border-radius: 50%;
-	border: 1px solid var(--pa-border);
-	color: var(--pa-dim);
-	flex-shrink: 0;
-}
-
-.threshold-row .threshold-reset:hover {
-	color: var(--pa-accent);
-	border-color: var(--pa-accent-dim);
-	background: var(--pa-accent-dim);
-}
-
-.threshold-row .threshold-reset.active {
-	color: var(--pa-accent);
-	border-color: var(--pa-accent-dim);
-}
 
 /* ---------- subagent rows: subtle indent + viewing highlight + pulse ---------- */
 
@@ -2479,25 +2386,6 @@ pre.term {
 .rail-pill.brain.disabled-pill {
 	opacity: 0.45;
 	cursor: not-allowed;
-}
-
-/* ---------- context gauge threshold tick ---------- */
-
-.context-tick {
-	position: absolute;
-	top: -2px;
-	bottom: -2px;
-	width: 2px;
-	margin-left: -1px;
-	background: var(--pa-text);
-	border-radius: 1px;
-	opacity: 0.5;
-	pointer-events: none;
-}
-
-.context-tick.override {
-	background: var(--pa-accent);
-	opacity: 0.9;
 }
 
 .history-rename-input {

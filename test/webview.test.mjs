@@ -608,10 +608,23 @@ document.querySelector(".history-search").value = "";
 document.querySelector(".history-search").dispatchEvent(new window.Event("input", { bubbles: true }));
 check("search cleared restores both groups", document.querySelectorAll(".history-item").length === 2);
 
+// The history-only sidebar follows editor focus, including list refreshes.
+hostMessage({ type: "setHistoryMode", enabled: true });
+const focusSessions = ["focus-a", "focus-b"].map(id => ({ id, path: `/tmp/${id}.jsonl`, cwd: "/ws", timestamp: new Date().toISOString(), name: id, inWorkspace: true }));
+hostMessage({ type: "history", sessions: focusSessions });
+for (const sessionId of ["focus-a", "focus-b"]) {
+	hostMessage({ type: "historySelection", sessionId });
+	hostMessage({ type: "history", sessions: focusSessions });
+	check("sidebar highlights only the focused editor session after refresh", document.querySelectorAll(".history-item.current").length === 1 && document.querySelector(".history-item.current .history-item-name")?.textContent === sessionId);
+}
+hostMessage({ type: "historySelection" });
+check("closing the focused session clears selection", !document.querySelector(".history-item.current"));
+hostMessage({ type: "setHistoryMode", enabled: false });
+
 // Context capacity is separate from session cost; cumulative tokens stay in the details.
 hostMessage({ type: "status", status: { ...baseStatus, compactDefaultPercent: 94 } });
 check("context label names estimated capacity", document.querySelector(".context-label").textContent === "Context ~23%");
-check("context tooltip keeps token detail", document.querySelector(".context-meter").title.includes("60,000 tokens"));
+check("context shows used and total tokens", document.querySelector(".context-tokens").textContent === "~60,000 / 262,144 tokens");
 const sessionUsage = document.querySelector("details.stats-label");
 check("session fee is labeled and details collapsed", !sessionUsage.open && sessionUsage.querySelector("summary").textContent === "This session $0.0040");
 check("session details state scope and cumulative usage", sessionUsage.textContent.includes("4.5k tokens") && sessionUsage.textContent.includes("subagents") && sessionUsage.textContent.includes("$0.0040"));
@@ -629,87 +642,20 @@ check("threshold-only update refreshes context warning", document.querySelector(
 hostMessage({ type: "status", status: { ...baseStatus, compactDefaultPercent: 94 } });
 sessionUsage.open = false;
 
-// --- context meter: gear + flyout state wording ---
+// Context is read-only, including while streaming or receiving threshold updates.
 const meter = document.querySelector(".context-meter");
+posted.length = 0;
 meter.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-const flyout = document.querySelector(".threshold-flyout");
-check("threshold flyout opens", !!flyout && flyout.className.includes("visible"));
-hostMessage({ type: "status", status: { ...baseStatus, compactDefaultPercent: 94 } });
-check("flyout shows default state", flyout.querySelector(".threshold-title").textContent.includes("Agent auto-compact"), flyout.querySelector(".threshold-title").textContent);
-check("flyout value shows pct + tokens", flyout.querySelector(".threshold-value").textContent.includes("94% · 246k"), flyout.querySelector(".threshold-value").textContent);
-const tSlider = flyout.querySelector(".threshold-slider");
-check("slider reaches the agent default instead of clamping to 80", tSlider.max === "94" && tSlider.value === "94", `max=${tSlider.max} value=${tSlider.value}`);
-// #20: "max 80% reduction" is the floor — a slider that goes below 20% of the
-// original context length is offering a compaction the agent will not honour.
-check("slider floors at 20% of the original context", tSlider.min === "20" && tSlider.step === "5", `min=${tSlider.min} step=${tSlider.step}`);
-// #35: the tick marks the real threshold, and moves when the session overrides it.
-const tickDefault = meter.querySelector(".context-tick");
-check("threshold tick sits at the agent default", !!tickDefault && tickDefault.style.left === "94%" && !tickDefault.className.includes("override"),
-	`${tickDefault?.style.left ?? "<none>"} ${tickDefault?.className ?? ""}`);
-check("default tick says whose threshold it is", (tickDefault?.title ?? "").includes("default"), tickDefault?.title ?? "<none>");
-hostMessage({ type: "compactThreshold", percent: 55 });
-check("flyout switches to override state", flyout.querySelector(".threshold-title").textContent.includes("Force session auto-compact"), flyout.querySelector(".threshold-title").textContent);
-const tickOverride = meter.querySelector(".context-tick");
-check("tick moves to the override and marks itself as one",
-	tickOverride?.style.left === "55%" && tickOverride.className.includes("override"),
-	`${tickOverride?.style.left ?? "<none>"} ${tickOverride?.className ?? ""}`);
-// #49: nothing inside the popover may close it — a range drag ends in a click on the slider
-posted.length = 0;
-tSlider.value = "40";
-tSlider.dispatchEvent(new window.Event("input", { bubbles: true }));
-tSlider.dispatchEvent(new window.Event("change", { bubbles: true }));
-tSlider.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-check("slider drag posts the threshold and keeps the popover open",
-	posted.some((m) => m.type === "setCompactThreshold" && m.percent === 40) && flyout.className.includes("visible"),
-	`visible=${flyout.className}`);
-// #41/#49: the reset is the small circle-arrow, and it restores the agent level,
-// shows its percentage, and leaves the popover standing.
-const resetBtn = flyout.querySelector(".threshold-reset");
-check("reset is an icon control, not a wrapping word button", !!resetBtn?.querySelector("svg") && resetBtn.textContent === "", JSON.stringify(resetBtn?.textContent ?? "<none>"));
-posted.length = 0;
-resetBtn.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-check("reset clears the session override", posted.some((m) => m.type === "setCompactThreshold" && m.percent === null), JSON.stringify(posted));
-check("reset restores the agent level and shows its percentage",
-	flyout.querySelector(".threshold-title").textContent.includes("Agent auto-compact") && flyout.querySelector(".threshold-value").textContent.includes("94%"),
-	`${flyout.querySelector(".threshold-title").textContent} / ${flyout.querySelector(".threshold-value").textContent}`);
-const tickReset = meter.querySelector(".context-tick");
-check("tick returns to the agent default", tickReset?.style.left === "94%" && !tickReset.className.includes("override"),
-	`${tickReset?.style.left ?? "<none>"} ${tickReset?.className ?? ""}`);
-check("reset keeps the popover open", flyout.className.includes("visible"), flyout.className);
-// An open flyout must survive a live run. Status pushes land several times a
-// second while the agent answers, and each one used to write the stored
-// percentage back over the slider — the handle snapped away mid-drag and the
-// setting could not be changed at all until the run finished.
-{
-	const tSliderLive = flyout.querySelector(".threshold-slider");
-	tSliderLive.value = "40";
-	tSliderLive.dispatchEvent(new window.Event("input", { bubbles: true }));
-	for (let i = 0; i < 5; i += 1) {
-		hostMessage({ type: "status", status: { ...baseStatus, streaming: true, compactThresholdPercent: 55, compactDefaultPercent: 94 } });
-	}
-	check("a stream of identical statuses leaves the operator's slider alone", tSliderLive.value === "40", tSliderLive.value);
-	check("...and the flyout stays open", flyout.className.includes("visible"), flyout.className);
-	// Committing hands the value to the host and releases the control.
-	posted.length = 0;
-	tSliderLive.dispatchEvent(new window.Event("change", { bubbles: true }));
-	check("committing the drag posts the operator's value", posted.some((m) => m.type === "setCompactThreshold" && m.percent === 40),
-		JSON.stringify(posted.slice(-2)));
-	// A genuinely new value, with nothing being dragged, still lands.
-	hostMessage({ type: "compactThreshold", percent: 65 });
-	check("a real change still repaints an idle open flyout", tSliderLive.value === "65", tSliderLive.value);
-	// Context numbers go missing on plenty of mid-stream pushes; that must not
-	// tear the gauge (and the flyout inside it) out from under the operator.
-	hostMessage({ type: "status", status: { ...baseStatus, contextPercent: null, contextTokens: null, contextWindow: undefined } });
-	check("a status with no context numbers leaves the open gauge up", meter.style.display !== "none", `display=${meter.style.display}`);
-	check("...and the flyout with it", flyout.className.includes("visible"), flyout.className);
-}
-
-flyout.closest(".context-meter")?.classList.remove("visible");
-document.body.click();
-// A later status without an agent default is a new session's truth, not an
-// instruction to keep painting the previous session's 94% tick.
-hostMessage({ type: "status", status: { ...baseStatus, compactDefaultPercent: null, compactThresholdPercent: null } });
-check("missing compact default clears the previous session tick", !meter.querySelector(".context-tick"));
+check("context has no controls or threshold tick", !meter.querySelector("input, button, .context-tick, .threshold-flyout"));
+check("context click does not post settings", !posted.some((m) => m.type === "setCompactThreshold"));
+hostMessage({ type: "status", status: { ...baseStatus, streaming: true, contextTokens: 0, contextPercent: 0 } });
+check("zero context is visible", meter.querySelector(".context-tokens").textContent === "~0 / 262,144 tokens" && meter.querySelector(".context-label").textContent === "Context ~0%");
+hostMessage({ type: "status", status: { ...baseStatus, contextTokens: null, contextPercent: null } });
+check("pending usage keeps total capacity visible", meter.querySelector(".context-tokens").textContent === "pending / 262,144 tokens");
+hostMessage({ type: "status", status: { ...baseStatus, contextTokens: null, contextPercent: null, contextWindow: undefined } });
+check("missing capacity hides stale context", meter.style.display === "none");
+hostMessage({ type: "status", status: baseStatus });
+check("context usage returns on status", meter.style.display !== "none" && meter.querySelector(".context-tokens").textContent === "~60,000 / 262,144 tokens");
 
 // --- install prompt banner ---
 check("install banner hidden initially", !document.querySelector(".install-banner.visible"));
@@ -1986,11 +1932,37 @@ hostMessage({ type: "event", event: { type: "message_start", message: { role: "a
 hostMessage({ type: "event", event: { type: "message_update", message: { role: "assistant", model: "kimi", content: [{ type: "thinking", thinking: "step one" }] } } });
 const liveBorn = scroller.querySelector("details.thinking");
 check("liveTranscript paints thinking on the first delta", !!liveBorn && /step one/.test(liveBorn.textContent));
-check("the first visible token replaces the working spinner", !scroller.querySelector(".working-row"));
+check("visible thinking keeps the working spinner", !!scroller.querySelector(".working-row"));
 hostMessage({ type: "event", event: { type: "message_update", message: { role: "assistant", model: "kimi", content: [{ type: "thinking", thinking: "step one, step two" }] } } });
 check("later deltas grow the same node, not a new one", scroller.querySelector("details.thinking") === liveBorn);
 check("...and its text keeps up", /step two/.test(scroller.querySelector("details.thinking").textContent));
 hostMessage({ type: "event", event: { type: "agent_end", messages: [] } });
+
+// The run indicator survives visible text, hidden tool arguments, and tool execution.
+for (const liveTranscript of [false, true]) {
+	hostMessage({ type: "snapshot", status: { ...baseStatus, sessionId: `working-lifecycle-${liveTranscript}`, liveTranscript }, state: null, messages: [] });
+	hostMessage({ type: "event", event: { type: "agent_start" } });
+	const working = scroller.querySelector(".working-row");
+	const text = { type: "text", text: "I will run a tool." };
+	const message = { role: "assistant", content: [text] };
+	const call = { type: "toolCall", id: "working-tool", name: "ipython", arguments: { code: "print(1)" } };
+	const toolMessage = { ...message, content: [text, call] };
+	for (const event of [
+		{ type: "message_start", message },
+		{ type: "message_update", message },
+		{ type: "message_update", message: toolMessage },
+		{ type: "message_end", message: toolMessage },
+		{ type: "tool_execution_start", toolCallId: call.id, toolName: call.name, args: call.arguments },
+		{ type: "tool_execution_end", toolCallId: call.id, result: { content: [{ type: "text", text: "1" }] }, isError: false },
+		{ type: "turn_end" },
+	]) {
+		hostMessage({ type: "event", event });
+		check(`${event.type} preserves the run indicator (live=${liveTranscript})`, !!working && scroller.querySelector(".working-row") === working);
+		check("working indicator remains below transcript content", scroller.lastElementChild === working);
+	}
+	hostMessage({ type: "event", event: { type: "agent_end", messages: [] } });
+	check("handoff removes the run indicator", !scroller.querySelector(".working-row"));
+}
 
 // --- recall must work at ANY point in a thread, not only at rest -------------
 const anytimeStatus = { ...baseStatus, sessionId: "session-anytime" };

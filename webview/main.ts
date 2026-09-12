@@ -27,6 +27,7 @@ function post(message: WebviewToHost): void {
 }
 
 let historyOnly = false;
+let historySessionId: string | undefined;
 const app = document.getElementById("app") as HTMLDivElement;
 app.classList.add("chat-root");
 app.addEventListener("focusin", () => post({ type: "viewFocused" }));
@@ -133,7 +134,6 @@ const composerDeps = {
 	onDraftChanged: (text: string) => {
 		if (authoritativeSessionId) post({ type: "draftChanged", text, sessionId: authoritativeSessionId });
 	},
-	onSetCompactThreshold: (percent: number | null) => post({ type: "setCompactThreshold", percent }),
 	onPickImage: () => {
 		const requestId = imageRequestScope * 1_000_000 + ++nextImageRequestId;
 		pendingImageRequests.add(requestId);
@@ -693,8 +693,12 @@ function dispatchHostMessage(message: HostToWebview): void {
 		case "commands":
 			composer.setCommands(message.commands);
 			break;
+		case "historySelection":
+			historySessionId = message.sessionId;
+			historyView.setCurrentSession(message.sessionId);
+			break;
 		case "history":
-			historyView.render(message.sessions, currentStatus?.sessionId);
+			historyView.render(message.sessions, historyOnly ? historySessionId : currentStatus?.sessionId);
 			break;
 		case "showHistory":
 			openHistory();

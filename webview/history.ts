@@ -90,6 +90,10 @@ export class HistoryView {
 		}
 	}
 
+	setCurrentSession(sessionId?: string): void {
+		this.render(this.lastSessions ?? [], sessionId);
+	}
+
 	render(sessions: RecentSession[], currentId?: string): void {
 		const needle = this.query.trim().toLowerCase();
 		// matchSnippet is the host's evidence that the conversation itself matched;
