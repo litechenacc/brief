@@ -216,7 +216,11 @@ export class HistoryView {
 		item.title = session.cwd;
 		item.dataset.showFolder = showFolder ? "1" : "0";
 		const isCurrent = session.id === this.currentId;
+		const hasCurrentChild = session.children?.some(
+			(child) => child.id === this.currentId || child.activeSessionId === this.currentId,
+		) ?? false;
 		if (isCurrent) item.classList.add("current");
+		if (hasCurrentChild) item.classList.add("has-current-child");
 		const top = el("div", "history-item-top");
 		const name = historyLabel(session);
 		const resume = document.createElement("button");
@@ -315,6 +319,21 @@ export class HistoryView {
 				? session.cwd
 				: undefined;
 			if (sub) item.appendChild(el("div", "history-item-sub", sub));
+		}
+		if (session.children?.length) {
+			const children = el("div", "history-children");
+			for (const child of session.children) {
+				const childItem = el("div", "history-child");
+				if (child.id === this.currentId || child.activeSessionId === this.currentId) childItem.classList.add("current");
+				childItem.addEventListener("click", (event) => event.stopPropagation());
+				childItem.append(
+					el("span", "history-child-arrow", "↳"),
+					el("span", "history-child-name", child.name || "(untitled subagent)"),
+					el("span", `history-child-status ${child.status}`, child.status),
+				);
+				children.appendChild(childItem);
+			}
+			item.appendChild(children);
 		}
 		const openSession = (): void => {
 			if (isCurrent) this.deps.onBack();

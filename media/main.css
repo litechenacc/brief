@@ -844,6 +844,55 @@ details.thinking .thinking-body {
 	white-space: nowrap;
 }
 
+.history-children {
+	margin: 2px 0 0 10px;
+	padding-left: 8px;
+	border-left: 1px solid var(--pa-border-faint, var(--pa-border));
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.history-child {
+	display: flex;
+	align-items: center;
+	gap: 5px;
+	min-height: 18px;
+	padding: 2px 5px;
+	color: var(--pa-dim);
+	font-size: 10.5px;
+}
+
+.history-child.current {
+	color: var(--pa-accent);
+}
+
+.history-item.has-current-child {
+	border-color: var(--pa-accent-dim);
+}
+
+.history-child-arrow {
+	color: var(--pa-faint);
+	flex: 0 0 auto;
+}
+
+.history-child-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.history-child-status {
+	margin-left: auto;
+	font-size: 9px;
+	flex: 0 0 auto;
+}
+
+.history-child-status.running {
+	color: var(--pa-accent);
+}
+
 /* A row found by searching the conversation shows the matching line instead. */
 .history-item-sub.match {
 	font-style: italic;

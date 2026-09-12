@@ -359,6 +359,8 @@ export interface RecentSession {
 	 * Mid-turn RPC chatter must not reshuffle the list.
 	 */
 	sortMs?: number;
+	/** Live direct subagents attached to this history session. */
+	children?: Array<{ id: string; activeSessionId?: string; name?: string; status: "running" | "idle"; rlmDepth?: number }>;
 	/** True when the operator archived this row from Brief (not daemon auto-archive). */
 	archived?: boolean;
 	/**

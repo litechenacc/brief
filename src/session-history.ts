@@ -193,8 +193,8 @@ async resolveHistorySession(this: SessionController, sessionPath: string, sessio
  */
 rowsFromCatalog(this: SessionController, catalog: SessionSummaryRef[]): RecentSession[] {
 	const root = normalizeFsPath(this.workspaceRoot);
-	const inWorkspaceRows: RecentSession[] = [];
-	const otherRows: RecentSession[] = [];
+	const inWorkspaceRows: Array<{ row: RecentSession; source: SessionSummaryRef }> = [];
+	const otherRows: Array<{ row: RecentSession; source: SessionSummaryRef }> = [];
 	for (const s of catalog) {
 		if (!s.sessionFile || !s.cwd) continue;
 		// Subagents belong under their parent in the strip, not in history.
@@ -211,28 +211,54 @@ rowsFromCatalog(this: SessionController, catalog: SessionSummaryRef[]): RecentSe
 		const modified = s.modified ?? s.lastActivityAt;
 		const parsed = modified ? Date.parse(modified) : Number.NaN;
 		const inWorkspace = normalizeFsPath(s.cwd) === root;
-		(inWorkspace ? inWorkspaceRows : otherRows).push(
-			this.decorateHistoryRow({
-				id: s.sessionId ?? path.basename(s.sessionFile, ".jsonl"),
-				path: s.sessionFile,
-				cwd: s.cwd,
-				timestamp: s.created ?? modified ?? new Date().toISOString(),
-				modifiedMs: Number.isFinite(parsed) ? parsed : undefined,
-				name: s.sessionName,
-				firstPrompt: s.firstMessage,
-				inWorkspace,
-				running: isRunningSummary(s),
-				status: rosterStatus(s),
-				...(s.statusLabel ? { statusLabel: s.statusLabel } : {}),
-			}),
-		);
+		const row = this.decorateHistoryRow({
+			id: s.sessionId ?? path.basename(s.sessionFile, ".jsonl"),
+			path: s.sessionFile,
+			cwd: s.cwd,
+			timestamp: s.created ?? modified ?? new Date().toISOString(),
+			modifiedMs: Number.isFinite(parsed) ? parsed : undefined,
+			name: s.sessionName,
+			firstPrompt: s.firstMessage,
+			inWorkspace,
+			running: isRunningSummary(s),
+			status: rosterStatus(s),
+			...(s.statusLabel ? { statusLabel: s.statusLabel } : {}),
+		});
+		(inWorkspace ? inWorkspaceRows : otherRows).push({ row, source: s });
 	}
-	const activityOf = historyActivityMs;
-	const byActivityDesc = (a: RecentSession, b: RecentSession): number => activityOf(b) - activityOf(a);
+	const activityOf = (entry: { row: RecentSession }): number => historyActivityMs(entry.row);
+	const byActivityDesc = (a: { row: RecentSession }, b: { row: RecentSession }): number => activityOf(b) - activityOf(a);
 	inWorkspaceRows.sort(byActivityDesc);
 	otherRows.sort(byActivityDesc);
+	const visible = [
+		...inWorkspaceRows.slice(0, HISTORY_WORKSPACE_LIMIT),
+		...otherRows.slice(0, HISTORY_OTHER_LIMIT),
+	];
+	for (const entry of visible) {
+		if (entry.row.status !== "running" && entry.row.status !== "idle") continue;
+		const parentSessionId = entry.source.sessionId ?? entry.row.id;
+		const parentActiveSessionId = entry.source.activeSessionId ?? entry.row.id;
+		const parentIds = new Set([parentSessionId, parentActiveSessionId]);
+		const children = catalog
+			.filter((child) => {
+				if ((child.rlmDepth ?? 0) !== 1) return false;
+				const status = rosterStatus(child);
+				if (status !== "running" && status !== "idle") return false;
+				return [child.parentActiveSessionId, child.parentSessionId].some(
+					(parentId) => parentId !== undefined && parentIds.has(parentId),
+				);
+			})
+			.map((child) => ({
+				id: child.sessionId ?? child.activeSessionId ?? child.id ?? "",
+				...(child.activeSessionId ? { activeSessionId: child.activeSessionId } : {}),
+				...(child.sessionName ? { name: child.sessionName } : {}),
+				status: rosterStatus(child) as "running" | "idle",
+				rlmDepth: child.rlmDepth,
+			}));
+		if (children.length > 0) entry.row.children = children;
+	}
 	this.persistHistoryUiState();
-	return [...inWorkspaceRows.slice(0, HISTORY_WORKSPACE_LIMIT), ...otherRows.slice(0, HISTORY_OTHER_LIMIT)];
+	return visible.map(({ row }) => row);
 },
 
 async collectHistory(this: SessionController): Promise<RecentSession[]> {
@@ -323,6 +349,8 @@ async searchHistory(this: SessionController, query: string): Promise<void> {
 	const knownPaths = new Set(base.map((s) => normalizeFsPath(s.path)));
 	const root = normalizeFsPath(this.workspaceRoot);
 	for (const info of saved) {
+		// Subagents are shown only when live and nested under a capped root row.
+		if ((info.rlmDepth ?? 0) > 0) continue;
 		// Same visibility rule as the roster: drafts have nothing to find, and a
 		// crashed record is not a session. Archived ones ARE searchable now,
 		// because the roster shows them — this filter is what made a real
