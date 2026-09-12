@@ -68,6 +68,7 @@ check("startup resumes an inactive remembered JSONL", dead.actions[0]?.type === 
 const fresh = controllerFor(new Map(), []);
 await fresh.controller.start();
 check("startup creates a fresh resident session when nothing is remembered", fresh.actions[0]?.type === "create" && !("sessionPath" in fresh.actions[0]) && fresh.actions[1]?.type === "attach", JSON.stringify(fresh.actions));
+check("a successful daemon attach marks the runtime reachable", fresh.controller.reachable === true, String(fresh.controller.reachable));
 
 const history = new SessionController(context(new Map()), output);
 const historyActions = [];

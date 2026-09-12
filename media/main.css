@@ -1654,8 +1654,7 @@ pre.term {
 .history-actions {
 	position: absolute;
 	right: 8px;
-	top: 50%;
-	transform: translateY(-50%);
+	top: 8px;
 	display: none;
 	align-items: center;
 	gap: 2px;

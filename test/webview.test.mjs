@@ -1585,15 +1585,26 @@ check(
 );
 
 // --- history: archive is a distinct, non-destructive action (CLI stop/deactivate) ---
+hostMessage({ type: "status", status: { ...baseStatus, sessionId: "current-archive" } });
+hostMessage({
+	type: "history",
+	sessions: [{ id: "current-archive", path: "/tmp/current-archive.jsonl", cwd: "/ws", timestamp: new Date().toISOString(), name: "current archive", inWorkspace: true }],
+});
+const currentArchiveRow = [...document.querySelectorAll(".history-item")].find((i) => i.textContent.includes("current archive"));
+check("current row offers archive but not delete", !!currentArchiveRow &&
+	[...currentArchiveRow.querySelectorAll(".history-action")].some((b) => (b.title ?? "").startsWith("Archive")) &&
+	![...currentArchiveRow.querySelectorAll(".history-action")].some((b) => (b.title ?? "").startsWith("Delete")));
+hostMessage({ type: "status", status: baseStatus });
 hostMessage({
 	type: "history",
 	sessions: [
-		{ id: "arch-1", path: "/tmp/arch.jsonl", cwd: "/ws", timestamp: new Date().toISOString(), name: "finished experiment", inWorkspace: true },
+		{ id: "arch-1", path: "/tmp/arch.jsonl", cwd: "/ws", timestamp: new Date().toISOString(), name: "finished experiment", inWorkspace: true,
+			children: [{ id: "arch-child", name: "expanded worker", status: "running" }] },
 	],
 });
 const archRow = [...document.querySelectorAll(".history-item")].find((i) => i.textContent.includes("finished experiment"));
 const archBtn = [...archRow.querySelectorAll(".history-action")].find((b) => (b.title ?? "").startsWith("Archive"));
-check("history row offers archive alongside delete", !!archBtn);
+check("expanded subagent is rendered with archive actions", archRow.textContent.includes("expanded worker") && !!archBtn);
 posted.length = 0;
 archBtn.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
 check("archive posts on the first click", posted.some((m) => m.type === "archiveSession" && m.sessionId === "arch-1"), JSON.stringify(posted));
@@ -1615,6 +1626,8 @@ check("active list still shows the unarchived row",
 const archivedRow = [...archiveGroup.querySelectorAll(".history-item")].find((i) => i.textContent.includes("finished experiment"));
 check("an already-archived row has no archive action",
 	!!archivedRow && ![...archivedRow.querySelectorAll(".history-action")].some((b) => (b.title ?? "").startsWith("Archive")));
+check("history actions stay on the title line when subagents expand",
+	fs.readFileSync(new URL("../media/main.css", import.meta.url), "utf8").includes(".history-actions {\n\tposition: absolute;\n\tright: 8px;\n\ttop: 8px;"));
 
 // --- history search reaches the host, and transcript hits rank and explain themselves ---
 posted.length = 0;

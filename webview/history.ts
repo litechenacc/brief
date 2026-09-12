@@ -280,7 +280,7 @@ export class HistoryView {
 			this.armRename(item, session);
 		});
 		actions.appendChild(rename);
-		if (!isCurrent) {
+		if (!session.archived) {
 			const archive = document.createElement("button");
 			archive.className = "history-action";
 			archive.title = "Archive session (hides it in the Archive section)";
@@ -289,6 +289,9 @@ export class HistoryView {
 				event.stopPropagation();
 				this.deps.onArchive(session.path, session.id);
 			});
+			actions.appendChild(archive);
+		}
+		if (!isCurrent) {
 			const del = document.createElement("button");
 			del.className = "history-action";
 			del.title = "Delete (moves to Trash when possible, also removes session data)";
@@ -301,10 +304,8 @@ export class HistoryView {
 					run: () => this.deps.onDelete(session.path, session.id),
 				});
 			});
-			// Archive sits next to delete as the non-destructive neighbour of the
-			// two retire actions. Delete stays last: the furthest from a stray click.
-			if (session.archived) actions.append(del);
-			else actions.append(archive, del);
+			// Delete stays last: the furthest from a stray click.
+			actions.appendChild(del);
 		}
 		top.append(resume, actions);
 		item.appendChild(top);

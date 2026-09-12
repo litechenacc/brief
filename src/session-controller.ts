@@ -513,6 +513,8 @@ export class SessionController implements vscode.Disposable {
 		if (!(await this.attachViaDaemon(activeSessionId, sessionFile, this.viewEpoch))) {
 			throw new Error(this.lastDaemonAttachError ?? "could not attach to daemon session");
 		}
+		// A successful daemon attach is a completed runtime round-trip too.
+		this.reachable = true;
 	}
 
 	async restart(): Promise<void> {
@@ -1786,11 +1788,19 @@ export class SessionController implements vscode.Disposable {
 	 */
 	async archiveSession(sessionPath: string, sessionId: string): Promise<void> {
 		if (this.guardObservedReadOnly("archiving a session")) return;
-		if ((!this.attached && sessionId === this.state?.sessionId) || sessionId === this.attached?.sessionId) {
-			this.broadcast({ type: "notice", level: "warning", text: "You can't archive the session you're in. Start a new one first." });
-			return;
-		}
+		const isCurrent = (!this.attached && sessionId === this.state?.sessionId) || sessionId === this.attached?.sessionId;
 		const target = normalizeFsPath(sessionPath);
+		if (isCurrent) {
+			const next = (this.lastHistory ?? []).filter((row) => !row.archived && normalizeFsPath(row.path) !== target)
+				.sort((a, b) => historyActivityMs(b) - historyActivityMs(a))[0];
+			if (next) await this.switchSession(next.path, next.id);
+			else await this.newSession();
+			const viewedPath = this.viewedSessionPath();
+			if (!viewedPath || normalizeFsPath(viewedPath) === target) {
+				this.broadcast({ type: "notice", level: "warning", text: "Could not leave the current session, so it was not archived." });
+				return;
+			}
+		}
 		const known = (this.actionHistory ?? this.lastHistory)?.some(
 			(row) => row.id === sessionId && normalizeFsPath(row.path) === target,
 		) ?? false;
@@ -1835,7 +1845,7 @@ export class SessionController implements vscode.Disposable {
 		const result = await archiveSessionFile(sessionPath, fileId);
 		if (result.ok) {
 			this.savedCatalog = null;
-			void this.listHistory();
+			this.scheduleHistoryRefresh();
 		} else {
 			rollback();
 			this.broadcast({ type: "notice", level: "error", text: `Could not archive session: ${result.error ?? "unknown error"}` });

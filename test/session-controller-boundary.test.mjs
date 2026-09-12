@@ -865,15 +865,83 @@ controller.scheduleChildrenRefresh = originalIdentityChildrenRefresh;
 	controller.actionHistory = controller.lastHistory;
 	controller.sidecar = { connected: true, list: async () => [], request: async () => ({}), dispose: () => {} };
 	posts.length = 0;
+	let refreshes = 0;
+	controller.scheduleHistoryRefresh = () => { refreshes += 1; };
 	const pending = controller.archiveSession(idlePath, "hist-archive-now");
 	const painted = posts.find((m) => m.type === "history");
 	check("archive paints the overlay before the file write finishes",
 		painted?.sessions?.find((r) => r.id === "hist-archive-now")?.archived === true,
 		JSON.stringify(painted?.sessions?.map((r) => ({ id: r.id, archived: r.archived }))));
 	await pending;
+	check("successful archive coalesces the catalog refresh", refreshes === 1, String(refreshes));
 	check("successful archive does not toast",
 		!posts.some((m) => m.type === "notice" && String(m.text ?? "").includes("Session archived")),
 		JSON.stringify(posts.filter((m) => m.type === "notice")));
+}
+
+{
+	const currentPath = path.join(workdir, "hist-current-archive.jsonl");
+	const nextPath = path.join(workdir, "hist-next-archive.jsonl");
+	fs.writeFileSync(currentPath, '{"type":"session","id":"root"}\n');
+	fs.writeFileSync(nextPath, '{"type":"session","id":"root"}\n');
+	controller.attached = { activeSessionId: "current-archive-live", sessionPath: currentPath, sessionId: "hist-current-archive" };
+	controller.lastHistory = [
+		{ id: "hist-current-archive", path: currentPath, cwd: workdir, timestamp: new Date().toISOString(), inWorkspace: true, sortMs: 10 },
+		{ id: "hist-next-archive", path: nextPath, cwd: workdir, timestamp: new Date().toISOString(), inWorkspace: true, sortMs: 20 },
+	];
+	controller.actionHistory = controller.lastHistory;
+	let killed = false;
+	let switched;
+	controller.sidecar = {
+		connected: true,
+		list: async () => killed ? [] : [{ sessionFile: currentPath, activeSessionId: "current-archive-live" }],
+		request: async (request) => { if (request.type === "kill") killed = true; return {}; },
+		dispose: () => {},
+	};
+	controller.switchSession = async (sessionPath, sessionId) => {
+		switched = { sessionPath, sessionId };
+		controller.attached = { activeSessionId: "next-archive-live", sessionPath, sessionId };
+	};
+	await controller.archiveSession(currentPath, "hist-current-archive");
+	check("current archive stops its worker then opens the newest remaining session",
+		killed && switched?.sessionPath === nextPath && switched?.sessionId === "hist-next-archive", JSON.stringify({ killed, switched }));
+
+	const emptyPath = path.join(workdir, "hist-current-archive-empty.jsonl");
+	fs.writeFileSync(emptyPath, '{"type":"session","id":"root"}\n');
+	controller.attached = { activeSessionId: "current-archive-empty-live", sessionPath: emptyPath, sessionId: "hist-current-archive-empty" };
+	controller.lastHistory = [{ id: "hist-current-archive-empty", path: emptyPath, cwd: workdir, timestamp: new Date().toISOString(), inWorkspace: true }];
+	controller.actionHistory = controller.lastHistory;
+	killed = false;
+	let created = false;
+	controller.sidecar = {
+		connected: true,
+		list: async () => killed ? [] : [{ sessionFile: emptyPath, activeSessionId: "current-archive-empty-live" }],
+		request: async (request) => { if (request.type === "kill") killed = true; return {}; },
+		dispose: () => {},
+	};
+	controller.newSession = async () => {
+		created = true;
+		controller.attached = { activeSessionId: "new-archive-live", sessionPath: path.join(workdir, "new-archive.jsonl"), sessionId: "new-archive" };
+	};
+	await controller.archiveSession(emptyPath, "hist-current-archive-empty");
+	check("current archive creates a new session when no history remains", killed && created, JSON.stringify({ killed, created }));
+
+	const failedPath = path.join(workdir, "hist-current-archive-failed.jsonl");
+	fs.writeFileSync(failedPath, '{"type":"session","id":"root"}\n');
+	controller.attached = { activeSessionId: "current-archive-failed-live", sessionPath: failedPath, sessionId: "hist-current-archive-failed" };
+	controller.lastHistory = [
+		{ id: "hist-current-archive-failed", path: failedPath, cwd: workdir, timestamp: new Date().toISOString(), inWorkspace: true },
+		{ id: "hist-next-after-failed", path: nextPath, cwd: workdir, timestamp: new Date().toISOString(), inWorkspace: true },
+	];
+	controller.actionHistory = controller.lastHistory;
+	let touchedAfterFailedSwitch = false;
+	controller.sidecar = { connected: true, list: async () => { touchedAfterFailedSwitch = true; return []; }, dispose: () => {} };
+	controller.switchSession = async () => {};
+	posts.length = 0;
+	await controller.archiveSession(failedPath, "hist-current-archive-failed");
+	check("a failed current-session switch leaves the worker and transcript untouched",
+		!touchedAfterFailedSwitch && fs.readFileSync(failedPath, "utf8") === '{"type":"session","id":"root"}\n' &&
+		posts.some((m) => m.type === "notice" && m.level === "warning"), JSON.stringify(posts));
 }
 
 // The last lifecycle fixture intentionally leaves a lightweight RPC stand-in
