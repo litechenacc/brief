@@ -216,11 +216,15 @@ check("edit copy emits the output once, not twice", clipboard.split("edited src/
 	hostMessage({ type: "status", status: { ...baseStatus, liveTranscript: false } });
 }
 
-// --- #23: the user turn shows a price, honestly labeled as the reply's input cost ---
-const ufCost = scroller.querySelector(".row-user .user-footer .uf-cost");
-check("user footer shows the metered turn input price", !!ufCost && ufCost.textContent === "$0.0137 input", ufCost?.textContent ?? "<none>");
-check("price says it prices the reply's context, not the message", (ufCost?.title ?? "").includes("not each message"), ufCost?.title ?? "");
-check("token count stays an honest estimate", scroller.querySelector(".row-user .uf-tokens").textContent.includes("(est.)"));
+// 訊息本身不顯示估算或 input 費用；模型明細預設收合。
+check("user footer has no token estimate or input price", !scroller.querySelector(".uf-tokens, .uf-cost"));
+check("user copy and fork remain", scroller.querySelectorAll(".row-user .user-footer .uf-icon").length >= 2);
+const modelUsage = scroller.querySelector("details.model-usage");
+check("model usage is collapsed with a neutral summary", !!modelUsage && !modelUsage.open && modelUsage.querySelector("summary").textContent === "用量明細");
+check("model usage includes input output total and reported cost", /Input: 4.6k tokens/.test(modelUsage.textContent) && /Output: 348 tokens/.test(modelUsage.textContent) && modelUsage.textContent.includes("$0.0189"));
+modelUsage.open = true;
+check("model usage can be expanded", modelUsage.open);
+modelUsage.open = false;
 
 // --- #22: expanding a collapsed block keeps the selection and sweeps in what it revealed ---
 const thinking = scroller.querySelector("details.thinking");
@@ -256,7 +260,7 @@ check("expanding sweeps the selection over the revealed thinking text",
 	`end=${swept.endContainer.nodeValue ?? swept.endContainer.nodeName}`);
 check("session id shown", document.querySelector(".session-id").textContent === "#019fd749");
 check("live badge", document.querySelector(".live-label").textContent === "live");
-check("context meter labeled", document.querySelector(".context-label").textContent.includes("262k"));
+check("context meter labeled", document.querySelector(".context-label").textContent === "Context 約 23%");
 
 // --- model menu with favorites ---
 hostMessage({
@@ -527,6 +531,27 @@ check("history search filters", visibleItems.length === 1 && visibleItems[0].tex
 document.querySelector(".history-search").value = "";
 document.querySelector(".history-search").dispatchEvent(new window.Event("input", { bubbles: true }));
 check("search cleared restores both groups", document.querySelectorAll(".history-item").length === 2);
+
+// Context 容量與 session 成本分開，累計 tokens 只在明細。
+hostMessage({ type: "status", status: { ...baseStatus, compactDefaultPercent: 94 } });
+check("context label names estimated capacity", document.querySelector(".context-label").textContent === "Context 約 23%");
+check("context tooltip keeps token detail", document.querySelector(".context-meter").title.includes("60,000 tokens"));
+const sessionUsage = document.querySelector("details.stats-label");
+check("session fee is labeled and details collapsed", !sessionUsage.open && sessionUsage.querySelector("summary").textContent === "本 session 費用 $0.0040");
+check("session details state scope and cumulative usage", sessionUsage.textContent.includes("4.5k tokens") && sessionUsage.textContent.includes("Subagents") && sessionUsage.textContent.includes("$0.0040"));
+sessionUsage.open = true;
+hostMessage({ type: "status", status: { ...baseStatus, costUsd: 0 } });
+check("zero cost remains visible", !sessionUsage.hidden && sessionUsage.querySelector("summary").textContent.includes("$0.00"));
+hostMessage({ type: "status", status: { ...baseStatus, costUsd: undefined, usageTotal: undefined } });
+check("missing usage hides session stats", sessionUsage.hidden);
+hostMessage({ type: "status", status: { ...baseStatus, contextPercent: null, contextTokens: null } });
+check("unknown context is pending not zero", document.querySelector(".context-label").textContent === "Context 待更新" && document.querySelector(".context-fill").style.display === "none");
+hostMessage({ type: "status", status: { ...baseStatus, contextPercent: 90, compactDefaultPercent: 94 } });
+check("context below effective threshold has no hardcoded warning", !document.querySelector(".context-fill").classList.contains("warm") && !document.querySelector(".context-fill").classList.contains("hot"));
+hostMessage({ type: "compactThreshold", percent: 85 });
+check("threshold-only update refreshes context warning", document.querySelector(".context-fill").classList.contains("warm"));
+hostMessage({ type: "status", status: { ...baseStatus, compactDefaultPercent: 94 } });
+sessionUsage.open = false;
 
 // --- context meter: gear + flyout state wording ---
 const meter = document.querySelector(".context-meter");

@@ -464,24 +464,33 @@ export class Composer {
 	// elsewhere, and shadowing the global with a number here is a TypeError
 	// waiting for the next line of code added to this method.
 	setContext(percent: number | null | undefined, tokens: number | null | undefined, contextWindow: number | undefined): void {
-		if (percent == null || contextWindow == null) {
-			// Never pull the gauge out from under an open threshold flyout: the panel
-			// is a child of it, so one status push with no context numbers — routine
-			// mid-stream — would close the control the operator is using.
-			if (!this.thresholdFlyoutOpen()) this.contextWrap.style.display = "none";
-			return;
-		}
-		this.contextWindowCurrent = contextWindow ?? this.contextWindowCurrent;
-		this.contextWrap.style.display = "";
-		this.contextFill.style.width = `${Math.min(100, Math.max(0, percent))}%`;
-		this.contextFill.className = `context-fill${percent > 85 ? " hot" : percent > 65 ? " warm" : ""}`;
-		const compact = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `${(n / 1_000).toFixed(0)}k` : String(n));
-		this.contextLabel.textContent = tokens != null ? `${compact(tokens)}/${compact(contextWindow)}` : `${percent}%`;
-		this.contextWrap.title = `Context window: ${percent}% used${this.compactThreshold != null ? ` · auto-compact at ${this.compactThreshold}%` : ""} — click to set the threshold`;
+		this.contextPercentCurrent = percent ?? null;
+		this.contextTokensCurrent = tokens ?? null;
+		this.contextWindowCurrent = contextWindow;
+		this.renderContext();
+	}
+
+	private renderContext(): void {
+		const contextWindow = this.contextWindowCurrent;
+		const percent = contextWindow == null ? null : this.contextPercentCurrent;
+		const effective = this.compactThreshold ?? this.compactDefaultPercent;
+		// Keep an open threshold flyout mounted, but never retain a stale estimate.
+		this.contextWrap.style.display = contextWindow == null && !this.thresholdFlyoutOpen() ? "none" : "";
+		this.contextFill.style.display = percent == null ? "none" : "";
+		this.contextFill.style.width = percent == null ? "" : `${Math.min(100, Math.max(0, percent))}%`;
+		this.contextFill.className = `context-fill${percent != null && effective != null && percent >= effective ? " warm" : ""}`;
+		this.contextLabel.textContent = percent == null ? "Context 待更新" : `Context 約 ${Math.round(percent)}%`;
+		const usage = percent == null ? "Context 使用量待更新" : `Context 估計使用量：約 ${Math.round(percent)}%`;
+		const tokens = percent != null && this.contextTokensCurrent != null ? `約 ${this.contextTokensCurrent.toLocaleString("en-US")} tokens / ` : "";
+		const capacity = contextWindow != null ? ` · ${tokens}Context window ${contextWindow.toLocaleString("en-US")} tokens` : "";
+		const threshold = effective != null ? ` · 自動壓縮門檻 ${effective}%` : "";
+		this.contextWrap.title = `${usage}${capacity}${threshold} — 點擊設定自動壓縮門檻`;
 	}
 
 	// ---- auto-compact threshold flyout ----
 
+	private contextPercentCurrent: number | null = null;
+	private contextTokensCurrent: number | null = null;
 	private contextWindowCurrent: number | undefined;
 	private compactThreshold: number | null = null;
 	private compactDefaultPercent: number | null = null;
@@ -495,6 +504,8 @@ export class Composer {
 	setCompactThreshold(percent: number | null, defaultPercent: number | null = null): void {
 		this.compactThreshold = percent;
 		this.compactDefaultPercent = defaultPercent;
+		// Status updates set context first; threshold-only echoes also need a repaint.
+		this.renderContext();
 		this.renderThresholdFlyout();
 		this.renderContextTick();
 	}
@@ -566,6 +577,7 @@ export class Composer {
 		});
 		const resetFlyoutToDefault = (): void => {
 			this.compactThreshold = null;
+			this.renderContext();
 			// The operator's own click, and it runs with the panel open, so this is
 			// exactly the case the open-flyout guard has to make an exception for.
 			this.renderThresholdFlyout(true);

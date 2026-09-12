@@ -161,8 +161,6 @@ export class Transcript {
 	private streaming = false;
 	private lastPartialAssistant: AssistantMessage | null = null;
 	private hasContent = false;
-	/** Latest user footer still waiting for the reply that prices its turn. */
-	private pendingUserFooter: HTMLElement | null = null;
 	private welcome: HTMLElement | null = null;
 
 	private stickToBottom = true;
@@ -473,8 +471,7 @@ export class Transcript {
 		this.toolBlocks.clear();
 		this.streamingBubble = null;
 		this.welcome = null;
-		// Both point at nodes in the scroller we just emptied.
-		this.pendingUserFooter = null;
+		// The selection points at nodes in the scroller we just emptied.
 		this.pendingSelection = null;
 		// Run state belongs to the session we just left. Inheriting it paints a
 		// brand-new session as "running" with a Stop button no agent_end can clear,
@@ -943,7 +940,6 @@ export class Transcript {
 				: undefined;
 		if (!pending) return false;
 		this.optimisticRows.delete(pending.clientRequestId);
-		if (this.pendingUserFooter && pending.row.contains(this.pendingUserFooter)) this.pendingUserFooter = null;
 		pending.row.remove();
 		if (this.optimisticRows.size === 0 && !this.streaming && !this.streamingBubble) this.stopWorking();
 		if (!this.scroller.querySelector(".row, .tool, .system-note, .working-row, .retry-row, .spawned-card")) {
@@ -1143,19 +1139,9 @@ export class Transcript {
 		return row;
 	}
 
-	/** Footer under a user bubble: token estimate, turn cost, copy, fork-from-here. */
+	/** Message actions; usage belongs to model calls, not user text. */
 	private buildUserFooter(row: HTMLElement, text: string): HTMLElement {
 		const footer = el("div", "user-footer");
-		const est = Math.max(1, Math.round(text.length / 4));
-		const estLabel = est >= 1000 ? `~${(est / 1000).toFixed(1)}k tokens (est.)` : `~${est} tokens (est.)`;
-		const tokensEl = el("span", "uf-tokens", estLabel);
-		tokensEl.title = "Estimated from message length (~4 chars/token). Only replies are metered.";
-		footer.appendChild(tokensEl);
-		// The price lands when the reply that consumed this message arrives — so
-		// only a row appended at the LIVE tail may claim it. Rows rebuilt above the
-		// window by loadEarlier are ancient history; letting them take the slot put
-		// the next reply's cost on a message from the top of the transcript.
-		if (this.insertAnchor === null) this.pendingUserFooter = footer;
 		const copyBtn = el("button", "uf-icon") as HTMLButtonElement;
 		copyBtn.title = "Copy message";
 		copyBtn.appendChild(icon("copy", 11));
@@ -1173,25 +1159,6 @@ export class Transcript {
 		});
 		footer.append(copyBtn, forkBtn);
 		return footer;
-	}
-
-	/**
-	 * Price the user's turn — #23 asked for the cost of their own message.
-	 *
-	 * prime-agent meters per reply, never per message: `usage.input` is the whole
-	 * context the reply was billed for, not the words the operator typed. So the
-	 * footer states exactly that instead of pinning a whole-context figure on the
-	 * bubble and letting it read as "your message cost this".
-	 */
-	private priceUserTurn(usage: AssistantMessage["usage"]): void {
-		const footer = this.pendingUserFooter;
-		const cost = usage?.cost?.input;
-		if (!footer || cost == null || !usage) return;
-		this.pendingUserFooter = null;
-		if (footer.querySelector(".uf-cost")) return;
-		const costEl = el("span", "uf-cost", `$${cost.toFixed(4)} input`);
-		costEl.title = `Metered input cost of the reply this message opened: ${formatNumber(usage.input)} context tokens for $${cost.toFixed(4)}. prime-agent prices the whole context per reply, not each message.`;
-		footer.querySelector(".uf-tokens")?.after(costEl);
 	}
 
 	private buildAssistantRow(message: AssistantMessage, isPartial: boolean): HTMLElement {
@@ -1346,9 +1313,10 @@ export class Transcript {
 		// does, and that is the only honest signal for "the numbers are final".
 		const settled = Boolean(message.stopReason) || Boolean(message.errorMessage);
 		if (!isPartial && settled) {
-			this.priceUserTurn(message.usage);
 			const meta = this.usageLine(message as AssistantMessage);
 			if (meta) {
+				const details = meta.querySelector("details");
+				if (details) details.open = body.querySelector<HTMLDetailsElement>(".model-usage")?.open ?? false;
 				meta.dataset.part = "usage";
 				desired.push(meta);
 			} else if (desired.length === 0) {
@@ -1437,20 +1405,28 @@ export class Transcript {
 	}
 
 	private usageLine(message: AssistantMessage): HTMLElement | null {
-		const parts: string[] = [];
 		const usage = message.usage;
-		if (usage?.totalTokens != null) parts.push(`${formatNumber(usage.totalTokens)} tokens`);
-		if (usage?.cost?.total) parts.push(`$${usage.cost.total.toFixed(4)}`);
 		const stop = message.stopReason;
-		const isError = stop === "error" || (message.errorMessage != null && message.errorMessage !== "");
+		const isError = stop === "error" || Boolean(message.errorMessage);
+		const line = el("div", `usage-line${isError ? " error" : ""}`);
 		if (isError) {
-			parts.push(message.errorMessage ? `request failed — ${message.errorMessage}` : "request failed");
+			line.appendChild(el("span", "usage-status", message.errorMessage ? `request failed — ${message.errorMessage}` : "request failed"));
 		} else if (stop && stop !== "stop" && stop !== "toolUse") {
-			parts.push(`stopped: ${stop}`);
+			line.appendChild(el("span", "usage-status", `stopped: ${stop}`));
 		}
-		if (parts.length === 0) return null;
-		const line = el("div", `usage-line${isError ? " error" : ""}`, parts.join(" · "));
-		if (message.model) line.title = message.model;
+		if (usage) {
+			const details = el("details", "model-usage");
+			details.appendChild(el("summary", "", "用量明細"));
+			const bits = ["單次模型呼叫（非工具執行費用）"];
+			if (message.model) bits.push(`模型：${message.model}`);
+			for (const [label, value] of [["Input", usage.input], ["Cache read", usage.cacheRead], ["Cache write", usage.cacheWrite], ["Output", usage.output], ["Total", usage.totalTokens]] as const) {
+				if (value != null) bits.push(`${label}: ${formatNumber(value)} tokens`);
+			}
+			if (usage.cost?.total != null) bits.push(`回報費用：$${usage.cost.total.toFixed(4)}（非帳戶扣款）`);
+			details.appendChild(el("div", "usage-detail", bits.join("\n")));
+			line.appendChild(details);
+		}
+		if (!line.childElementCount && message.content.length === 0) return null;
 		const copyBtn = el("button", "uf-icon usage-copy") as HTMLButtonElement;
 		copyBtn.title = "Copy the full reply (text + thinking)";
 		copyBtn.appendChild(icon("copy", 11));

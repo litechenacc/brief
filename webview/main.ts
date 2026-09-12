@@ -175,7 +175,11 @@ const statusStrip = el("div", "status-strip");
 const connDot = el("span", "conn-dot");
 const liveLabel = el("span", "live-label", "connecting");
 const sessionIdLabel = el("span", "session-id", "");
-const statsLabel = el("span", "stats-label", "");
+const statsLabel = el("details", "stats-label") as HTMLDetailsElement;
+const statsSummary = el("summary", "", "");
+const statsDetail = el("div", "stats-detail");
+statsLabel.append(statsSummary, statsDetail);
+statsLabel.hidden = true;
 const convCopy = el("button", "strip-icon") as HTMLButtonElement;
 convCopy.title = "Copy the whole conversation (Markdown with summarized tool calls)";
 convCopy.appendChild(icon("copy", 11));
@@ -286,7 +290,8 @@ function startNewThread(): void {
 		renderLiveLabel(currentStatus);
 		sessionIdLabel.textContent = "";
 		sessionIdLabel.title = "";
-		statsLabel.textContent = "";
+		statsLabel.hidden = true;
+		statsLabel.open = false;
 	}
 }
 
@@ -409,6 +414,7 @@ function applyStatus(incomingStatus: StatusSnapshot): void {
 		// session change, and collapsing the strip under the operator mid-navigation
 		// is exactly the freeze that made siblings unreachable.
 		subagents.resetForSessionChange();
+		statsLabel.open = false;
 	}
 	currentStatus = status;
 	renderLiveLabel(status);
@@ -416,10 +422,14 @@ function applyStatus(incomingStatus: StatusSnapshot): void {
 	sessionIdLabel.textContent = status.sessionId ? `#${status.sessionId.slice(0, 8)}` : "";
 	sessionIdLabel.title = status.sessionFile ?? "";
 
-	const statsBits: string[] = [];
-	if (status.usageTotal != null) statsBits.push(`${formatNumber(status.usageTotal)} tok`);
-	if (status.costUsd != null && status.costUsd > 0) statsBits.push(`$${status.costUsd.toFixed(4)}`);
-	statsLabel.textContent = statsBits.join(" · ");
+	statsLabel.hidden = status.costUsd == null && status.usageTotal == null;
+	statsSummary.textContent = status.costUsd != null ? `本 session 費用 $${status.costUsd.toFixed(4)}` : "本 session 費用待更新";
+	statsDetail.textContent = [
+		"範圍：目前 session state 的模型用量；不是永久歷史帳單。",
+		"Subagents 是否完整包含尚未確認；此處不代表所有 agents 合計。",
+		status.usageTotal != null ? `累計處理量：${formatNumber(status.usageTotal)} tokens（含 cache）` : "累計處理量：待更新",
+		status.costUsd != null ? `回報費用：$${status.costUsd.toFixed(4)}（非帳戶扣款）` : "回報費用：待更新",
+	].join("\n");
 
 	composer.setModel(status.modelLabel, status.modelProvider, status.modelId);
 	composer.setThinking(status.thinkingLevel, status.availableThinkingLevels ?? null);

@@ -1699,7 +1699,7 @@ pre.term {
 	background: var(--pa-accent-dim);
 }
 
-/* ---------- user message footer (tokens/copy/fork) ---------- */
+/* ---------- user message footer (copy/fork) ---------- */
 
 .user-footer {
 	display: flex;
@@ -1721,19 +1721,6 @@ pre.term {
 .user-footer:focus-within .uf-icon,
 .user-footer:hover .uf-icon {
 	opacity: 1;
-}
-
-.uf-tokens {
-	font-variant-numeric: tabular-nums;
-}
-
-/* Turn cost. Dimmer than the estimate beside it: it prices the reply's whole
-   input context, not the message, and must not read as this bubble's own bill. */
-.uf-cost {
-	font-variant-numeric: tabular-nums;
-	white-space: nowrap;
-	color: var(--pa-dim);
-	opacity: 0.85;
 }
 
 .uf-icon {
@@ -1763,8 +1750,28 @@ pre.term {
 	transition: opacity 0.12s ease;
 }
 
-.row-assistant:hover .usage-copy {
+.row-assistant:hover .usage-copy,
+.usage-line:focus-within .usage-copy {
 	opacity: 1;
+}
+
+/* 按需展開用量，錯誤與訊息操作維持在外層。 */
+.usage-line { align-items: flex-start; flex-wrap: wrap; }
+.model-usage summary, .stats-label summary { cursor: pointer; }
+.usage-detail, .stats-detail { white-space: pre-line; line-height: 1.6; }
+.usage-detail { padding: 4px 0; }
+.stats-label { position: relative; }
+.stats-detail {
+	position: absolute;
+	bottom: calc(100% + 8px);
+	right: 0;
+	width: min(320px, calc(100vw - 40px));
+	padding: 10px;
+	border: 1px solid var(--pa-border);
+	border-radius: 6px;
+	background: var(--pa-surface-2);
+	color: var(--pa-text);
+	z-index: 30;
 }
 
 /* ---------- thinking copy ---------- */
