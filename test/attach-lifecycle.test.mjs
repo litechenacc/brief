@@ -181,6 +181,13 @@ const commandClient = {
 };
 controller.client = commandClient;
 controller.ensureStarted = async () => {};
+controller.sidecar = {
+	connected: true,
+	request: async (command) => command.type === "get_commands"
+		? { commands: [{ name: "compact" }, { name: "security-pipeline" }] }
+		: {},
+	dispose: () => {},
+};
 controller.attached = { activeSessionId: "handle-C", sessionPath: path.join(workdir, "c.jsonl"), sessionId: "c" };
 controller.attachedEpoch = controller.viewEpoch;
 await controller.listCommands();

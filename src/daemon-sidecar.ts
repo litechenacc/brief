@@ -1,17 +1,8 @@
 /**
  * Minimal client for the prime-agent daemon protocol (prime-agent.daemon v7).
  *
- * The RPC-mode subprocess starts as a client-owned worker. That worker is
- * hidden from other prime-agent clients, and closing RPC stdin starts cleanup.
- * Brief therefore promotes that session to resident, and creates additional
- * sessions with lifecycle "resident", so:
- *   - disconnecting RPC does not kill the agent
- *   - New Session does not replace/abort a running worker
- *   - `prime-agent list` / TUI can see and attach to the same conversation
- *
- * Socket: unix socket <tmp>/prime-agent-<uid>/daemon.sock (Windows: named
- * pipe), LF-delimited JSON lines. The daemon is guaranteed to exist while our
- * own RPC session runs (RPC mode itself is a daemon client and autostarts it).
+ * Brief creates resident workers and attaches as a client. Disconnecting this
+ * socket therefore never owns or kills the worker.
  */
 
 import * as net from "node:net";
@@ -523,13 +514,14 @@ export class DaemonSidecar {
 	 * not replace the runtime inside an existing worker, so a running session
 	 * keeps going.
 	 */
-	async createResident(options: { cwd: string; name?: string }): Promise<SessionSummaryRef> {
+	async createResident(options: { cwd: string; name?: string; sessionPath?: string }): Promise<SessionSummaryRef> {
 		const data = await this.request<SessionSummaryRef | undefined>(
 			{
 				type: "create",
 				lifecycle: "resident",
 				config: { cwd: options.cwd },
 				...(options.name ? { name: options.name } : {}),
+				...(options.sessionPath ? { sessionPath: options.sessionPath } : {}),
 			},
 			30_000,
 		);

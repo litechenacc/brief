@@ -1,10 +1,10 @@
 /**
- * SessionController owns the Prime Agent RPC subprocess for this VS Code window,
+ * SessionController attaches this VS Code window to daemon-resident Prime sessions,
  * routes events to all attached chat webviews, and answers extension UI requests
  * using native VS Code dialogs.
  */
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import * as fs from "node:fs/promises";
@@ -85,6 +85,7 @@ export interface SessionController {
 	switchSession(sessionPath: string, sessionId: string): Promise<void>;
 	startObserving(sessionId: string, previousAttachment?: AttachRef | null, epoch?: number, sessionPath?: string, observedAtStart?: string | null): Promise<boolean>;
 	ensureSidecar(options?: { reattach?: boolean }): Promise<import("./daemon-sidecar.js").DaemonSidecar>;
+	connectDaemon(): Promise<import("./daemon-sidecar.js").DaemonSidecar>;
 	onSidecarClosed(): void;
 	runReattach(sidecar: import("./daemon-sidecar.js").DaemonSidecar): Promise<void>;
 	waitForDaemonDetach(activeSessionId: string): Promise<void>;
@@ -254,11 +255,17 @@ export class SessionController implements vscode.Disposable {
 	browseRefByActiveId = new Map<string, string>();
 	/** Invalidates child capabilities only when the displayed session actually changes. */
 	childrenContext = 0;
+	/** Last foreground daemon session for Extension Host / Reload Window recovery. */
+	rememberedSession: { sessionId: string; sessionFile: string } | null = null;
 
 	constructor(
 		readonly context: vscode.ExtensionContext,
 		readonly output: vscode.OutputChannel,
 	) {
+		const remembered = this.context.workspaceState.get<{ sessionId?: unknown; sessionFile?: unknown }>("brief-foreground-session");
+		if (typeof remembered?.sessionId === "string" && typeof remembered.sessionFile === "string") {
+			this.rememberedSession = { sessionId: remembered.sessionId, sessionFile: remembered.sessionFile };
+		}
 		this.restoreHistoryUiState();
 		this.disposables.push(
 			vscode.workspace.onDidChangeConfiguration((event) => {
@@ -421,139 +428,123 @@ export class SessionController implements vscode.Disposable {
 		}, 25_000);
 	}
 
-	async start(): Promise<void> {
-		if (!this.workspaceRoot) throw new Error("Open a workspace folder before starting Brief.");
+	async persistForegroundSession(sessionId: string, sessionFile: string): Promise<void> {
+		if (!sessionId || !sessionFile) return;
+		this.rememberedSession = { sessionId, sessionFile };
+		await this.context.workspaceState.update("brief-foreground-session", this.rememberedSession);
+	}
+
+	private async startDaemonSupervisor(): Promise<void> {
 		const config = vscode.workspace.getConfiguration("brief");
-		const configuredCommand = config.get<unknown>("command", "prime-agent");
-		const command = typeof configuredCommand === "string" && configuredCommand.trim() ? configuredCommand.trim() : "prime-agent";
+		const configured = config.get<unknown>("command", "prime-agent");
+		const command = typeof configured === "string" && configured.trim() ? configured.trim() : "prime-agent";
 		if (command.includes("\0")) throw new Error("brief.command contains an invalid character");
-		const configuredArgs = config.get<unknown>("args", []);
-		if (!Array.isArray(configuredArgs) || configuredArgs.some((arg) => typeof arg !== "string" || arg.includes("\0"))) {
-			throw new Error("brief.args must be an array of strings");
-		}
-		const extraArgs = configuredArgs as string[];
-		const model = config.get<string>("model", "").trim();
-
-		const args = [...extraArgs];
-		if (model) args.push("--model", model);
-		// Escape hatch (tests, unusual launch setups): extra space-delimited args.
-		const envArgs = process.env.PRIME_AGENT_ARGS?.trim();
-		if (envArgs) args.push(...envArgs.split(/\s+/));
-
-		this.output.appendLine(`[prime-agent] starting: ${command} --mode rpc (${args.length} configured argument${args.length === 1 ? "" : "s"})`);
-		// Fresh every attempt, never cached: the extension host's PATH is frozen at
-		// window start, so an operator who installs the CLI and clicks Retry has to
-		// be able to succeed without restarting the window.
-		const generation = this.startGeneration;
 		const located = await locateAgent(command, (line) => this.output.appendLine(line));
-		this.output.appendLine(`[prime-agent] ${located.detail}`);
 		this.locatedAgent = located;
-		if (this.disposed || generation !== this.startGeneration) return;
-		const client = new RpcClient({
-			command: located.command,
-			args,
-			cwd: this.workspaceRoot,
-			env: located.envPath ? { PATH: located.envPath } : undefined,
-			onWire: (s) => this.debugLog.append(s),
-		});
-		this.client = client;
-		// A start that follows a working agent deserves to speak up again. The
-		// suppression below exists only so one unreachable CLI cannot stack an
-		// identical toast for every action the operator takes.
-		if (this.reachable) this.spawnErrorNotified = false;
-		this.reachable = false;
-		this.intentionalStop = false;
-
-	client.on("event", (raw) => {
-			if (this.isForegroundRpcClient(client)) this.onAgentEvent(raw as AgentEvent);
-		});
-		client.on("extensionUiRequest", (raw) => {
-			if (this.client === client && !this.disposed) void this.onExtensionUiRequest(client, raw as RpcExtensionUIRequest);
-		});
-		client.on("message", (raw) => {
-			if (this.client === client && !this.disposed) this.onOtherMessage(client, raw as Record<string, unknown>);
-		});
-		client.on("stderr", (chunk: string) => {
-			if (this.client === client && !this.disposed) this.output.append(chunk);
-		});
-		client.on("spawnError", (err: Error) => {
-			if (this.client !== client || this.disposed) return;
-			this.output.appendLine(`[prime-agent] spawn error: ${err.message}`);
-			this.reachable = false;
-			if (!this.isForegroundRpcClient(client)) return;
-			if (!this.spawnErrorNotified) {
-				this.spawnErrorNotified = true;
-				this.broadcast({
-					type: "notice",
-					level: "error",
-					text: `Could not start "${command}". Install the agent runtime or set brief.command in Settings.`,
-				});
-			}
-			// A spawn failure is definitive — don't make a first-time operator wait
-			// out the 25s watchdog behind the connecting splash before we say why.
-			if (this.installWatchdog) {
-				clearTimeout(this.installWatchdog);
-				this.installWatchdog = null;
-			}
-			// The card is the only place an operator learns *where* we looked, and
-			// "we searched your login shell too" is what stops them re-running an
-			// installer that already worked.
-			const searched = this.locatedAgent?.source === "unresolved" ? ` (${this.locatedAgent.detail})` : "";
-			this.maybeShowInstallPrompt(`"${command}" could not be launched — ${err.message}${searched}`);
-			this.pushStatus();
-		});
-		// A protocol fault kills the connection and the agent with it. Nothing
-		// listened for it before, so the operator saw a session simply fail to open
-		// with no explanation anywhere but the output channel.
-		client.on("protocolError", (err: Error) => {
-			if (this.client !== client || this.disposed) return;
-			this.output.appendLine(`[prime-agent] protocol error: ${err.message}`);
-			this.broadcast({
-				type: "notice",
-				level: "error",
-				text: `The agent connection was reset: ${err.message}. Use Restart to start it again.`,
+		const env: NodeJS.ProcessEnv = { ...process.env, ...(located.envPath ? { PATH: located.envPath } : {}) };
+		delete env.ELECTRON_RUN_AS_NODE;
+		await new Promise<void>((resolve, reject) => {
+			const child = spawn(located.command, ["--mode", "daemon"], {
+				cwd: this.workspaceRoot,
+				env,
+				detached: true,
+				stdio: "ignore",
+				windowsHide: true,
+			});
+			child.once("error", reject);
+			child.once("spawn", () => {
+				child.removeListener("error", reject);
+				child.on("error", () => {});
+				child.unref();
+				resolve();
 			});
 		});
-		client.on("exit", (code: number | null) => {
-			if (this.client !== client || this.disposed) return;
-			this.output.appendLine(`[prime-agent] exited with code ${code ?? "?"}`);
-			this.reachable = false;
-			this.state = null;
-			// Our worker died with it; stop answering to its owner id so the daemon
-			// can reap it instead of keeping it (and its kernels) alive for us.
-			//
-			// Deliberately ABOVE the foreground guard. That guard is false whenever
-			// the operator is attached — including to a subagent of the very worker
-			// that just lost its agent — and skipping the release there is exactly
-			// how a dead session would be kept running forever. Dropping the socket
-			// costs a reconnect, which onClose/runReattach already treat as a normal
-			// path and recover from.
-			this.releaseOwnerIdentity();
-			if (!this.isForegroundRpcClient(client)) return;
-			this.clearRunFlags();
-			if (!this.intentionalStop) {
-				this.broadcast({ type: "notice", level: "warning", text: `Agent process exited (code ${code ?? "?"}). Use Restart to start it again.` });
+	}
+
+	async connectDaemon(): Promise<DaemonSidecar> {
+		try {
+			return await this.ensureSidecar({ reattach: false });
+		} catch {
+			await this.startDaemonSupervisor();
+		}
+		let lastError: unknown;
+		for (let attempt = 0; attempt < 50; attempt += 1) {
+			if (this.disposed) throw new Error("Brief was disposed while starting the daemon");
+			try {
+				return await this.ensureSidecar({ reattach: false });
+			} catch (err) {
+				lastError = err;
+				await new Promise((resolve) => setTimeout(resolve, 100));
 			}
-			this.pushStatus();
-		});
+		}
+		throw lastError ?? new Error("daemon socket unavailable");
+	}
 
-		client.start();
-
-		// Give the process a moment to fail fast on spawn problems before declaring success.
-		await new Promise((resolve) => setTimeout(resolve, 150));
-		await this.refreshSnapshot();
-		if (this.reachable) await this.promoteOwnRpcSession();
+	async start(): Promise<void> {
+		if (!this.workspaceRoot) throw new Error("Open a workspace folder before starting Brief.");
+		const sidecar = await this.connectDaemon();
+		if (this.disposed || this.attached) return;
+		const remembered = this.rememberedSession;
+		const sessions = await this.listSessions(sidecar);
+		const live = remembered
+			? sessions.find((row) =>
+				row.activeSessionId &&
+				(row.sessionId === remembered.sessionId || row.id === remembered.sessionId ||
+					(row.sessionFile ? normalizeFsPath(row.sessionFile) === normalizeFsPath(remembered.sessionFile) : false)),
+			)
+			: undefined;
+		let target = live;
+		if (!target) {
+			let sessionPath: string | undefined;
+			if (remembered) {
+				try {
+					await fs.access(remembered.sessionFile);
+					sessionPath = remembered.sessionFile;
+				} catch {
+					// The remembered transcript was removed; create a fresh session.
+				}
+			}
+			target = await sidecar.createResident({ cwd: this.workspaceRoot, ...(sessionPath ? { sessionPath } : {}) });
+		}
+		const activeSessionId = target.activeSessionId;
+		if (!activeSessionId) throw new Error("daemon returned no activeSessionId");
+		const sessionFile = target.sessionFile ?? remembered?.sessionFile ?? "";
+		if (!(await this.attachViaDaemon(activeSessionId, sessionFile, this.viewEpoch))) {
+			throw new Error(this.lastDaemonAttachError ?? "could not attach to daemon session");
+		}
 	}
 
 	async restart(): Promise<void> {
-		// A restart can race an in-flight startup. `ensureStarted()` intentionally
-		// coalesces callers, so let that retiring attempt settle before starting its
-		// replacement instead of awaiting it and ending up offline.
-		const retiringStart = this.startingPromise;
-		this.stop();
-		if (retiringStart) await retiringStart;
-		if (this.disposed) return;
-		await this.ensureStarted();
+		const current = this.attached;
+		if (!current) {
+			await this.ensureStarted();
+			return;
+		}
+		const sessionPath = current.sessionPath || this.rememberedSession?.sessionFile;
+		if (!sessionPath) throw new Error("The current session has no transcript path");
+		const sidecar = await this.connectDaemon();
+		const epoch = this.beginNavigation();
+		this.attached = null;
+		this.attachedEpoch = null;
+		this.attachAttempt = null;
+		this.attachAttemptEpoch = null;
+		this.clearReattachTimer();
+		this.observationRestoring = true;
+		await sidecar.request({ type: "kill", activeSessionId: current.activeSessionId }, 30_000);
+		let created: SessionSummaryRef | undefined;
+		let createError: unknown;
+		for (let attempt = 0; attempt < 20 && !created; attempt += 1) {
+			try {
+				created = await sidecar.createResident({ cwd: this.workspaceRoot, sessionPath });
+			} catch (err) {
+				createError = err;
+				if (attempt < 19) await new Promise((resolve) => setTimeout(resolve, 100));
+			}
+		}
+		if (!created) throw createError ?? new Error("could not resume the stopped session");
+		if (!created.activeSessionId || !(await this.attachViaDaemon(created.activeSessionId, created.sessionFile ?? sessionPath, epoch))) {
+			throw new Error(this.lastDaemonAttachError ?? "could not attach to restarted session");
+		}
 	}
 
 	stop(): void {
@@ -1175,15 +1166,12 @@ export class SessionController implements vscode.Disposable {
 		const observedAtStart = this.observingId;
 		this.beginCreatingSession();
 		await this.ensureStarted();
-		if (!this.client || this.disposed || epoch !== this.viewEpoch) {
+		if (this.disposed || epoch !== this.viewEpoch) {
 			this.abortCreatingSession(previousAttachment, previousMessages, epoch);
 			return;
 		}
-		// RPC `new_session` replaces the runtime inside the current worker and
-		// aborts a running turn. Create a new resident worker instead so the
-		// previous session keeps running and stays visible to other clients.
+		// Create a separate resident worker so the previous session keeps running.
 		try {
-			await this.promoteOwnRpcSession();
 			const sidecar = await this.ensureSidecar({ reattach: false });
 			if (this.disposed || epoch !== this.viewEpoch) {
 				this.abortCreatingSession(previousAttachment, previousMessages, epoch);
@@ -1673,11 +1661,23 @@ export class SessionController implements vscode.Disposable {
 	 */
 	async listCommands(): Promise<void> {
 		await this.ensureStarted();
+		const attached = this.attached;
+		if (attached) {
+			try {
+				const sidecar = await this.ensureSidecar();
+				const data = await sidecar.request<{ commands?: RpcSlashCommand[] }>(
+					{ type: "get_commands", activeSessionId: attached.activeSessionId },
+					30_000,
+				);
+				if (this.isCurrentAttachment(attached)) this.broadcast({ type: "commands", commands: data.commands ?? [] });
+			} catch {
+				// The composer can still send plain prompts when command discovery fails.
+			}
+			return;
+		}
 		const client = this.client;
 		if (!client?.running || this.disposed) return;
 		const response = await client.request({ type: "get_commands" }, 30_000);
-		// Identity only: a reply from the client we asked is valid for any view,
-		// because the answer does not describe a session.
 		if (this.client !== client || this.disposed) return;
 		if (response.success) {
 			const data = response.data as { commands?: RpcSlashCommand[] };

@@ -402,26 +402,37 @@ check(
 );
 controller.ensureStarted = originalEnsureStarted;
 
-// Restart must not merely await the startup it just stopped. The old coalesced
-// promise has to settle first, then a fresh ensureStarted call creates the
-// replacement process.
-const originalStop = controller.stop;
-const originalRestartEnsureStarted = controller.ensureStarted;
-let releaseRetiringStartup;
-controller.startingPromise = new Promise((resolve) => { releaseRetiringStartup = resolve; });
-let restartStops = 0;
-let replacementStarts = 0;
-controller.stop = () => { restartStops += 1; };
-controller.ensureStarted = async () => { replacementStarts += 1; };
-const restartDuringStartup = controller.restart();
-await new Promise((resolve) => setImmediate(resolve));
-check("restart waits for the retiring startup before starting a replacement", restartStops === 1 && replacementStarts === 0);
-releaseRetiringStartup();
-await restartDuringStartup;
-check("restart starts a fresh process after the retiring startup settles", replacementStarts === 1, String(replacementStarts));
-controller.startingPromise = null;
-controller.stop = originalStop;
-controller.ensureStarted = originalRestartEnsureStarted;
+// Restart kills the foreground daemon worker and resumes the same transcript.
+const restartPath = validPath;
+const restartCommands = [];
+const originalConnectDaemon = controller.connectDaemon;
+const originalAttachViaDaemon = controller.attachViaDaemon;
+controller.attached = { activeSessionId: "restart-old", sessionPath: restartPath, sessionId: "valid-session" };
+controller.attachedEpoch = controller.viewEpoch;
+controller.connectDaemon = async () => ({
+	request: async (command) => { restartCommands.push(command); },
+	createResident: async (options) => {
+		restartCommands.push({ type: "create", ...options });
+		return { activeSessionId: "restart-new", sessionFile: restartPath };
+	},
+});
+controller.attachViaDaemon = async (activeSessionId, sessionPath) => {
+	restartCommands.push({ type: "attach", activeSessionId, sessionPath });
+	controller.attached = { activeSessionId, sessionPath, sessionId: "valid-session" };
+	return true;
+};
+await controller.restart();
+check(
+	"Restart kills the current worker then resumes the same JSONL",
+	restartCommands[0]?.type === "kill" && restartCommands[0]?.activeSessionId === "restart-old" &&
+		restartCommands[1]?.type === "create" && restartCommands[1]?.sessionPath === restartPath &&
+		restartCommands[2]?.type === "attach" && restartCommands[2]?.activeSessionId === "restart-new",
+	JSON.stringify(restartCommands),
+);
+controller.connectDaemon = originalConnectDaemon;
+controller.attachViaDaemon = originalAttachViaDaemon;
+controller.attached = null;
+controller.attachedEpoch = null;
 
 // Extension UI requests are also native dialogs. Once the foreground changes,
 // an approval must turn into a cancellation for the original RPC session.

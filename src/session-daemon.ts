@@ -20,9 +20,6 @@ const CHILDREN_REFRESH_MS = 700;
 
 export const daemonAttachMethods = {
 async switchSession(this: SessionController, sessionPath: string, sessionId: string): Promise<void> {
-	// Claim navigation ownership before validating the host-issued capability:
-	// a slow filesystem validation for an old click must never win over a newer
-	// history selection.
 	const previousAttachment = this.attached;
 	const epoch = this.beginNavigation();
 	const observedAtStart = this.observingId;
@@ -33,111 +30,51 @@ async switchSession(this: SessionController, sessionPath: string, sessionId: str
 	}
 	sessionPath = session.path;
 	sessionId = session.id;
-	// Re-attaching an already attached session and then releasing the previous
-	// attachment would release the attachment we just refreshed. Treat this as
-	// the no-op the history row represents instead.
 	this.markHistorySessionOpened(sessionPath);
-	if (this.attached && normalizeFsPath(this.attached.sessionPath) === normalizeFsPath(sessionPath)) {
+	if (previousAttachment && normalizeFsPath(previousAttachment.sessionPath) === normalizeFsPath(sessionPath)) {
 		this.broadcast({ type: "notice", level: "info", text: "You are already viewing that session." });
 		this.restoreAttachedView(previousAttachment, epoch);
 		return;
 	}
-	await this.ensureStarted();
-	if (!this.client || this.disposed || epoch !== this.viewEpoch) {
-		this.restoreAttachedView(previousAttachment, epoch);
-		return;
-	}
-	const client = this.client;
-	let response;
 	try {
-		response = await client.request({ type: "switch_session", sessionPath }, 60_000);
+		const sidecar = await this.connectDaemon();
+		const findLive = (rows: SessionSummaryRef[]) => rows.find((row) =>
+			row.activeSessionId &&
+			(row.sessionId === sessionId || row.id === sessionId ||
+				(row.sessionFile ? normalizeFsPath(row.sessionFile) === normalizeFsPath(sessionPath) : false)),
+		);
+		let target = findLive(await this.listSessions(sidecar));
+		if (!target) {
+			try {
+				target = await sidecar.createResident({ cwd: session.cwd || this.workspaceRoot, sessionPath });
+			} catch (err) {
+				// A lease race means another client made it live between list and create.
+				target = findLive(await this.listSessions(sidecar));
+				if (!target) throw err;
+			}
+		}
+		if (!target.activeSessionId) throw new Error("daemon returned no activeSessionId");
+		const attached = await this.attachViaDaemon(target.activeSessionId, target.sessionFile ?? sessionPath, epoch);
+		if (!attached || this.disposed || epoch !== this.viewEpoch) {
+			this.restoreAttachedView(previousAttachment, epoch);
+			return;
+		}
+		const current = this.attached;
+		if (previousAttachment && current !== previousAttachment && this.sidecar?.connected) {
+			try {
+				await this.detachDaemonSession(this.sidecar, previousAttachment.activeSessionId);
+			} catch {
+				// The old daemon registration may already be gone.
+			}
+		}
+		if (!(await this.clearObservation(observedAtStart, epoch))) return;
+		this.returnTargets = [];
 	} catch (err) {
-		if (this.client === client && !this.disposed && epoch === this.viewEpoch) {
+		if (!this.disposed && epoch === this.viewEpoch) {
 			this.broadcast({ type: "notice", level: "error", text: `Could not resume session: ${err instanceof Error ? err.message : String(err)}` });
 			this.restoreAttachedView(previousAttachment, epoch);
 		}
-		return;
 	}
-	if (this.client !== client || this.disposed || epoch !== this.viewEpoch) return;
-	if (response.success) {
-		if (!(await this.detachFromDaemon(previousAttachment)) || epoch !== this.viewEpoch) return;
-		if (!(await this.clearObservation(observedAtStart, epoch))) return;
-		this.returnTargets = [];
-		this.resetViewedSessionState();
-		// Reset the spawn baseline with the strip: without this the next
-		// children refresh reads every subagent of the resumed session as
-		// "newly spawned" and blasts a card for each into the transcript.
-		this.resetChildrenBaseline();
-		this.beginRpcRestore();
-		if (await this.restoreOwnRpcView(epoch)) this.scheduleChildrenRefresh();
-		return;
-	}
-	const error = response.error ?? "unknown error";
-	if (/already active/i.test(error)) {
-		const id = sessionId;
-		const attached = await this.attachViaDaemon(id, sessionPath, epoch);
-		if (this.disposed || epoch !== this.viewEpoch) return;
-		if (attached) {
-			const currentAttachment = this.attached;
-			if (!currentAttachment || epoch !== this.viewEpoch) return;
-			if (previousAttachment && currentAttachment !== previousAttachment && this.sidecar?.connected) {
-				try {
-					await this.detachDaemonSession(this.sidecar, previousAttachment.activeSessionId);
-				} catch {
-					// The daemon may already have released the prior viewer.
-				}
-			}
-			if (!(await this.clearObservation(observedAtStart, epoch))) return;
-			this.returnTargets = [];
-			return;
-		}
-		if (isTransientWorkerAttachError(this.lastDaemonAttachError ?? "")) {
-			// v0.9+: the daemon made attach wait on worker recovery, then told
-			// us the wait was interrupted and to retry. From a plain own-RPC
-			// view the retry rides the same ladder a socket drop uses —
-			// demoting to the read-only observe fallback would outlive the
-			// recovery it reacted to. That ladder is built for
-			// attached === null only: queued from an attached view it could
-			// never arm (isReattaching() stays false), and from an observing
-			// view a successful re-attach would be rolled back as stale —
-			// an attach/rollback loop. Those keep their current view; the
-			// worker settles in seconds and a fresh click lands normally.
-			if (this.attached === null && this.observingId === null && !this.observationRestoring) {
-				const canonical = this.lastDaemonAttachCanonicalId ?? id;
-				this.attachAttempt = { activeSessionId: canonical, sessionPath, sessionId: id };
-				this.attachAttemptEpoch = epoch;
-				this.scheduleReattach(0);
-				this.broadcast({
-					type: "notice",
-					level: "info",
-					text: "That session's worker is still recovering — the view will attach automatically when it is ready.",
-				});
-				this.pushStatus();
-				return;
-			}
-			this.broadcast({
-				type: "notice",
-				level: "info",
-				text: "That session's worker is still recovering — try again in a moment.",
-			});
-			this.restoreAttachedView(previousAttachment, epoch);
-			return;
-		}
-		const observed = await this.startObserving(id, previousAttachment, epoch, sessionPath, observedAtStart);
-		if (this.disposed || epoch !== this.viewEpoch) return;
-		if (observed) return;
-		this.restoreAttachedView(previousAttachment, epoch);
-		this.broadcast({
-			type: "notice",
-			level: "warning",
-			text:
-				"That session is live in another client (likely a terminal). Close it there first, " +
-				"then resume from here.",
-		});
-		return;
-	}
-	this.broadcast({ type: "notice", level: "error", text: `Could not resume session: ${error}` });
-	this.restoreAttachedView(previousAttachment, epoch);
 },
 
 async startObserving(
@@ -537,7 +474,9 @@ async attachViaDaemon(this: SessionController, activeSessionId: string, sessionP
 		// The daemon may reveal its UUID only in a later get_state reply; changing
 		// `sessionId` mid-view otherwise looks like a new chat and clears its draft.
 		const stableSessionId = uuid ?? (sessionPath ? path.basename(sessionPath, ".jsonl") : finalId);
-		const attachment = { activeSessionId: finalId, sessionPath, sessionId: stableSessionId };
+		const resolvedSessionPath =
+			snapshot?.summary?.sessionFile ?? (snapshot?.state as { sessionFile?: string } | undefined)?.sessionFile ?? sessionPath;
+		const attachment = { activeSessionId: finalId, sessionPath: resolvedSessionPath, sessionId: stableSessionId };
 		this.attached = attachment;
 		this.attachedEpoch = epoch;
 		this.attachAttempt = { activeSessionId: finalId, sessionPath, sessionId: stableSessionId };
@@ -572,6 +511,11 @@ async attachViaDaemon(this: SessionController, activeSessionId: string, sessionP
 		this.observationRestoring = false;
 		this.creatingSessionEpoch = null;
 		this.applyAttachedSnapshot(snapshot);
+		try {
+			await this.persistForegroundSession(stableSessionId, resolvedSessionPath);
+		} catch (err) {
+			this.output.appendLine(`[prime-agent] could not remember foreground session: ${String(err)}`);
+		}
 		return true;
 	} catch (error) {
 		this.lastDaemonAttachError = error instanceof Error ? error.message : String(error);
