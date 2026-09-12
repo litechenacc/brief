@@ -9,13 +9,12 @@ with zipfile.ZipFile(vsix) as z:
     manifest = z.read("extension.vsixmanifest").decode()
     pkg = json.loads(z.read("extension/package.json"))
 
-missing = [p for p in ("extension/media/icon.png", "extension/media/activity.svg") if p not in names]
-if missing:
-    raise SystemExit(f"vsix missing: {missing}")
+if "extension/media/icon.png" not in names:
+    raise SystemExit("vsix missing: extension/media/icon.png")
 if pkg.get("icon") != "media/icon.png":
     raise SystemExit(f"package.json icon={pkg.get('icon')!r}")
 activity = pkg["contributes"]["viewsContainers"]["activitybar"][0]["icon"]
-if activity != "media/activity.svg":
+if activity != "$(comment-discussion)":
     raise SystemExit(f"activitybar icon={activity!r}")
 if "Microsoft.VisualStudio.Services.Icons.Default" not in manifest:
     raise SystemExit("vsixmanifest missing Icons.Default")

@@ -45,7 +45,7 @@
         {
           "id": "brief",
           "title": "Brief",
-          "icon": "media/activity.svg"
+          "icon": "$(comment-discussion)"
         }
       ]
     },
