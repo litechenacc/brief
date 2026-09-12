@@ -1750,7 +1750,7 @@ pre.term {
 	transition: opacity 0.12s ease;
 }
 
-.row-assistant:hover .usage-copy,
+.row-assistant:hover:not(:has(.tool:hover)) .usage-copy,
 .usage-line:focus-within .usage-copy {
 	opacity: 1;
 }
