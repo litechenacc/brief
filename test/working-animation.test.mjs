@@ -107,6 +107,16 @@ try {
 			assert.ok(await row.evaluate(el => getComputedStyle(el).backgroundImage.includes("rgb(0, 95, 184)")),
 				"light theme uses a colored sweep instead of gray-to-black shading");
 		}
+		await page.evaluate(() => document.body.style.setProperty("--vscode-textLink-foreground", "#cc00cc"));
+		const gradient = await row.evaluate(el => getComputedStyle(el).backgroundImage);
+		assert.ok(gradient.includes("90deg"), "sweep has no diagonal slant");
+		if (theme.name === "vscode-dark") {
+			assert.ok(gradient.includes("rgb(255, 255, 255)"), "dark theme uses white light");
+			assert.ok(!gradient.includes("rgb(204, 0, 204)"), "dark light does not inherit link color");
+		} else {
+			assert.ok(gradient.includes("rgb(204, 0, 204)"), "light sweep follows theme link color changes");
+		}
+		await page.evaluate(() => document.body.style.removeProperty("--vscode-textLink-foreground"));
 	}
 	const layout = await page.locator(".working-row").evaluate(row => {
 
