@@ -1,4 +1,4 @@
-/** VS Code login UI backed by the user's installed Prime Agent SDK. */
+/** VS Code credential UI backed by the user's installed Prime Agent SDK. */
 import * as vscode from "vscode";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
@@ -13,28 +13,42 @@ interface ProviderChoice {
 	detail?: string;
 }
 
-let activeLogin: Promise<boolean> | undefined;
+let activeAuth: { action: "login" | "logout"; result: Promise<boolean> } | undefined;
 
 /** True means the SDK saved credentials. The caller must refresh available models. */
 export function loginPrimeAgent(options: PrimeAuthOptions): Promise<boolean> {
-	if (activeLogin) return activeLogin;
-	activeLogin = runLogin(options).finally(() => { activeLogin = undefined; });
-	return activeLogin;
+	return startAuth(options, "login");
 }
 
-async function runLogin(options: PrimeAuthOptions): Promise<boolean> {
+/** True means stored credentials were removed. The caller must refresh models. */
+export function logoutPrimeAgent(options: PrimeAuthOptions): Promise<boolean> {
+	return startAuth(options, "logout");
+}
+
+function startAuth(options: PrimeAuthOptions, action: "login" | "logout"): Promise<boolean> {
+	if (activeAuth) {
+		if (activeAuth.action === action) return activeAuth.result;
+		void vscode.window.showWarningMessage("Finish or cancel the current Prime Agent login/logout first.");
+		return Promise.resolve(false);
+	}
+	const result = runAuth(options, action).finally(() => { activeAuth = undefined; });
+	activeAuth = { action, result };
+	return result;
+}
+
+async function runAuth(options: PrimeAuthOptions, action: "login" | "logout"): Promise<boolean> {
 	if (options.signal?.aborted) return false;
 	try {
 		const runtime = await resolvePrimeAuthRuntime(options);
 		if (options.signal?.aborted) return false;
 		return await vscode.window.withProgress({
 			location: vscode.ProgressLocation.Notification,
-			title: "Prime Agent login",
+			title: `Prime Agent ${action}`,
 			cancellable: true,
 		}, (progress, cancellation) => new Promise<boolean>((resolveResult) => {
 			const uiCancellation = new vscode.CancellationTokenSource();
 			const child = spawn(runtime.node, [
-				options.helperPath ?? join(__dirname, "prime-auth-helper.mjs"), runtime.sdk,
+				options.helperPath ?? join(__dirname, "prime-auth-helper.mjs"), runtime.sdk, action,
 			], {
 				cwd: options.cwd, env: runtime.env,
 				// SDK dependencies may print sensitive diagnostics. Only IPC is read.
@@ -66,18 +80,18 @@ async function runLogin(options: PrimeAuthOptions): Promise<boolean> {
 			const abort = (): void => finish(false);
 			const cancelSubscription = cancellation.onCancellationRequested(abort);
 			const startupTimer = setTimeout(() => finish(false, "The installed Prime Agent SDK did not start. Check its Node.js runtime and installation."), 30_000);
-			const loginTimer = setTimeout(() => finish(false, "Prime Agent login timed out. Please try again."), 10 * 60_000);
+			const loginTimer = setTimeout(() => finish(false, `Prime Agent ${action} timed out. Please try again.`), 10 * 60_000);
 			options.signal?.addEventListener("abort", abort, { once: true });
 			const send = (message: object): void => {
 				if (!finished && child.connected) child.send(message, (error) => {
-					if (error) finish(false, "Prime Agent login connection failed.");
+					if (error) finish(false, `Prime Agent ${action} connection failed.`);
 				});
 			};
 			child.on("error", () => finish(false, "Could not start the installed Prime Agent Node.js runtime."));
-			child.on("exit", () => finish(false, "Prime Agent login stopped before completion."));
+			child.on("exit", () => finish(false, `Prime Agent ${action} stopped before completion.`));
 			child.on("message", (value: unknown) => {
 				if (finished) return;
-				void handleMessage(value).catch(() => finish(false, "Prime Agent login could not complete."));
+				void handleMessage(value).catch(() => finish(false, `Prime Agent ${action} could not complete.`));
 			});
 			async function handleMessage(value: unknown): Promise<void> {
 				if (!value || typeof value !== "object") throw new Error("Invalid login message");
@@ -89,14 +103,29 @@ async function runLogin(options: PrimeAuthOptions): Promise<boolean> {
 						clearTimeout(startupTimer);
 						const rows = message.choices as ProviderChoice[];
 						if (rows.some((row) => !row || typeof row.id !== "string" || typeof row.name !== "string" || !["oauth", "api_key"].includes(row.method))) throw new Error("Invalid provider");
+						if (action === "logout" && rows.length === 0) {
+							void vscode.window.showInformationMessage("No stored model-provider credentials to remove.");
+							finish(false); return;
+						}
 						const choice = await vscode.window.showQuickPick(rows.map((row) => ({
 							label: row.name,
-							description: row.unsupported ? "Unsupported in Brief" : row.method === "oauth" ? "Browser login (OAuth)" : "API key",
+							description: action === "logout" ? "Stored credentials" : row.unsupported ? "Unsupported in Brief" : row.method === "oauth" ? "Browser login (OAuth)" : "API key",
 							detail: row.unsupported ?? row.detail,
 							provider: row,
-						})), { title: "Prime Agent: Login", placeHolder: "Choose a provider and login method", ignoreFocusOut: true }, uiCancellation.token);
+						})), { title: action === "logout" ? "Prime Agent: Logout" : "Prime Agent: Login", placeHolder: action === "logout" ? "Choose a provider to remove stored credentials" : "Choose a provider and login method", ignoreFocusOut: true }, uiCancellation.token);
 						if (finished) return;
 						if (!choice) { finish(false); return; }
+						if (action === "logout") {
+							const confirmed = await vscode.window.showWarningMessage(
+								`Remove stored credentials for ${choice.provider.name}?`,
+								{ modal: true, detail: "Shared credentials may affect other Brief and CLI sessions. Environment variables and external tool credentials are not removed. Provider tokens and browser sessions may remain valid. Running requests may continue; agents and sessions will not be stopped or restarted." },
+								"Remove credentials",
+							);
+							if (finished) return;
+							if (confirmed !== "Remove credentials") { finish(false); return; }
+							send({ type: "logout", provider: choice.provider.id, method: choice.provider.method });
+							return;
+						}
 						if (choice.provider.unsupported) {
 							void vscode.window.showWarningMessage(choice.provider.unsupported);
 							finish(false); return;
@@ -125,7 +154,7 @@ async function runLogin(options: PrimeAuthOptions): Promise<boolean> {
 							answer = selected?.id;
 						} else if (message.kind === "input") {
 							answer = await vscode.window.showInputBox({
-								title: "Prime Agent login", prompt: message.message,
+								title: `Prime Agent ${action}`, prompt: message.message,
 								placeHolder: typeof message.placeholder === "string" ? message.placeholder : undefined,
 								password: true, ignoreFocusOut: true,
 								validateInput: (input) => message.allowEmpty || input.trim() ? undefined : "Enter a value or press Escape to cancel.",
@@ -140,9 +169,11 @@ async function runLogin(options: PrimeAuthOptions): Promise<boolean> {
 						if (typeof message.message === "string") progress.report({ message: message.message });
 						return;
 					case "done":
-						void vscode.window.showInformationMessage("Prime Agent credentials saved. Existing environment settings can override saved API keys.");
+						void vscode.window.showInformationMessage(action === "logout"
+							? "Saved provider credentials removed. Environment settings may still provide access."
+							: "Prime Agent credentials saved. Existing environment settings can override saved API keys.");
 						finish(true); return;
-					case "error": finish(false, typeof message.message === "string" ? message.message : "Prime Agent login failed."); return;
+					case "error": finish(false, `Prime Agent ${action} failed. Credentials may not have been ${action === "logout" ? "fully removed" : "saved"}. Check the installed SDK and auth configuration.`); return;
 					default: throw new Error("Unknown login message");
 				}
 			}
@@ -150,7 +181,7 @@ async function runLogin(options: PrimeAuthOptions): Promise<boolean> {
 		}));
 	} catch {
 		// Do not display arbitrary SDK, process, or filesystem exception payloads.
-		void vscode.window.showErrorMessage("Prime Agent login is unavailable. Configure brief.command with the npm-installed prime-agent executable and its Node.js runtime.");
+		void vscode.window.showErrorMessage(`Prime Agent ${action} is unavailable. Configure brief.command with the npm-installed prime-agent executable and its Node.js runtime.`);
 		return false;
 	}
 }

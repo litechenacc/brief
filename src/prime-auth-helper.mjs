@@ -1,4 +1,5 @@
 /** Runs only in the installed agent's Node runtime. No SDK code is bundled. */
+import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 // Standard API-key entry cannot reproduce these providers' private/external setup.
@@ -25,7 +26,24 @@ export function providerChoices(auth, registry) {
 	return choices.sort((a, b) => a.name.localeCompare(b.name) || a.method.localeCompare(b.method));
 }
 
-export async function runAuthHelper(sdkUrl, channel = process) {
+export function logoutChoices(auth, registry) {
+	const ids = new Set(auth.list());
+	// Status APIs can hide the saved Prime CLI key behind an environment key.
+	// Use the public SDK path, but never send credential material over IPC.
+	const configPath = auth.getPrimeCliConfigPath();
+	if (configPath) {
+		let config;
+		try { config = JSON.parse(readFileSync(configPath, "utf8")); }
+		catch (error) { if (error.code !== "ENOENT") throw error; }
+		if (config !== undefined && (!config || typeof config !== "object" || Array.isArray(config))) throw new Error("Invalid Prime CLI config");
+		if (config && typeof config.api_key === "string" && config.api_key.trim()) ids.add("prime-inference");
+	}
+	return [...ids].filter((id) => !id.startsWith("mcp:") && !unsupported[id]).map((id) => ({
+		id, name: registry.getProviderDisplayName(id), method: auth.get(id)?.type === "oauth" ? "oauth" : "api_key",
+	})).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export async function runAuthHelper(sdkUrl, channel = process, action = "login") {
 	const send = (message) => { if (channel.connected) channel.send(message); };
 	const controller = new AbortController();
 	const pending = new Map();
@@ -54,12 +72,14 @@ export async function runAuthHelper(sdkUrl, channel = process) {
 			else { entry.reject(new Error("Cancelled")); cancel(); }
 			return;
 		}
-		if (message?.type !== "login" || busy || !choices) return;
+		if (message?.type !== action || busy || !choices || controller.signal.aborted) return;
 		busy = true;
 		try {
 			const choice = choices.find((row) => row.id === message.provider && row.method === message.method);
 			if (!choice || choice.unsupported) throw new Error("Unsupported provider");
-			if (choice.method === "api_key") {
+			if (action === "logout") {
+				auth.logout(choice.id);
+			} else if (choice.method === "api_key") {
 				const key = await ask("input", { message: `API key for ${choice.name}`, password: true });
 				if (!key.trim() || key.trim().startsWith("!")) throw new Error("Invalid API key");
 				if (controller.signal.aborted) return;
@@ -79,7 +99,7 @@ export async function runAuthHelper(sdkUrl, channel = process) {
 			if (!controller.signal.aborted) send({ type: "done" });
 		} catch {
 			// SDK errors can include tokens, redirect URLs, or HTTP response bodies.
-			send({ type: "error", message: "Prime Agent login failed or credentials could not be saved. Try again and check the provider configuration." });
+			send({ type: "error", message: `Prime Agent ${action} failed. Credentials may not have been ${action === "logout" ? "fully removed" : "saved"}. Check the provider configuration.` });
 		}
 	});
 	try {
@@ -87,11 +107,11 @@ export async function runAuthHelper(sdkUrl, channel = process) {
 		auth = AuthStorage.create();
 		const registry = ModelRegistry.create(auth);
 		if (auth.drainErrors().length || registry.getError()) throw new Error("Cannot load auth configuration");
-		choices = providerChoices(auth, registry);
+		choices = action === "logout" ? logoutChoices(auth, registry) : providerChoices(auth, registry);
 		send({ type: "ready", choices });
 	} catch {
 		send({ type: "error", message: "Cannot load the installed Prime Agent SDK or its auth configuration. Prime Agent requires Node.js 22.8 or newer." });
 	}
 }
 
-if (process.argv[2] && process.send) void runAuthHelper(pathToFileURL(process.argv[2]).href);
+if (process.argv[2] && process.send) void runAuthHelper(pathToFileURL(process.argv[2]).href, process, process.argv[3]);
