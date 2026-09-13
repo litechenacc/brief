@@ -84,13 +84,14 @@ try {
 	}
 	// Check painted text, not only computed animation properties, in both themes.
 	for (const theme of [
-		{ name: "vscode-dark", foreground: "#cccccc", background: "#181818" },
-		{ name: "vscode-light", foreground: "#616161", background: "#ffffff" },
+		{ name: "vscode-dark", foreground: "#cccccc", background: "#181818", accent: "#0078d4" },
+		{ name: "vscode-light", foreground: "#616161", background: "#ffffff", accent: "#0078d4" },
 	]) {
 		await page.evaluate(theme => {
 			document.body.className = theme.name;
 			document.body.style.setProperty("--vscode-foreground", theme.foreground);
 			document.body.style.setProperty("--vscode-sideBar-background", theme.background);
+			document.body.style.setProperty("--vscode-button-background", theme.accent);
 		}, theme);
 		for (const selector of [".working-mark", ".working-label", ".working-elapsed"]) {
 			await row.evaluate(el => { el.getAnimations()[0].currentTime = 0; });
@@ -104,36 +105,35 @@ try {
 				`${theme.name} visibly sweeps ${selector}, including elapsed time`);
 		}
 		if (theme.name === "vscode-light") {
-			assert.ok(await row.evaluate(el => getComputedStyle(el).backgroundImage.includes("rgb(0, 95, 184)")),
-				"light theme uses a colored sweep instead of gray-to-black shading");
+			assert.ok(await row.evaluate(el => getComputedStyle(el).backgroundImage.includes("rgb(0, 120, 212)")),
+				"light theme uses the theme accent instead of gray-to-black shading");
 		}
-		await page.evaluate(() => document.body.style.setProperty("--vscode-textLink-foreground", "#cc00cc"));
+		await page.evaluate(() => document.body.style.setProperty("--vscode-button-background", "#cc00cc"));
 		const gradient = await row.evaluate(el => getComputedStyle(el).backgroundImage);
 		assert.ok(gradient.includes("90deg"), "sweep has no diagonal slant");
 		if (theme.name === "vscode-dark") {
 			assert.ok(gradient.includes("rgb(255, 255, 255)"), "dark theme uses white light");
-			assert.ok(!gradient.includes("rgb(204, 0, 204)"), "dark light does not inherit link color");
+			assert.ok(!gradient.includes("rgb(204, 0, 204)"), "dark light does not inherit the theme accent");
 		} else {
-			assert.ok(gradient.includes("rgb(204, 0, 204)"), "light sweep follows theme link color changes");
+			assert.ok(gradient.includes("rgb(204, 0, 204)"), "light sweep follows theme accent changes");
 		}
-		await page.evaluate(() => document.body.style.removeProperty("--vscode-textLink-foreground"));
+		await page.evaluate(theme => document.body.style.setProperty("--vscode-button-background", theme.accent), theme);
 	}
 	const layout = await page.locator(".working-row").evaluate(row => {
-
 		const label = row.querySelector(".working-label");
 		const elapsed = row.querySelector(".working-elapsed");
 		return {
 			rowWidth: row.getBoundingClientRect().width,
 			contentWidth: elapsed.getBoundingClientRect().right - row.getBoundingClientRect().left,
-			gapBeforeDot: elapsed.getBoundingClientRect().left - label.getBoundingClientRect().right,
-			gapAfterDot: getComputedStyle(elapsed).gap,
-			dot: getComputedStyle(elapsed, "::before").content,
+			gapBeforeTime: elapsed.getBoundingClientRect().left - label.getBoundingClientRect().right,
+			ellipsis: getComputedStyle(label, "::after").content,
+			elapsedPrefix: getComputedStyle(elapsed, "::before").content,
 		};
 	});
 	assert.ok(Math.abs(layout.rowWidth - layout.contentWidth - 2) < 1, "gradient fits the text, not the transcript width");
-	assert.equal(layout.gapBeforeDot, 8);
-	assert.equal(layout.gapAfterDot, "8px");
-	assert.equal(layout.dot, '"·"');
+	assert.equal(layout.gapBeforeTime, 8);
+	assert.equal(layout.ellipsis, '"..."');
+	assert.equal(layout.elapsedPrefix, "none");
 	const statusMotion = await page.locator(".status-strip").evaluate(strip => {
 		const dot = strip.querySelector(".conn-dot");
 		const label = strip.querySelector(".live-label");
@@ -211,6 +211,7 @@ try {
 			document.body.className = "vscode-light";
 			document.body.style.setProperty("--vscode-foreground", "#616161");
 			document.body.style.setProperty("--vscode-sideBar-background", "#ffffff");
+			document.body.style.setProperty("--vscode-button-background", "#0078d4");
 			window.dispatchEvent(new MessageEvent("message", { data: {
 				type: "status", status: { connected: true, sessionId: "created", modelProvider: provider, modelId: "test-model", modelLabel: `${provider}/test-model` },
 			} }));

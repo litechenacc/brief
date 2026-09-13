@@ -515,7 +515,7 @@ textarea::-webkit-scrollbar {
 
 body.vscode-light .working-row {
 	background-image: linear-gradient(90deg, transparent,
-		var(--vscode-textLink-foreground, #005fb8), transparent),
+		var(--pa-accent), transparent),
 		linear-gradient(currentColor, currentColor);
 }
 
@@ -550,16 +550,13 @@ body.vscode-light .working-row {
 	to { background-position: calc(100% + 48px) 0, 0 0; }
 }
 
-.working-elapsed {
-	display: inline-flex;
-	align-items: center;
-	gap: 8px;
-	white-space: nowrap;
-	font-variant-numeric: tabular-nums;
+.working-label::after {
+	content: "...";
 }
 
-.working-elapsed:not(:empty)::before {
-	content: "·";
+.working-elapsed {
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
 }
 
 @media (forced-colors: active) {
