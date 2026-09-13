@@ -1,96 +1,63 @@
 # Brief
 
-**A fork built specifically for Prime Agent + VS Code. One workspace, multiple parallel sessions, and a chat layout that fits the way you code.**
+**A personal take on Prime Agent in VS Code. One workspace, parallel sessions, and chat that fits the way you code.**
 
-Brief is an independent fork of [sirouk/prime-agent-vscode](https://github.com/sirouk/prime-agent-vscode), powered by [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent). It keeps the upstream foundation and builds on it with daemon-backed sessions, native editor tabs, sidebar support, and extensive interaction and reliability fixes.
+English | [繁體中文](README.zh-TW.md)
 
-**Version 0.3.0 marks a milestone for conversation-based work inside VS Code:** managing parallel agent conversations, leaving and returning to ongoing work, and moving between code and chat are now the core Brief experience.
+Brief is an independent fork of [sirouk/prime-agent-vscode](https://github.com/sirouk/prime-agent-vscode), powered by [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent). It is built around my daily workflow and preferences—not an attempt to define the right interface for everyone.
 
-> **Community project.** Brief is not published by, endorsed by, or affiliated with Prime Intellect. Prime Agent names the runtime that Brief uses.
+The current release is ready for my everyday use. Some UI edges remain, and improvements follow real use rather than a promise of a perfectly polished experience.
 
-## Built for one workspace, many sessions
+> **Community project.** Brief is not published by, endorsed by, or affiliated with Prime Intellect. Prime Agent provides the runtime; Brief provides the VS Code interface.
 
-Run separate conversations for implementation, investigation, review, or tests without opening a VS Code window for each task.
+![Brief with a session list on the left, native editor tabs, activity indicators, and a conversation outline.](media/screenshots/editor-tabs.png)
 
-- **Independent sessions.** Each new session runs in its own daemon-resident worker. Starting another conversation does not replace the one already working.
-- **Multiple editor tabs.** Keep one session per native VS Code tab. Drag tabs into different editor groups to compare conversations or work beside your code.
-- **A code-first sidebar.** Keep the editor area for source files and use Brief in the sidebar. Switch between sessions without stopping their work.
-- **Close the view, not the work.** Close a session tab, reload the window, or quit VS Code while the agent continues in the Prime Agent daemon. Reopen the workspace and return to the session later.
-- **Workspace session history.** Reopen, rename, and archive conversations, with activity status and subagent visibility.
+*Editor Tabs: browse and sort sessions, keep conversations alongside file tabs, and follow activity and the conversation outline.*
 
-Sessions share the workspace files; they are not isolated checkouts. Coordinate parallel edits when agents work on the same files.
+## What you can do
 
-## Editor tabs or sidebar—your choice
+### Choose Sidebar or Editor Tabs
 
-The default location is the **editor area**. Use the Command Palette to choose the layout that suits the task:
+Use **Sidebar** to keep the editor area for code, or **Editor Tabs** to give each conversation its own native VS Code tab. Drag tabs into separate editor groups to work beside code or compare conversations.
 
-| Command | What it does |
-| --- | --- |
-| `Brief: New Session` | Creates an independent session in the default location. Also available through `+` or `/new`. |
-| `Brief: Open Chat in Editor Tab` | Opens chat explicitly in the editor area. |
-| `Brief: Focus Chat` | Focuses chat using the default location. |
-| `Brief: Use Editor` | Moves the current session to an editor tab and remembers the workspace preference. |
-| `Brief: Use Sidebar` | Moves the current session to the sidebar and remembers the workspace preference. |
-| `Brief: Toggle Chat Location` | Switches the current session between editor and sidebar. |
-| `Brief: Switch Session` | Chooses an open session to display in the sidebar. |
-| `Brief: Session history` | Reopens a session from this workspace or the full session history without duplicating an already open session. |
+Run `Brief: Use Sidebar` or `Brief: Use Editor` to move the current session and remember the workspace preference. New sessions open in Editor Tabs by default. Moving a session does not stop its agent.
 
-Moving a session does not stop its agent or move other editor tabs. The sidebar shows one session at a time; a displaced session remains available in the session menu.
+![Brief chat in the VS Code Secondary Side Bar, with Explorer on the left and README open in the editor.](media/screenshots/sidebar.png)
 
-Drafts, attachments, and reading position transfer when moving between editor and sidebar. Finish sending, image processing, or input method composition before moving. Unsaved drafts, attachments, and scroll position are not guaranteed to survive closing or reloading a view.
+*Sidebar: Explorer, your file, and chat in one window. This example places Brief in the Secondary Side Bar.*
+
+### Work with parallel sessions
+
+Start independent conversations for implementation, investigation, review, or tests in one workspace. Browse session history, rename or archive conversations, and follow subagent activity.
+
+**Sessions share workspace files; they are not isolated checkouts.** Coordinate edits when agents work on the same files.
 
 ### Leave and return
 
-Closing a tab with `×` closes its view; it does **not** cancel the agent's work. Closing VS Code also disconnects the interface rather than terminating Brief's daemon-resident sessions.
+Closing a tab closes the view, not the work. Brief's sessions run in the Prime Agent daemon and can continue when you reload or close VS Code. Reopen the workspace and return through restored tabs or session history.
 
-Restored editor tabs reconnect using their saved session identity. Use workspace history to reopen a tab you closed or resume a saved conversation.
+This depends on the daemon and its host remaining available. It does not keep work running through machine shutdown, sleep, or runtime termination. To cancel a run, use the stop button or `Brief: Stop Agent`.
 
-To cancel the current run, use **`Brief: Stop Agent`** or the stop button in the composer.
+### Keep chat quieter without losing feedback
 
-This persistence depends on the Prime Agent daemon and its host remaining available. It does not keep computation running through machine shutdown, sleep, or termination of the runtime. Saved conversations can be resumed, but uninterrupted execution is a separate guarantee.
+Working indicators, elapsed time, session activity, and completion notifications make progress visible. Thinking, tool-output streaming, and usage details are separately configurable. Colors follow your VS Code theme, including High Contrast.
 
-## Faster feedback, quieter conversations
+These changes improve interface feedback and rendering—not model generation speed.
 
-This fork focuses on how chat feels during real coding work, not only on rendering the final answer.
+### Bring your working material into chat
 
-- **Immediate feedback.** Sending a prompt shows the working indicator immediately. New Session opens the empty composer while the worker starts, with sending disabled until the new session is ready.
-- **Refined animation.** Animated working indicators, cycling activity text, and elapsed time make ongoing work visible between replies and tool calls.
-- **Less visual noise.** Unfinished thinking and tool arguments stay behind the working row by default. Live transcript rendering, tool-output streaming, thought-process blocks, and usage details are separately configurable.
-- **History 與燈號。** 紅燈表示工作中，包含仍在執行的 subagent；綠燈表示目前 VS Code window 觀察到新的完成、尚未開啟查看。成功顯示對話後清除綠燈，不影響執行中的紅燈；已在前景查看時完成，不保留提醒。開始下一輪也會清除舊提醒。其他情況不顯示燈號。新安裝、開新 window 或 Reload Window 時，既有歷史只建立基準，不補發完成通知。提醒在同 window 的分頁與 sidebar 之間同步，不跨 window 保存；斷線或無法確認執行狀態時以文字提示，不推論為完成。
-- **Stable reading.** Transcript updates, scrolling, and view handoff are designed to keep you oriented while work continues.
-- **Native visual integration.** Chat colors follow the VS Code Color Theme, including High Contrast. Brief has its own app, activity-bar, and tab branding.
-
-These improvements target interface response and rendering; model generation speed still depends on your provider and runtime.
-
-## Coding conversation tools
-
-- Add selected code or the active file through the editor context menu. Context goes to the most recently used chat session.
-- Mention workspace files with `@`, attach images, and open session file links or native image previews.
-- Read formatted replies and tool cards, including syntax-highlighted Python cells.
-- Follow subagent activity and browse related conversations from the subagent strip.
-- Send steering messages or queue follow-ups while the agent works, with pending inputs shown separately from the transcript.
+- Add selected code or the active file from the editor context menu.
+- Mention workspace files with `@` and attach images.
+- Paste long text as an attachment you can open and edit in VS Code before sending.
+- Steer ongoing work or queue follow-up messages.
 - Inspect context usage, compact context, and export conversations as Markdown.
 
-The fork also includes fixes for session routing and reconnection, duplicate reply rendering, history actions, image handling, and input method composition. The focus is the existing chat workflow—not a replacement for the Prime Agent runtime.
+## Install and start
 
-## 貼上長文本與圖片
-
-超過 10 行或 1,000 字元的貼上內容會收成文本附件；短文本仍直接貼入輸入區。文本與圖片在輸入位置顯示 placeholder，並在上方顯示對應附件卡。點擊附件卡，或按住 Ctrl（macOS 為 Cmd）點擊 placeholder，使用 VS Code 開啟暫存文字檔或圖片預覽。
-
-- 文本可直接在 VS Code 編輯。送出時若引用的文本附件有未儲存修改，Brief 會詢問是否儲存這些附件並送出；取消或儲存失敗都不會送出。
-- 送出會讀取最新檔案內容：文本在 placeholder 位置展開，圖片沿用圖片附件傳送。不是只把暫存路徑交給 agent。
-- 刪除 placeholder 或附件卡會取消附加；Undo 可還原。取消附加不會立即刪除暫存檔。
-- 附件檔案位於平台暫存目錄內的 Brief 專屬子目錄。系統可能清理暫存檔；它們不是永久儲存。需要保留的內容請另存到工作區。
-- Editor/sidebar 搬移及 `/stash` 保留附件結構。跨重啟不保證圖片附件或卡片恢復；文本草稿可恢復成展開的純文字。
-- 圖片 placeholder 提供參照位置；目前 runtime 仍分開接收文字與圖片陣列，不保證文字／圖片內容區塊交錯排列。
-
-## Install
-
-### Requirements
+Requirements:
 
 - VS Code **1.90 or newer**, with a trusted, local-filesystem workspace.
 - A working [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent) installation and configured provider access.
-- For building from source: **Node.js 22 or newer**, npm, and the `code` command on `PATH`.
 
 Install Prime Agent first:
 
@@ -98,63 +65,56 @@ Install Prime Agent first:
 curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | sh
 ```
 
-Complete Prime Agent's setup and confirm that `prime-agent` works in your environment.
+Complete its setup and confirm that `prime-agent` works. Then install Brief through VS Code:
 
-### Build and install Brief
+1. Open [GitHub Releases](https://github.com/litechenacc/brief/releases) and download the release's `.vsix` asset (for version 0.3.1: `brief-0.3.1.vsix`). Do not download the source-code archive for installation.
+2. In VS Code, open **Extensions**, select **… → Install from VSIX…**, and choose the downloaded file. You can also run **Extensions: Install from VSIX...** from the Command Palette.
+3. Reload VS Code if prompted, open a trusted workspace, and run **Brief: New Session**.
 
-From this repository:
+To update, download the newer release's VSIX and repeat the installation. If VS Code cannot find the runtime, set `brief.command` to the absolute path of `prime-agent`.
 
-```sh
-npm ci
-npm run package
-code --install-extension brief-0.3.0.vsix --force
-```
+You do not need to clone this repository, install build tools, or run `just` to use a release. For source builds and customization, see [Development and forks](docs/usage.md#development-and-forks). For commands, settings, attachment behavior, and persistence limits, see the [usage guide](docs/usage.md).
 
-Or, with [just](https://github.com/casey/just) and Python 3 available:
+## Why this fork?
 
-```sh
-just install
-```
+Brief exists because [sirouk built and shared the original extension](https://github.com/sirouk/prime-agent-vscode). Thank you for providing the foundation that made this project possible.
 
-This packages and installs `litechenacc.brief`. Run **Developer: Reload Window**, then **Brief: New Session**.
+This fork reflects my personal working habits and preferences for chat layout, parallel sessions, and interaction design. Some of those choices differ from the original extension's direction. Rather than propose every preference as an upstream pull request, I maintain them here as a separate project.
 
-If VS Code cannot find the runtime, set `brief.command` to the absolute path of `prime-agent`.
+Different preferences do not make one version better for everyone. Use the original, use Brief, or make your own version.
 
-## Settings
+## Roadmap
 
-Settings use the `brief.*` namespace. All commands appear under **Brief** in the Command Palette.
+| Status | Direction |
+| --- | --- |
+| Available | Refined **Sidebar** chat for daily coding work. |
+| Available | **Editor Tabs** with native tabs and parallel sessions. |
+| Ongoing | Fix UI edges and interaction issues found during actual use. |
+| Exploring | **Document Workspace**: Markdown-centered collaboration between people and agent sessions, beyond a linear chat. |
 
-| Setting | Default | Purpose |
-| --- | --- | --- |
-| `brief.chatLocation` | `editor` | Default location for new sessions and Focus Chat: `editor` or `sidebar`. |
-| `brief.command` | `prime-agent` | Runtime command or absolute executable path. |
-| `brief.defaultStreamingBehavior` | `steer` | Delivery of messages sent during a run: `steer` or `followUp`. |
-| `brief.liveTranscript` | `false` | Render thinking and tool-call arguments while they stream. |
-| `brief.streamToolOutput` | `false` | Render tool output before the tool finishes. |
-| `brief.showThoughtProcess` | `false` | Show thought-process blocks; does not change the model's thinking level. |
-| `brief.showUsageDetails` | `false` | Show per-reply usage details. |
-| `brief.maxFileSearchResults` | `40` | Maximum results for `@` file search. |
-| `brief.sendSelectionSnippet` | `true` | Include selected code when adding a selection to chat. |
+Document Workspace is a working name for the earlier “Session Area” idea. The direction is to let people and agents work around editable Markdown documents, with sessions attached to the work. It is **not available in this release**. See the [design discussion](https://chatgpt.com/share/6aa639e7-39f8-83e8-afd7-2641ced62b0f) for background; it is exploratory, not an implementation specification.
 
-## Development
+This roadmap describes interests, not delivery commitments. There is no promised schedule.
 
-```sh
-npm ci
-npx playwright install chromium
-npm run compile
-npm run typecheck
-npm test
-npm run package
-```
+## Make it your own
 
-`npm test` includes Chromium layout and animation tests. Install the browser before running the suite.
+**Fork freely. Use an AI agent to make Brief fit your own habits and style.** You do not need my permission, and your fork does not need to follow my design direction. Please retain the copyright and license notices required by the MIT license.
 
-Open this folder in VS Code and press **F5** to launch an Extension Development Host. Use `npm run watch` for rebuilds while developing. `npm run test:live` runs integration checks that require a working Prime Agent environment.
+Issues and pull requests—including those made with AI agent assistance—are welcome. Please understand what you submit, explain its purpose, and include appropriate verification. You remain responsible for your submission, regardless of which tools helped create it.
+
+This is a personal project maintained in my spare time. **Do not expect a timely response, review, or merge.** A response or merge is not guaranteed at all. If you need a change, you are welcome to move ahead in your own fork rather than wait for me.
+
+## Use at your own risk
+
+**Brief is provided “as is,” without warranty. Use it at your own risk.** It drives an agent runtime that can execute commands and change workspace files. Review agent actions and changes, protect credentials, and keep backups or version control for work you care about.
+
+No support or maintenance is guaranteed. See [LICENSE](LICENSE) for the full warranty disclaimer and limitation of liability.
 
 ## Credits and license
 
-Brief exists because of [sirouk's original extension](https://github.com/sirouk/prime-agent-vscode). Thank you for building and sharing a working VS Code frontend for Prime Agent.
+- [sirouk/prime-agent-vscode](https://github.com/sirouk/prime-agent-vscode) — the original extension and foundation of this fork.
+- [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent) — the agent runtime.
+- [Lobe Icons](https://github.com/lobehub/lobe-icons) — provider icons; see [third-party notices](THIRD_PARTY_NOTICES.md).
+- Lite Chen — Brief fork modifications.
 
-[Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent) provides the agent runtime. Brief focuses on the VS Code conversation experience around it.
-
-**MIT** — see [LICENSE](LICENSE) for the original copyright and license terms. Prime Agent is a Prime Intellect trademark and is named only to identify the runtime this extension uses.
+Licensed under [MIT](LICENSE), retaining the original copyright notice and adding Lite Chen's notice for this fork's contributions. Prime Agent is a Prime Intellect trademark; this license grants no trademark rights.

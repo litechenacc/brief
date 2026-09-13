@@ -2,7 +2,7 @@
   "name": "brief",
   "displayName": "Brief",
   "description": "Brief is a persistent AI coding agent for VS Code.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "litechenacc",
   "license": "MIT",
   "icon": "media/icon.png",

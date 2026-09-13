@@ -13,6 +13,18 @@ After a cut, add the new version's compare link at the bottom and re-point [Unre
 
 ## [Unreleased]
 
+## [0.3.1]
+
+- Make GitHub Release VSIX installation the primary setup path; move source builds and `just` workflows to the development and fork guide.
+- Add English and Traditional Chinese introductions, redacted screenshots, feature highlights, and a roadmap.
+- Explain the fork's origins, welcome AI-assisted contributions, and state maintenance expectations and use-at-your-own-risk terms.
+- Retain the original MIT notice and add Lite Chen's copyright notice.
+- Exclude unredacted root-level screenshot inputs from extension packages.
+
+## Earlier development notes
+
+The entries below predate Brief's release documentation and retain their original version numbering.
+
 - **History archive is one click, and the rename icon matches the title-bar pencil.** Archive no longer asks for a second confirm click. The history rename glyph is the same pencil as `$(edit)` on the main session title bar.
 - **The current history row is clickable and its time/status sit on the right.** Clicking the open session closes history without reloading it. Titles ellipsize so the timestamp and status lamp stay aligned.
 - **History archive moves the row immediately and no longer toasts.** The list paints into Archive on click; the file write continues in the background. Failures still show an error. Success no longer posts the info banner.
@@ -345,7 +357,8 @@ After a cut, add the new version's compare link at the bottom and re-point [Unre
 - Test layers: webview DOM harness, export harness, activation harness, smoke, host e2e, headless
   screenshot matrix, and a persistent live-shell driver for real VS Code verification.
 
-[Unreleased]: https://github.com/sirouk/prime-agent-vscode/compare/v1.0.33...HEAD
+[Unreleased]: https://github.com/litechenacc/brief/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/litechenacc/brief/releases/tag/v0.3.1
 [1.0.33]: https://github.com/sirouk/prime-agent-vscode/compare/v1.0.32...v1.0.33
 [1.0.32]: https://github.com/sirouk/prime-agent-vscode/compare/v1.0.31...v1.0.32
 [1.0.31]: https://github.com/sirouk/prime-agent-vscode/compare/v1.0.30...v1.0.31
