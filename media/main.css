@@ -282,12 +282,8 @@ button:focus-visible {
 }
 
 .lens-marker[aria-current="true"] {
-	color: var(--vscode-textLink-foreground, #0875c4);
+	color: var(--pa-accent);
 	font-weight: 500;
-}
-
-body.vscode-dark .lens-marker[aria-current="true"] {
-	color: var(--vscode-textLink-foreground, #6caef5);
 }
 
 .lens-marker:hover {

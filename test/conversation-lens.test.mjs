@@ -111,6 +111,7 @@ try {
 			check("pointer remains over expanded outline", await page.evaluate(({x, y}) => !!document.elementFromPoint(x, y)?.closest(".conversation-lens"), { x: before.x + before.width - 4, y: before.y + 4 }));
 			check("all rows are fixed 30px without overlap", await markers.evaluateAll(rows => rows.every((row, i) => Math.abs(row.getBoundingClientRect().height - 30) < 0.1 && (i === 0 || Math.abs(row.getBoundingClientRect().top - rows[i - 1].getBoundingClientRect().bottom) < 0.1))));
 			const visibleMarker = page.locator('.lens-marker[aria-current="true"]');
+			check("current turn uses the theme accent", await visibleMarker.evaluate(el => getComputedStyle(el).color === "rgb(0, 120, 212)"));
 			const markerBefore = await visibleMarker.boundingBox();
 			await visibleMarker.hover();
 			check("row hover does not displace its target", JSON.stringify(markerBefore) === JSON.stringify(await visibleMarker.boundingBox()));
