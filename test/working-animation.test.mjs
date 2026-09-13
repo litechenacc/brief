@@ -45,6 +45,31 @@ try {
 	assert.equal(samples.name, "working-sheen");
 	assert.equal(samples.duration, "3s");
 	assert.notEqual(samples.start, samples.end);
+	for (const verb of ["Thinking", "Contemplating"]) {
+		await page.locator(".working-label").evaluate((el, text) => { el.textContent = text; }, verb);
+		for (const time of [0, 750, 1500, 2250]) {
+			const geometry = await row.evaluate((el, time) => {
+				el.getAnimations()[0].currentTime = time;
+				const rowStyle = getComputedStyle(el);
+				const iconStyle = getComputedStyle(el.querySelector(".working-mark"), "::before");
+				return {
+					rowWidth: el.getBoundingClientRect().width,
+					iconCanvasWidth: parseFloat(iconStyle.width),
+					rowPosition: rowStyle.backgroundPosition,
+					iconPosition: iconStyle.backgroundPosition,
+					rowSize: rowStyle.backgroundSize,
+					iconSize: iconStyle.backgroundSize,
+				};
+			}, time);
+			assert.ok(Math.abs(geometry.rowWidth - geometry.iconCanvasWidth) < 1,
+				"icon sweep canvas spans the row, not the icon's own width");
+			assert.equal(geometry.iconPosition, geometry.rowPosition, "icon and text share spatial coordinates at every phase");
+			assert.equal(geometry.rowSize, "48px 100%, 100% 100%", "light width stays fixed when the verb changes");
+			assert.equal(geometry.iconSize, geometry.rowSize);
+		}
+	}
+	await page.locator(".working-label").evaluate(el => { el.textContent = "Thinking"; });
+
 	for (const selector of [".working-mark", ".working-label", ".working-elapsed"]) {
 		const style = await page.locator(selector).evaluate(el => ({
 			animation: getComputedStyle(el).animationName,
@@ -70,7 +95,11 @@ try {
 		for (const selector of [".working-mark", ".working-label", ".working-elapsed"]) {
 			await row.evaluate(el => { el.getAnimations()[0].currentTime = 0; });
 			const before = await page.locator(selector).screenshot();
-			await row.evaluate(el => { el.getAnimations()[0].currentTime = 1650; });
+			await page.locator(selector).evaluate(el => {
+				const row = el.closest(".working-row");
+				const box = el.getBoundingClientRect(), bounds = row.getBoundingClientRect();
+				row.getAnimations()[0].currentTime = 3000 * (box.left - bounds.left + box.width / 2 + 24) / (bounds.width + 48);
+			});
 			assert.notDeepEqual(await page.locator(selector).screenshot(), before,
 				`${theme.name} visibly sweeps ${selector}, including elapsed time`);
 		}
@@ -177,15 +206,17 @@ try {
 			} }));
 		}, provider);
 		const mark = working.locator(".working-mark");
-		assert.ok(await mark.evaluate(el => getComputedStyle(el).maskImage.includes("data:image/svg+xml")),
+		assert.ok(await mark.evaluate(el => getComputedStyle(el, "::before").maskImage.includes("data:image/svg+xml")),
 			`${provider} uses its SVG shape as the sweep mask`);
 		await working.evaluate(el => { const a = el.getAnimations()[0]; a.pause(); a.currentTime = 0; });
 		const before = await mark.screenshot();
-		await working.evaluate(el => { el.getAnimations()[0].currentTime = 1500; });
+		await working.evaluate(el => {
+			el.getAnimations()[0].currentTime = 3000 * (2 + 7.5 + 24) / (el.getBoundingClientRect().width + 48);
+		});
 		assert.notDeepEqual(await mark.screenshot(), before, `${provider} icon visibly changes with the shared sweep`);
 		assert.equal(await working.evaluate(el => el.getAnimations({ subtree: true }).length), 1);
 		await startup.evaluate(() => document.body.classList.add("vscode-reduce-motion"));
-		assert.equal(await mark.evaluate(el => getComputedStyle(el).maskImage), "none");
+		assert.equal(await mark.evaluate(el => getComputedStyle(el, "::before").display), "none");
 		assert.equal(await mark.locator("svg").evaluate(el => getComputedStyle(el).visibility), "visible",
 			"reduced motion keeps the original provider icon visible");
 	}
