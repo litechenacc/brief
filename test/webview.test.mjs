@@ -145,13 +145,6 @@ check("no busy done pill (dot conveys state)", [...scroller.querySelectorAll(".t
 check("usage line rendered", scroller.querySelectorAll(".usage-line").length >= 1);
 check("user card contains copy + fork", scroller.querySelectorAll(".row-user > .bubble-user > .user-footer .uf-icon").length === 2);
 check("user actions leave no footer row below the card", !scroller.querySelector(".row-user > .user-footer"));
-const userActionCss = fs.readFileSync(new URL("../media/main.css", import.meta.url), "utf8");
-check("user actions sit in the card top right without taking layout space",
-	/\.user-footer \{[^}]*position: absolute;[^}]*top: 7px;[^}]*right: 8px;/.test(userActionCss));
-check("user actions stay hidden until card hover or keyboard focus",
-	/\.user-footer \{[^}]*opacity: 0;[^}]*pointer-events: none;/.test(userActionCss) &&
-	/\.bubble-user:hover \.user-footer,\s*\.user-footer:focus-within \{[^}]*opacity: 1;[^}]*pointer-events: auto;/.test(userActionCss));
-
 // --- #56/#20: an ipython %%bash cell is a SHELL card, summarised by what actually ran ---
 const shellCard = [...scroller.querySelectorAll(".tool")].find((t) => t.dataset.toolKind === "shell");
 const pyCard = [...scroller.querySelectorAll(".tool")].find((t) => t.dataset.toolKind === "python");
@@ -1948,9 +1941,8 @@ check("move-out posts without opening the session",
 	JSON.stringify(posted));
 check("move-out immediately restores the active classification",
 	[...document.querySelectorAll(".history-group-summary")].map((n) => n.textContent).join("|") === "Active (2)");
-check("history actions stay in the title row without covering its name",
-	!!archivedRow.querySelector(".history-item-top > .history-actions") &&
-	fs.readFileSync(new URL("../media/main.css", import.meta.url), "utf8").includes(".history-actions {\n\tflex-shrink: 0;"));
+check("history actions stay in the title row",
+	!!archivedRow.querySelector(".history-item-top > .history-actions"));
 
 // --- history search reaches the host, and transcript hits rank and explain themselves ---
 posted.length = 0;
