@@ -14,6 +14,25 @@ The current release is ready for my everyday use. Some UI edges remain, and impr
 
 *Editor Tabs: browse and sort sessions, keep conversations alongside file tabs, and follow activity and the conversation outline.*
 
+## Features I love
+
+I develop Brief out of love for code and Prime Agent. These are the details that make me happy to use it every day:
+
+![Brief feature tour: agent conversation bubbles, native tabs, outline, activity, message controls, and more.](media/screenshots/features-annotated.png)
+
+The numbers below match the image. **01–06 highlight visible UI; 07–10 are feature notes for states or actions not shown in this screenshot.**
+
+1. **Conversation bubbles between agents.** Prime Agent lets agents talk to each other to coordinate their work. I love showing those exchanges as conversation bubbles in Brief, with each agent's avatar and name: collaboration becomes something I can follow, not just parallel activity behind the scenes.
+2. **Native tabs, side by side in VS Code.** Conversations get native editor tabs alongside files. You can drag them into separate editor groups to work beside code or other conversations. This feels incredibly comfortable. The screenshot shows the tabs, not a split layout.
+3. **A conversation outline on the right.** Jump back to the part of a session I want without scrolling through everything.
+4. **Subagent status at a glance.** The Subagents list shows who is running and who is idle, with links to their views. This is agent activity, not the `bash` or background task list described in 10.
+5. **A little “verbing,” borrowed from Claude Code.** I couldn't resist bringing those working-status verbs into Brief. Here, “Plotting…” appears with elapsed time.
+6. **One button for steer, queue, and send.** While the agent runs, the control offers **Steer** or **Queue**; when idle, the same control shows **Send**. The screenshot shows Steer, not all three options open at once.
+7. **Pending inputs stay visible.** Pending messages appear separately from the conversation, so I can see what is waiting rather than lose it among replies. This list is not visible in the screenshot.
+8. **Attachments have a place in the draft.** Images get placeholders where I insert them, and long pasted text can be opened and edited in VS Code before sending. Image placeholders show placement in the composer; they do not guarantee interleaved text/image order in the runtime. The screenshot contains a previously sent image, not draft placeholders or the text-editing workflow.
+9. **Sort sessions and open the actual files.** Session History offers **Priority** and **Birth time** sorting. Files linked in the conversation can open directly in VS Code. These help me decide what to look at next and stay close to the code, not just the agent's description. The sorting menu and file-opening action are not shown here.
+10. **Notifications and status management for `bash` and background tasks.** Something I had long wanted while using Prime Agent: a clearer view of work that is still running and work that has finished. Running tasks and completion notifications are separate from Subagents; the Running tasks list disappears when there are no active tasks. These task states are not shown in this screenshot.
+
 ## What you can do
 
 ### Choose Sidebar or Editor Tabs
@@ -84,6 +103,22 @@ Brief exists because [sirouk built and shared the original extension](https://gi
 This fork reflects my personal working habits and preferences for chat layout, parallel sessions, and interaction design. Some of those choices differ from the original extension's direction. Rather than propose every preference as an upstream pull request, I maintain them here as a separate project.
 
 Different preferences do not make one version better for everyone. Use the original, use Brief, or make your own version.
+
+## Deliberate choices and limits
+
+### VS Code, because I still want to know my code
+
+Over the past few months, I have barely written a few lines of code by hand. I still want to understand my projects through the file tree and by opening the actual files. Many agentic interfaces do not give me the file browsing and code navigation I want. VS Code, with its Language Server Protocol (LSP) support and familiar editor tools, still feels best to me. Choosing it as Brief's home is deliberate, not incidental.
+
+### One workspace, multiple conversations
+
+I chose to keep multiple conversations in one workspace because **agents in Prime Agent can talk to each other**, not just work in parallel. They can discuss the work, coordinate changes, and keep each other informed without me relaying every message. That is why I feel comfortable letting them work in the same workspace instead of worrying simply because they are working at the same time. I designed their exchanges as conversation bubbles in Brief so I can see that collaboration happen. Communication is not a guarantee against conflicting edits; shared files still need coordination.
+
+What I get in return is a deeper understanding of that workspace. Brief is not built as a control center for simultaneous work across many repositories. For me, spreading work across repositories sharply reduces my sense of control and doubles the mental load. Staying with one workspace is a trade-off I want to make.
+
+### A fit for how I work now
+
+Maybe, with more tokens to spend on multi-agent systems, event-driven workflows, and loops, this setup will no longer be what I need. I do not expect it to fit every future workflow. For now, it fits mine very well—and lets me keep developing quickly on top of it.
 
 ## Roadmap
 
