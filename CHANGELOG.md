@@ -8,6 +8,8 @@ All notable changes to this extension are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.3]
+
 - Use the current model provider's icon for the working indicator, with a shared shimmer animation across the icon, status text, and timer. Improve visibility in light themes and respect VS Code's reduced-motion setting and high-contrast mode.
 - Move the conversation outline into a translucent drawer aligned with the right edge, with shorter collapsed rows to reduce its footprint.
 - Fix outline selection in short conversations and near scroll boundaries: keep the selected turn after a click and select the latest turn when a new message is sent.
@@ -364,7 +366,7 @@ The entries below predate Brief's release documentation and retain their origina
 - Test layers: webview DOM harness, export harness, activation harness, smoke, host e2e, headless
   screenshot matrix, and a persistent live-shell driver for real VS Code verification.
 
-[Unreleased]: https://github.com/litechenacc/brief/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/litechenacc/brief/compare/v0.3.3...HEAD
 [0.3.2]: https://github.com/litechenacc/brief/releases/tag/v0.3.2
 [0.3.1]: https://github.com/litechenacc/brief/releases/tag/v0.3.1
 [1.0.33]: https://github.com/sirouk/prime-agent-vscode/compare/v1.0.32...v1.0.33
@@ -401,3 +403,4 @@ The entries below predate Brief's release documentation and retain their origina
 [1.0.2]: https://github.com/sirouk/prime-agent-vscode/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/sirouk/prime-agent-vscode/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/sirouk/prime-agent-vscode/releases/tag/v1.0.0
+[0.3.3]: https://github.com/litechenacc/brief/releases/tag/v0.3.3
