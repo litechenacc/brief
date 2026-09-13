@@ -46,6 +46,7 @@ assert.equal(stamped.payload.sessionId, "01a05fe1-944a-7365-87b0-747f31bc9cf4", 
 assert.equal(parseWebviewMessage({ type: "prompt", payload: { ...prompt.payload, sessionId: "../../etc/passwd" } }), undefined);
 assert.equal(parsedPrompt.payload.sessionId, undefined, "an unstamped prompt still parses (older webview build)");
 
+assert.deepEqual(parseWebviewMessage({ type: "login", command: "untrusted" }), { type: "login" });
 assert.equal(parseWebviewMessage(null), undefined);
 assert.equal(parseWebviewMessage({ type: "unknown" }), undefined);
 assert.equal(parseWebviewMessage({ type: "prompt", payload: { ...prompt.payload, images: [{ data: "not base64", mimeType: "image/png" }] } }), undefined);

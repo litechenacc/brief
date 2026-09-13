@@ -346,6 +346,18 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 				}
 				return;
 			}
+			// Login must work even when the agent cannot start without credentials.
+			if (message.type === "login") {
+				if (view.closed || view.transferring || view.tab?.closed) return;
+				try {
+					const terminal = vscode.window.createTerminal("Prime Agent Login");
+					terminal.show();
+					terminal.sendText("prime-agent login", true);
+				} catch (error) {
+					void vscode.window.showErrorMessage(`Could not open Prime Agent login: ${String(error)}`);
+				}
+				return;
+			}
 			if (message.type === "ready") view.markReady();
 			const tab = view.tab;
 			if (view.sidebar && !tab && !view.closed && !view.transferring) {

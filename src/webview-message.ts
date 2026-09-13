@@ -213,6 +213,7 @@ export function parseWebviewMessage(value: unknown): WebviewToHost | undefined {
 		case "ready":
 		case "abort":
 		case "newSession":
+		case "login":
 		case "exportChat":
 		case "restart":
 		case "requestState":

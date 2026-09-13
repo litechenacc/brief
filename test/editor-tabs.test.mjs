@@ -12,6 +12,7 @@ const originalLoad = Module._load;
 const dir = mkdtempSync(join(tmpdir(), "brief-editor-tabs-"));
 const controllers = [];
 const panels = [];
+const terminalCalls = [];
 let chatLocation = "editor";
 let sidebar;
 let pickedSession;
@@ -91,7 +92,10 @@ const stub = {
 		if (!sidebar || sidebar.disposed) { sidebar = makePanel(false); manager.resolveWebviewView(sidebar); }
 	} },
 	ThemeIcon: class { constructor(id) { this.id = id; } },
-	window: { state: { focused: true }, onDidChangeWindowState: windowStateChange.subscribe, showQuickPick: async (items) => items.find((item) => item.description === pickedSession), createWebviewPanel(type, title, column, options) {
+	window: { createTerminal(name) {
+		terminalCalls.push(["create", name]);
+		return { show: () => terminalCalls.push(["show"]), sendText: (...args) => terminalCalls.push(["sendText", ...args]) };
+	}, state: { focused: true }, onDidChangeWindowState: windowStateChange.subscribe, showQuickPick: async (items) => items.find((item) => item.description === pickedSession), createWebviewPanel(type, title, column, options) {
 		assert.equal(type, "brief.chatPanel"); assert.equal(options.retainContextWhenHidden, true);
 		const panel = makePanel(); panel.activate(); return panel;
 	} },
@@ -130,6 +134,10 @@ try {
 	assert.deepEqual(controllers[0].calls.find(([name]) => name === "setModel"), ["setModel", "cached", "cached-model"], "cached choice reaches the new runtime after startup");
 	await manager.newSession();
 	const [a, b] = panels, [ca, cb] = controllers;
+	const beforeLogin = JSON.stringify(ca.calls);
+	a.send({ type: "login", command: "untrusted command" });
+	assert.deepEqual(terminalCalls, [["create", "Prime Agent Login"], ["show"], ["sendText", "prime-agent login", true]]);
+	assert.equal(JSON.stringify(ca.calls), beforeLogin, "login does not initialize or prompt the agent");
 	assert.notEqual(ca, cb);
 	assert.deepEqual(a.iconPath, { light: { fsPath: join(process.cwd(), "media/tab-light.svg") }, dark: { fsPath: join(process.cwd(), "media/tab-dark.svg") } });
 	assert.deepEqual(b.iconPath, { light: { fsPath: join(process.cwd(), "media/tab-light.svg") }, dark: { fsPath: join(process.cwd(), "media/tab-dark.svg") } });
