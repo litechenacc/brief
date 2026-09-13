@@ -1810,8 +1810,19 @@ check("two optimistic rows render before either verdict", scroller.querySelector
 check("send paints a working indicator before the first token", !!scroller.querySelector(".working-row .working-mark") && (scroller.querySelector(".working-label")?.textContent ?? "").length > 0 && !/Sending/.test(scroller.querySelector(".working-label")?.textContent ?? ""), scroller.querySelector(".working-label")?.textContent ?? "none");
 const workingLabel = scroller.querySelector(".working-label");
 const workingText = workingLabel.firstChild;
-check("working icon is a decorative B, not a brand SVG", scroller.querySelector(".working-mark")?.textContent === "B" && scroller.querySelector(".working-mark")?.tagName === "SPAN" && scroller.querySelector(".working-mark")?.getAttribute("aria-hidden") === "true");
+check("working icon matches the active model provider", scroller.querySelector(".working-mark .provider-icon")?.innerHTML === document.querySelector(".rail-pill.model .provider-icon")?.innerHTML && scroller.querySelector(".working-mark")?.getAttribute("aria-hidden") === "true");
 check("working verb uses plain text for CSS sheen", workingText?.nodeType === 3);
+const originalWorkingRow = scroller.querySelector(".working-row");
+for (const provider of ["openai-codex", "anthropic", "custom"]) {
+	hostMessage({ type: "status", status: { ...baseStatus, modelProvider: provider, modelId: "test-model", modelLabel: `${provider}/test-model` } });
+	const activeIcon = scroller.querySelector(".working-mark .provider-icon");
+	check(`working provider icon updates for ${provider}`, !!activeIcon && activeIcon.innerHTML === document.querySelector(".rail-pill.model .provider-icon")?.innerHTML);
+	check("provider update preserves the working row and label", originalWorkingRow === scroller.querySelector(".working-row") && workingLabel === scroller.querySelector(".working-label"));
+	hostMessage({ type: "status", status: { ...baseStatus, modelProvider: provider, modelId: "test-model", modelLabel: `${provider}/test-model` } });
+	check("unchanged provider preserves icon identity", activeIcon === scroller.querySelector(".working-mark .provider-icon"));
+}
+hostMessage({ type: "status", status: baseStatus });
+
 await new Promise(resolve => window.setTimeout(resolve, 450));
 check("timer tick preserves animated text", workingLabel.firstChild === workingText);
 hostMessage({ type: "promptRejected", error: "transport disconnected", clientRequestId: firstOptimisticPrompt?.payload?.clientRequestId });

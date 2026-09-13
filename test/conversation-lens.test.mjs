@@ -94,7 +94,10 @@ try {
 			const before = await lens.boundingBox();
 			const transcriptBefore = await page.locator(".messages").boundingBox();
 			const parent = await lens.evaluate(el => el.parentElement.getBoundingClientRect().toJSON());
-			check(`${width}px: collapsed overlay is 40px at top-right`, before.width === 40 && Math.abs(parent.right - before.x - before.width - 12) < 1 && Math.abs(before.y - parent.y - 12) < 1);
+			check(`${width}px: collapsed overlay is 40px at top-right`, before.width === 40 && Math.abs(parent.right - before.x - before.width) < 1 && Math.abs(before.y - parent.y - 12) < 1);
+			check("drawer has a flush square right edge", await lens.evaluate(el => { const s = getComputedStyle(el); return s.borderTopRightRadius === "0px" && s.borderBottomRightRadius === "0px" && s.borderRightWidth === "0px"; }));
+			check("labels sit close to the left edge", await markers.first().evaluate(el => { const label = el.querySelector(".lens-label").getBoundingClientRect(); const panel = el.closest(".conversation-lens").getBoundingClientRect(); return label.left - panel.left === 9; }));
+			check("collapsed rows are compact", await markers.first().evaluate(el => el.getBoundingClientRect().height) === 18);
 			check("collapsed labels use 8px font", await markers.first().evaluate(el => getComputedStyle(el.querySelector(".lens-label")).fontSize) === "8px");
 			await lens.evaluate(el => { window.savedLensRows = [...el.querySelectorAll(".lens-marker")]; });
 			await page.mouse.move(before.x + before.width - 4, before.y + 4);
@@ -123,6 +126,27 @@ try {
 			await page.waitForFunction(() => !document.querySelector(".conversation-lens").classList.contains("expanded"));
 			check("mouse click does not pin outline open", !(await lens.evaluate(el => el.classList.contains("expanded"))));
 		}
+		// Short threads cannot align each prompt to the viewport anchor.
+		await page.evaluate(data => window.dispatchEvent(new MessageEvent("message", { data })), snapshot(3));
+		check("short thread follows latest prompt", await markers.nth(2).getAttribute("aria-current") === "true");
+		for (const index of [0, 1, 2]) {
+			await lens.hover();
+			await markers.nth(index).click();
+			await page.waitForTimeout(100);
+			check(`short thread click selects turn ${index + 1}`, await markers.nth(index).getAttribute("aria-current") === "true");
+		}
+		await page.locator("textarea").fill("new prompt");
+		await page.locator("textarea").press("Enter");
+		await page.waitForTimeout(100);
+		check("own send selects new prompt", await markers.count() === 4 && await markers.nth(3).getAttribute("aria-current") === "true");
+		await page.evaluate(data => window.dispatchEvent(new MessageEvent("message", { data })), {
+			type: "event", event: { type: "message_start", message: { role: "user", content: "new prompt" } },
+		});
+		check("confirmed prompt stays selected", await markers.count() === 4 && await markers.nth(3).getAttribute("aria-current") === "true");
+		await page.evaluate(data => window.dispatchEvent(new MessageEvent("message", { data })), snapshot(200));
+		await page.mouse.move(0, 0);
+		await page.evaluate(() => document.activeElement?.blur());
+		await page.waitForTimeout(180);
 		// Keyboard entry must reveal either end of a long outline, not only current turn.
 		for (const index of [0, 199]) {
 			await markers.nth(index).focus();
@@ -173,7 +197,7 @@ try {
 			await page.screenshot({ path: `/tmp/brief-outline-${width}-${theme}-two.png` });
 			await page.mouse.move(0, 0);
 			await page.waitForTimeout(180);
-			check(`${theme}: collapsed drawer has no card background or shadow`, await lens.evaluate(el => getComputedStyle(el).backgroundColor === "rgba(0, 0, 0, 0)" && getComputedStyle(el).boxShadow === "none"));
+			check(`${theme}: collapsed drawer has a translucent box`, await lens.evaluate(el => { const style = getComputedStyle(el); return style.backgroundColor !== "rgba(0, 0, 0, 0)" && style.backgroundColor.includes("0.82") && style.borderTopStyle === "solid"; }));
 			await page.evaluate(data => window.dispatchEvent(new MessageEvent("message", { data })), chinese);
 		}
 		await page.close();

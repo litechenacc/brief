@@ -209,14 +209,15 @@ button:focus-visible {
 	flex-direction: column;
 	position: absolute;
 	top: 12px;
-	right: 12px;
+	right: 0;
 	width: 40px;
 	max-width: calc(100% - 24px);
 	max-height: calc(100% - 24px);
 	overflow: hidden;
-	border: 1px solid transparent;
-	border-radius: 8px;
-	background: transparent;
+	border: 1px solid var(--pa-border-strong);
+	border-right: 0;
+	border-radius: 8px 0 0 8px;
+	background: color-mix(in srgb, var(--vscode-menu-background, var(--vscode-editor-background, var(--pa-surface-2))) 82%, transparent);
 	z-index: 20;
 	transition: width 140ms ease-out;
 }
@@ -227,7 +228,6 @@ button:focus-visible {
 
 .conversation-lens.expanded {
 	width: min(260px, calc(100% - 24px));
-	background: var(--vscode-menu-background, var(--vscode-editor-background, var(--pa-surface-2)));
 	box-shadow: 0 0 0 1px rgb(0 0 0 / 4%), 0 4px 16px rgb(0 0 0 / 8%);
 }
 
@@ -241,7 +241,7 @@ button:focus-visible {
 	overflow-y: auto;
 	overscroll-behavior: contain;
 	scrollbar-width: thin;
-	padding: 10px 8px;
+	padding: 10px 4px;
 }
 
 .lens-marker {
@@ -249,7 +249,7 @@ button:focus-visible {
 	align-items: center;
 	width: 100%;
 	height: 30px;
-	padding: 0 8px;
+	padding: 0 4px;
 	border: 0;
 	border-radius: 4px;
 	background: transparent;
@@ -259,6 +259,15 @@ button:focus-visible {
 	line-height: 20px;
 	font-weight: 400;
 	cursor: pointer;
+}
+
+.conversation-lens:not(.expanded) .lens-rail {
+	padding-block: 6px;
+}
+
+.conversation-lens:not(.expanded) .lens-marker {
+	height: 18px;
+	line-height: 18px;
 }
 
 .conversation-lens.expanded .lens-marker {
@@ -290,7 +299,7 @@ body.vscode-dark .lens-marker[aria-current="true"] {
 	outline-offset: -2px;
 }
 
-body:is(.vscode-high-contrast, .vscode-high-contrast-light) .conversation-lens.expanded {
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .conversation-lens {
 	border-color: var(--vscode-contrastBorder, var(--pa-text));
 }
 
@@ -491,32 +500,45 @@ textarea::-webkit-scrollbar {
 	display: flex;
 	align-items: center;
 	gap: 8px;
-	color: var(--pa-dim);
+	width: fit-content;
+	color: var(--pa-text, inherit);
 	font-size: 11px;
 	padding: 2px 2px 0;
-}
-
-.working-mark {
-	font-size: 15px;
-	font-weight: 800;
-	line-height: 1;
-	color: var(--pa-text, inherit);
-	flex-shrink: 0;
-	animation: working-letter-pulse 1.4s ease-in-out infinite;
-}
-
-.working-label,
-.working-elapsed {
-	color: var(--pa-text, inherit);
+	/* One gradient spans verb and timer instead of restarting on each part. */
 	background: linear-gradient(100deg,
-		color-mix(in srgb, currentColor 35%, transparent) 35%,
-		currentColor 50%,
-		color-mix(in srgb, currentColor 35%, transparent) 65%);
+		color-mix(in srgb, currentColor 55%, transparent) 35%,
+		var(--vscode-textLink-foreground, currentColor) 50%,
+		color-mix(in srgb, currentColor 55%, transparent) 65%);
 	background-size: 300% 100%;
 	background-position: 100% 0;
 	background-clip: text;
 	-webkit-text-fill-color: transparent;
-	animation: working-sheen 4s ease-in-out infinite;
+	animation: working-sheen 3s ease-in-out infinite;
+}
+
+body.vscode-light .working-row {
+	/* Use a colored sweep, not a subtle gray-to-black change on white. */
+	background-image: linear-gradient(100deg,
+		currentColor 30%,
+		var(--vscode-textLink-foreground, #005fb8) 45%,
+		var(--vscode-textLink-foreground, #005fb8) 55%,
+		currentColor 70%);
+}
+
+.working-row .working-mark {
+	display: flex;
+	align-items: center;
+	flex-shrink: 0;
+	background-image: inherit;
+	background-size: inherit;
+	background-position: inherit;
+	mask-image: var(--working-icon);
+	mask-size: contain;
+	mask-repeat: no-repeat;
+}
+
+.working-row .working-mark svg {
+	visibility: hidden;
 }
 
 @keyframes working-sheen {
@@ -529,7 +551,6 @@ textarea::-webkit-scrollbar {
 	align-items: center;
 	gap: 8px;
 	white-space: nowrap;
-	color: var(--pa-dim, inherit);
 	font-variant-numeric: tabular-nums;
 }
 
@@ -537,32 +558,42 @@ textarea::-webkit-scrollbar {
 	content: "·";
 }
 
-@keyframes working-letter-pulse {
-	0%, 60%, 100% { opacity: 0.35; }
-	30% { opacity: 1; }
-}
-
-@media (prefers-reduced-motion: reduce), (forced-colors: active) {
-	.working-mark,
-	.working-label,
-	.working-elapsed {
+@media (forced-colors: active) {
+	.working-row .working-mark {
+		mask-image: none;
+		background: none;
+	}
+	.working-row .working-mark svg {
+		visibility: visible;
+	}
+	body .working-row {
 		animation: none;
 		background: none;
 		-webkit-text-fill-color: currentColor;
-		opacity: 1;
 	}
 }
 
-body.vscode-high-contrast .working-mark,
-body.vscode-high-contrast-light .working-mark,
-body.vscode-high-contrast .working-label,
-body.vscode-high-contrast-light .working-label,
-body.vscode-high-contrast .working-elapsed,
-body.vscode-high-contrast-light .working-elapsed {
+/* VS Code resolves workbench.reduceMotion (including its OS-based auto mode).
+   Use its class so an explicit off setting can override the OS preference. */
+body.vscode-reduce-motion .working-row,
+body.vscode-high-contrast .working-row,
+body.vscode-high-contrast-light .working-row {
 	background: none;
 	-webkit-text-fill-color: currentColor;
 	animation: none;
-	opacity: 1;
+}
+
+body.vscode-reduce-motion .working-row .working-mark,
+body.vscode-high-contrast .working-row .working-mark,
+body.vscode-high-contrast-light .working-row .working-mark {
+	mask-image: none;
+	background: none;
+}
+
+body.vscode-reduce-motion .working-row .working-mark svg,
+body.vscode-high-contrast .working-row .working-mark svg,
+body.vscode-high-contrast-light .working-row .working-mark svg {
+	visibility: visible;
 }
 
 @keyframes session-pulse {
@@ -2105,14 +2136,15 @@ pre.term {
 
 /* ---------- user message actions (copy/fork) ---------- */
 
-.bubble-user:has(.user-footer) {
-	padding-right: 56px;
-}
-
 .user-footer {
 	position: absolute;
-	top: 7px;
-	right: 8px;
+	top: 3px;
+	right: 4px;
+	padding: 4px;
+	border-radius: 6px;
+	/* Blur only the text beneath the actions, without reserving layout space. */
+	backdrop-filter: blur(5px);
+	background: color-mix(in srgb, var(--pa-surface-2) 85%, transparent);
 	display: flex;
 	align-items: center;
 	gap: 6px;

@@ -7,7 +7,7 @@ try {
 	const page = await browser.newPage({ reducedMotion: "no-preference" });
 	await page.setContent(`<body style="--vscode-foreground: #ccc; --vscode-descriptionForeground: #ccc">
 		<div class="working-row" role="status" aria-label="Working">
-			<span class="working-mark" aria-hidden="true">B</span>
+			<span class="working-mark" aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10" /></svg></span>
 			<span class="working-label">Thinking</span><span class="working-elapsed">7s</span>
 		</div>
 		<div class="status-strip"><span class="conn-dot working"></span><span class="live-label working">running</span></div>
@@ -16,6 +16,11 @@ try {
 		<span class="running-mark working"><span class="running-dot"></span></span>
 		<span class="running-mark complete"><span class="running-dot"></span></span>
 	</body>`);
+	await page.locator(".working-mark").evaluate(mark => {
+		const svg = mark.querySelector("svg");
+		svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+		mark.style.setProperty("--working-icon", `url("data:image/svg+xml,${encodeURIComponent(svg.outerHTML)}")`);
+	});
 	await page.addStyleTag({ path: "media/main.css" });
 	assert.equal(await page.locator("#idle-lamp").evaluate(el => getComputedStyle(el).display), "none", "idle has no lamp or reserved width");
 	for (const selector of [".conn-dot.working", ".running-mark.working .running-dot"]) {
@@ -24,35 +29,69 @@ try {
 	for (const selector of ["#complete-lamp", ".running-mark.complete .running-dot"]) {
 		assert.equal(await page.locator(selector).evaluate(el => getComputedStyle(el).backgroundColor), "rgb(48, 164, 108)");
 	}
-	assert.equal(await page.locator(".working-mark").evaluate(el => getComputedStyle(el).fontWeight), "800");
-	for (const selector of [".working-label", ".working-elapsed"]) {
-		const samples = await page.locator(selector).evaluate(element => {
-			const animation = element.getAnimations()[0];
-			if (!animation) return null;
-			animation.pause();
-			animation.currentTime = 0;
-			const start = getComputedStyle(element).backgroundPosition;
-			animation.currentTime = 3400;
-			return { start, end: getComputedStyle(element).backgroundPosition,
-				name: getComputedStyle(element).animationName,
-				gradient: getComputedStyle(element).backgroundImage };
-		});
-		assert.equal(samples?.name, "working-sheen", `${selector} has sweeping animation`);
-		assert.notEqual(samples.start, samples.end);
-		assert.ok(samples.gradient.includes("gradient"), "sheen has a brightness gradient even with identical theme colors");
+	const row = page.locator(".working-row");
+	assert.equal(await row.evaluate(el => el.getAnimations({ subtree: true }).length), 1,
+		"working row has one sweep and no separate icon pulse");
+	const samples = await row.evaluate(element => {
+		const animation = element.getAnimations()[0];
+		animation.pause();
+		animation.currentTime = 0;
+		const start = getComputedStyle(element).backgroundPosition;
+		animation.currentTime = 2550;
+		return { start, end: getComputedStyle(element).backgroundPosition,
+			name: getComputedStyle(element).animationName,
+			duration: getComputedStyle(element).animationDuration };
+	});
+	assert.equal(samples.name, "working-sheen");
+	assert.equal(samples.duration, "3s");
+	assert.notEqual(samples.start, samples.end);
+	for (const selector of [".working-mark", ".working-label", ".working-elapsed"]) {
+		const style = await page.locator(selector).evaluate(el => ({
+			animation: getComputedStyle(el).animationName,
+			background: getComputedStyle(el).backgroundImage,
+			fill: getComputedStyle(el).webkitTextFillColor,
+		}));
+		assert.equal(style.animation, "none", `${selector} has no independent animation`);
+		assert.equal(style.background, selector === ".working-mark"
+			? await row.evaluate(el => getComputedStyle(el).backgroundImage) : "none",
+			`${selector} shares the row gradient`);
+		assert.equal(style.fill, "rgba(0, 0, 0, 0)", `${selector} reveals the shared gradient`);
+	}
+	// Check painted text, not only computed animation properties, in both themes.
+	for (const theme of [
+		{ name: "vscode-dark", foreground: "#cccccc", background: "#181818" },
+		{ name: "vscode-light", foreground: "#616161", background: "#ffffff" },
+	]) {
+		await page.evaluate(theme => {
+			document.body.className = theme.name;
+			document.body.style.setProperty("--vscode-foreground", theme.foreground);
+			document.body.style.setProperty("--vscode-sideBar-background", theme.background);
+		}, theme);
+		for (const selector of [".working-mark", ".working-label", ".working-elapsed"]) {
+			await row.evaluate(el => { el.getAnimations()[0].currentTime = 0; });
+			const before = await page.locator(selector).screenshot();
+			await row.evaluate(el => { el.getAnimations()[0].currentTime = 1650; });
+			assert.notDeepEqual(await page.locator(selector).screenshot(), before,
+				`${theme.name} visibly sweeps ${selector}, including elapsed time`);
+		}
+		if (theme.name === "vscode-light") {
+			assert.ok(await row.evaluate(el => getComputedStyle(el).backgroundImage.includes("rgb(0, 95, 184)")),
+				"light theme uses a colored sweep instead of gray-to-black shading");
+		}
 	}
 	const layout = await page.locator(".working-row").evaluate(row => {
 
 		const label = row.querySelector(".working-label");
 		const elapsed = row.querySelector(".working-elapsed");
 		return {
-			sameAnimation: getComputedStyle(label).animationName === getComputedStyle(elapsed).animationName,
+			rowWidth: row.getBoundingClientRect().width,
+			contentWidth: elapsed.getBoundingClientRect().right - row.getBoundingClientRect().left,
 			gapBeforeDot: elapsed.getBoundingClientRect().left - label.getBoundingClientRect().right,
 			gapAfterDot: getComputedStyle(elapsed).gap,
 			dot: getComputedStyle(elapsed, "::before").content,
 		};
 	});
-	assert.ok(layout.sameAnimation, "verb and timer share the sweeping animation");
+	assert.ok(Math.abs(layout.rowWidth - layout.contentWidth - 2) < 1, "gradient fits the text, not the transcript width");
 	assert.equal(layout.gapBeforeDot, 8);
 	assert.equal(layout.gapAfterDot, "8px");
 	assert.equal(layout.dot, '"·"');
@@ -81,13 +120,27 @@ try {
 		assert.equal(target.end.transform, "none", "status marker does not scale");
 	}
 	assert.ok(statusMotion.centerDelta < 0.5, "status dot and label are vertically aligned");
-	for (const media of [{ reducedMotion: "reduce" }, { reducedMotion: "no-preference", forcedColors: "active" }]) {
-		await page.emulateMedia(media);
+	// VS Code can override the OS preference with workbench.reduceMotion: off.
+	await page.emulateMedia({ reducedMotion: "reduce" });
+	assert.equal(await row.evaluate(el => el.getAnimations().length), 1,
+		"shared sheen follows VS Code's motion setting, not the OS media query");
+	for (const state of [
+		{ reducedMotion: "reduce", className: "vscode-reduce-motion" },
+		{ reducedMotion: "no-preference", className: "vscode-reduce-motion" },
+		{ reducedMotion: "no-preference", className: "", forcedColors: "active" },
+		{ reducedMotion: "no-preference", className: "vscode-high-contrast" },
+		{ reducedMotion: "no-preference", className: "vscode-high-contrast-light" },
+	]) {
+		await page.emulateMedia({ reducedMotion: state.reducedMotion, forcedColors: state.forcedColors ?? "none" });
+		await page.evaluate(className => { document.body.className = className; }, state.className);
 		assert.equal(await page.locator(".working-row").evaluate(el => el.getAnimations({ subtree: true }).length), 0);
 		for (const selector of [".working-label", ".working-elapsed"]) {
 			assert.notEqual(await page.locator(selector).evaluate(el => getComputedStyle(el).webkitTextFillColor), "rgba(0, 0, 0, 0)");
 		}
 	}
+	await page.evaluate(() => { document.body.className = ""; });
+	assert.equal(await row.evaluate(el => getComputedStyle(el).animationName), "working-sheen",
+		"turning reduced motion off restores sheen without reloading");
 	const startup = await browser.newPage({ reducedMotion: "no-preference" });
 	await startup.setContent('<div id="app"></div><script id="cached-models" type="application/json">[{"provider":"cached","id":"cached-model"}]</script>');
 	await startup.evaluate(() => {
@@ -111,6 +164,32 @@ try {
 	assert.equal(await input.inputValue(), "draft before connection");
 	assert.equal(await send.isDisabled(), false);
 	assert.notEqual(await send.evaluate(el => getComputedStyle(el).borderTopStyle), "dashed");
+	await input.press("Escape");
+	await send.click();
+	const working = startup.locator(".working-row");
+	for (const provider of ["openai-codex", "anthropic"]) {
+		await startup.evaluate(provider => {
+			document.body.className = "vscode-light";
+			document.body.style.setProperty("--vscode-foreground", "#616161");
+			document.body.style.setProperty("--vscode-sideBar-background", "#ffffff");
+			window.dispatchEvent(new MessageEvent("message", { data: {
+				type: "status", status: { connected: true, sessionId: "created", modelProvider: provider, modelId: "test-model", modelLabel: `${provider}/test-model` },
+			} }));
+		}, provider);
+		const mark = working.locator(".working-mark");
+		assert.ok(await mark.evaluate(el => getComputedStyle(el).maskImage.includes("data:image/svg+xml")),
+			`${provider} uses its SVG shape as the sweep mask`);
+		await working.evaluate(el => { const a = el.getAnimations()[0]; a.pause(); a.currentTime = 0; });
+		const before = await mark.screenshot();
+		await working.evaluate(el => { el.getAnimations()[0].currentTime = 1500; });
+		assert.notDeepEqual(await mark.screenshot(), before, `${provider} icon visibly changes with the shared sweep`);
+		assert.equal(await working.evaluate(el => el.getAnimations({ subtree: true }).length), 1);
+		await startup.evaluate(() => document.body.classList.add("vscode-reduce-motion"));
+		assert.equal(await mark.evaluate(el => getComputedStyle(el).maskImage), "none");
+		assert.equal(await mark.locator("svg").evaluate(el => getComputedStyle(el).visibility), "visible",
+			"reduced motion keeps the original provider icon visible");
+	}
+
 	for (const status of [
 		{ connected: false },
 		{ connected: true, streaming: true, historyRunning: true, statusText: "running" },

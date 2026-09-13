@@ -7,6 +7,7 @@ import { brandMark, el, icon } from "./dom.js";
 import { copyToClipboard, renderMarkdown } from "./markdown.js";
 import { renderPythonCode } from "./python-highlight.js";
 import { pickSpinnerVerb } from "./spinner-verbs.js";
+import { providerIcon } from "./provider-icon.js";
 
 /**
  * How a tool call should be presented.
@@ -171,6 +172,7 @@ export class Transcript {
 	private nextUserOrdinal = 0;
 	private retryRow: HTMLElement | null = null;
 	private workingRow: HTMLElement | null = null;
+	private modelProvider: string | undefined;
 	private workingStartedAt = 0;
 	private workingTimer: number | undefined;
 	private workingVerbBase = "Working";
@@ -257,6 +259,7 @@ export class Transcript {
 	private lensTurns: LensTurn[] = [];
 	private lensRoot: HTMLElement | null = null;
 	private lensCurrent = 0;
+	private lensJumpScrollTop: number | undefined;
 	private lensCollapseTimer: number | undefined;
 	private readonly lensSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
@@ -489,6 +492,14 @@ export class Transcript {
 			}
 		}
 		if (!found && this.scroller.scrollTop <= 0) current = 0;
+		// A clamped jump near either end cannot always reach the viewport anchor.
+		// Keep the clicked turn until the transcript actually moves.
+		if (this.lensJumpScrollTop !== undefined && Math.abs(this.scroller.scrollTop - this.lensJumpScrollTop) <= 1) {
+			current = this.lensCurrent;
+		} else {
+			this.lensJumpScrollTop = undefined;
+			if (this.stickToBottom) current = this.lensTurns.length - 1;
+		}
 		this.lensCurrent = Math.max(0, Math.min(this.lensTurns.length - 1, current));
 		this.lensRoot?.querySelectorAll<HTMLElement>(".lens-marker").forEach((marker) => {
 			marker.setAttribute("aria-current", String(Number(marker.dataset.start) <= this.lensCurrent && this.lensCurrent <= Number(marker.dataset.end)));
@@ -544,6 +555,8 @@ export class Transcript {
 		const rowTop = row.getBoundingClientRect().top;
 		const target = this.scroller.clientHeight * 0.25;
 		this.scroller.scrollTop += rowTop - scrollerTop - target;
+		this.lensCurrent = index;
+		this.lensJumpScrollTop = this.scroller.scrollTop;
 		this.updateLensCurrent();
 	}
 
@@ -667,6 +680,7 @@ export class Transcript {
 		this.optimisticRows.clear();
 		this.lensTurns = [];
 		this.lensCurrent = 0;
+		this.lensJumpScrollTop = undefined;
 		this.userOrdinals = new WeakMap<object, number>();
 		this.nextUserOrdinal = 0;
 		for (const message of messages) {
@@ -1043,6 +1057,22 @@ export class Transcript {
 	// Working indicator
 	// ---------------------------------------------------------------
 
+	setModelProvider(provider?: string): void {
+		if (this.modelProvider === provider) return;
+		this.modelProvider = provider;
+		const mark = this.workingRow?.querySelector<HTMLElement>(".working-mark");
+		if (mark) this.paintWorkingIcon(mark);
+	}
+
+	private paintWorkingIcon(mark: HTMLElement): void {
+		const svg = providerIcon(this.modelProvider, 15);
+		svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+		// A text-clipped background cannot paint SVG paths. Mask the same animated
+		// background with the existing provider shape instead of adding a second animation.
+		mark.style.setProperty("--working-icon", `url("data:image/svg+xml,${encodeURIComponent(svg.outerHTML)}")`);
+		mark.replaceChildren(svg);
+	}
+
 	private startWorking(): void {
 		if (!this.workingRow) {
 			this.workingVerbBase = pickSpinnerVerb();
@@ -1057,7 +1087,8 @@ export class Transcript {
 		row.setAttribute("role", "status");
 		row.setAttribute("aria-label", "Working");
 		row.setAttribute("aria-busy", "true");
-		const mark = el("span", "working-mark", "B");
+		const mark = el("span", "working-mark");
+		this.paintWorkingIcon(mark);
 		mark.setAttribute("aria-hidden", "true");
 		row.appendChild(mark);
 		const label = el("span", "working-label");
@@ -2081,6 +2112,7 @@ export class Transcript {
 
 	/** Unconditional snap — own sends or explicit user jumps. */
 	forceScrollToBottom(): void {
+		this.lensJumpScrollTop = undefined;
 		this.stickToBottom = true;
 		this.scroller.scrollTop = this.scroller.scrollHeight;
 		this.jumpBtn?.classList.remove("visible");

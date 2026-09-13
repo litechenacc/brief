@@ -465,6 +465,7 @@ function applyStatus(incomingStatus: StatusSnapshot): void {
 	// Startup has no authoritative model yet. Keep the local picker choice.
 	if (status.sessionId || status.modelId) {
 		composer.setModel(status.modelLabel, status.modelProvider, status.modelId);
+		transcript.setModelProvider(status.modelProvider);
 		composer.setThinking(status.thinkingLevel, status.availableThinkingLevels ?? null);
 	}
 	composer.setStreaming(transcript.isStreaming() || status.streaming);
