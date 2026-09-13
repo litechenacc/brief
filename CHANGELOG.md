@@ -8,6 +8,12 @@ All notable changes to this extension are recorded here. The format follows
 
 ## [Unreleased]
 
+- 工作中指示器改用目前模型供應商的圖示，並讓圖示、狀態文字與計時共用掃光動畫；改善淺色主題的辨識度，並遵循 VS Code 的減少動態效果設定與高對比模式。
+- 對話大綱改為貼齊右側的半透明抽屜，縮小收合時的列高，減少畫面占用。
+- 修正短對話或捲動邊界附近的大綱選取狀態：點選後維持所選回合，送出新訊息時則選取最新回合。
+- 使用者訊息的複製與分支按鈕改為局部模糊背景的浮層，不再預留右側空間或影響文字換行，並保留滑鼠與鍵盤操作。
+- 發布流程不再自動執行測試或 typecheck，也不再要求 Playwright 或執行中的 Prime Agent；仍會建置並驗證 VSIX 套件，開發檢查需於發布前另行執行。
+
 ## [0.3.2]
 
 - Describe Brief as an independent Prime Agent frontend and add Prime search keywords.
