@@ -174,7 +174,7 @@ const transcript = new Transcript(scroller, {
 
 const historyView = new HistoryView({
 	readFolds: () => {
-		const state = vscode.getState() as { historyFolds?: { workspace?: boolean; other?: boolean; archive?: boolean } } | undefined;
+		const state = vscode.getState() as { historyFolds?: { active?: boolean; archive?: boolean } } | undefined;
 		return state?.historyFolds;
 	},
 	writeFolds: (folds) => {
@@ -188,6 +188,14 @@ const historyView = new HistoryView({
 	writeSort: (sort) => {
 		const prev = (vscode.getState() as Record<string, unknown> | undefined) ?? {};
 		vscode.setState({ ...prev, historySort: sort });
+	},
+	readScope: () => {
+		const state = vscode.getState() as { historyScope?: "workspace" | "all" } | undefined;
+		return state?.historyScope;
+	},
+	writeScope: (scope) => {
+		const prev = (vscode.getState() as Record<string, unknown> | undefined) ?? {};
+		vscode.setState({ ...prev, historyScope: scope });
 	},
 	onResume: (path, sessionId) => {
 		// Before the switch, or the last 300ms of typing lands under the INCOMING
@@ -206,7 +214,6 @@ const historyView = new HistoryView({
 	onUnarchive: (path, sessionId) => {
 		post({ type: "unarchiveSession", path, sessionId });
 	},
-	onMarkUnread: (path, sessionId) => post({ type: "markSessionUnread", path, sessionId }),
 	onRename: (path, sessionId, name) => {
 		post({ type: "renameHistorySession", path, sessionId, name });
 	},
@@ -367,8 +374,8 @@ newChatBtn.setAttribute("aria-label", "New session");
 newChatBtn.addEventListener("click", () => requestNewSession());
 const historyBtn = document.createElement("button");
 historyBtn.className = "icon-btn chrome-action";
-historyBtn.title = "Sessions in this workspace";
-historyBtn.setAttribute("aria-label", "Sessions in this workspace");
+historyBtn.title = "Session history";
+historyBtn.setAttribute("aria-label", "Session history");
 historyBtn.addEventListener("click", () => openHistory());
 app.append(newChatBtn, historyBtn);
 
@@ -486,39 +493,27 @@ function applyStatus(incomingStatus: StatusSnapshot): void {
 	setObserving(!!status.observingId);
 }
 
-/**
- * The header's liveness word. Split out of applyStatus so a roster update can
- * repaint it without waiting for the next status push.
- *
- * A parent whose subagents are still working is not idle. Its own turn really
- * has ended — `streaming` stays false and every control keeps its honest
- * meaning, so Stop still stops nothing that is running here and a typed message
- * is still a fresh prompt — but reading "live" beside three working subagents
- * says the run died when it did not.
- */
+/** Runtime execution is authoritative when known; connection state stays text-only. */
 function renderLiveLabel(status: StatusSnapshot): void {
 	const working = subagents.workingCount();
-	const base = status.compacting
-		? "compacting…"
-		: status.retrying
-			? "retrying…"
-			: status.connected
-				? status.streaming
-					? "running"
-					: "live"
-				: "offline";
-	const busy = (status.connected && (status.streaming || status.compacting || status.retrying)) ||
-		(status.historyRunning ?? (status.connected && working > 0));
-	// Attachment labels such as "opened" must not contradict the working lamp.
-	const text = busy && (!status.statusText || ["opened", "live", "idle"].includes(status.statusText))
+	const busy = status.historyRunning !== undefined
+		? status.historyRunning === true
+		: status.connected && (status.streaming || status.compacting || status.retrying || working > 0);
+	const base = !status.connected ? "offline" : busy
 		? status.compacting ? "compacting…" : status.retrying ? "retrying…" : status.streaming ? "running" : "working"
-		: status.statusText || base;
+		: "live";
+	const staleWorkLabel = status.historyRunning === false &&
+		["running", "working", "compacting", "compacting…", "retrying", "retrying…"].includes(status.statusText ?? "");
+	const text = staleWorkLabel ? base : status.historyRunning === null ? "Execution status unavailable"
+		: busy && (!status.statusText || ["opened", "live", "idle"].includes(status.statusText))
+			? base === "offline" ? "working · offline" : base
+			: status.statusText || base;
 	const lanes: string[] = [];
 	if (busy && status.connected && !status.streaming && working > 0) lanes.push(`${working} subagent${working === 1 ? "" : "s"} working`);
-	liveLabel.textContent = lanes.length > 0 ? `${text} · ${lanes.join(" · ")}` : text;
-	const lamp = busy ? "working" : status.unreadComplete ? "complete" : "seen";
-	liveLabel.className = `live-label ${lamp}`;
-	connDot.className = `conn-dot ${lamp}`;
+	liveLabel.textContent = lanes.length > 0 ? `${text} · ${lanes.join(" · ")}` : text === "opened" ? "" : text;
+	const lamp = busy ? "working" : status.unreadComplete ? "complete" : "";
+	liveLabel.className = `live-label ${lamp}`.trim();
+	connDot.className = `conn-dot ${lamp}`.trim();
 }
 
 function setObserving(value: boolean): void {
@@ -597,25 +592,26 @@ let snapshotSessionId: string | undefined;
 let renderedReceipt: ChatReadReceipt | undefined;
 
 function focusRenderedChat(): void {
-	if (authoritativeSessionId && !historyOnly && !viewMoving && !capturedViewRequest && chatView.style.display !== "none" &&
-		document.visibilityState === "visible" && document.hasFocus()) post({ type: "chatFocused", sessionId: authoritativeSessionId });
 	acknowledgeRenderedChat();
 }
 
 function acknowledgeRenderedChat(): void {
 	const receipt = renderedReceipt;
 	if (!receipt || historyOnly || viewMoving || capturedViewRequest || chatView.style.display === "none" ||
-		document.visibilityState !== "visible" || !document.hasFocus() || receipt.sessionId !== authoritativeSessionId) return;
-	// Run after the successful DOM update. Recheck focus and identity at delivery.
+		document.visibilityState !== "visible" || receipt.sessionId !== authoritativeSessionId) return;
+	// Run after the successful DOM update. The host checks window focus and active view.
 	window.requestAnimationFrame(() => {
 		if (renderedReceipt === receipt && !historyOnly && !viewMoving && !capturedViewRequest &&
-			chatView.style.display !== "none" && document.visibilityState === "visible" && document.hasFocus() &&
+			chatView.style.display !== "none" && document.visibilityState === "visible" &&
 			receipt.sessionId === authoritativeSessionId) post({ type: "chatRendered", receipt });
 	});
 }
 
 function dispatchHostMessage(message: HostToWebview): void {
 	switch (message.type) {
+		case "requestReadReceipt":
+			acknowledgeRenderedChat();
+			break;
 		case "setHistoryMode":
 			historyOnly = message.enabled;
 			app.classList.toggle("history-only", historyOnly);

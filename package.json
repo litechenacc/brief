@@ -81,7 +81,7 @@
       },
       {
         "command": "brief.history",
-        "title": "Sessions in this workspace",
+        "title": "Session history",
         "icon": "$(history)",
         "category": "Brief"
       },

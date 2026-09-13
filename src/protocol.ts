@@ -325,9 +325,10 @@ export interface StatusSnapshot {
 	streaming: boolean;
 	/** Current focused session finished and is waiting for operator input. */
 	awaitingInput?: boolean;
-	/** Shared history unread state, independent of attachment. */
+	/** Completion observed in this window, cleared when the chat is opened. */
 	unreadComplete?: boolean;
-	historyRunning?: boolean;
+	/** Daemon/runtime verdict: null means unavailable; absent permits local event fallback. */
+	historyRunning?: boolean | null;
 	compacting: boolean;
 	retrying: boolean;
 	restoring: boolean;
@@ -372,6 +373,8 @@ export interface ModelRef {
 }
 
 export interface RecentSession {
+	/** Open tab with no accepted prompt yet. */
+	isNew?: boolean;
 	/** Session id (jsonl filename stem); used for observe/resume */
 	id: string;
 	path: string;
@@ -443,8 +446,9 @@ export type HostToWebview =
 	| { type: "history"; sessions: RecentSession[] }
 	| { type: "historySelection"; sessionId?: string }
 	| { type: "showHistory" }
+	| { type: "requestReadReceipt" }
 	| { type: "newThread" }
-	| { type: "promptAccepted"; kind: "prompt" | "steer" | "followUp"; clientRequestId?: string }
+	| { type: "promptAccepted"; kind: "prompt" | "steer" | "followUp"; clientRequestId?: string; recallText?: string }
 	| { type: "promptRejected"; error: string; clientRequestId?: string }
 	| {
 			type: "notice";

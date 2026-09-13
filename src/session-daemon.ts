@@ -1069,13 +1069,19 @@ onDaemonClosing(this: SessionController, reason: string | undefined): void {
  * suppress the paint when nothing visible moved.
  */
 onRosterUpdate(this: SessionController, message: DaemonServerMessage): void {
+	// Removed IDs need not have a cached history row, and a resync replaces the
+	// roster. Invalidate stale verdicts until the full refresh resolves paths.
+	// Losing runtime evidence is unknown, never proof that a turn completed.
+	if (message.resync || message.removed?.length) {
+		for (const key of this.historyRuntime.keys()) this.updateHistoryRuntime(key, undefined);
+	}
 	// Apply pushed runtime verdicts now; reading transcripts must not delay the lamp.
 	for (const entry of message.changed ?? []) {
 		const summary = entry.summary;
 		if (!summary?.sessionFile || (summary.rlmDepth ?? 0) > 0) continue;
 		const ownStatus = entry.status ?? rosterStatus(summary);
 		const status = summary.hasRunningRlmChildren ? "running" : ownStatus;
-		this.updateHistoryRuntime(summary.sessionFile, status, entry.statusLabel ?? summary.statusLabel);
+		this.updateHistoryRuntime(summary.sessionFile, status, status === ownStatus ? entry.statusLabel ?? summary.statusLabel : undefined);
 	}
 	this.paintHistory();
 	this.scheduleHistoryRefresh();

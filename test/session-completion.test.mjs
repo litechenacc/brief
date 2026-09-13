@@ -15,7 +15,7 @@ assert.equal(completedMessageTime([final(NaN), final(Infinity), final(-1), final
 const dir = await mkdtemp(path.join(tmpdir(), "brief-completion-"));
 const file = path.join(dir, "session.jsonl");
 try {
- assert.equal(await readSessionCompletion(file), 0, "missing file is not completion");
+ assert.equal(await readSessionCompletion(file), undefined, "missing file cannot establish a baseline");
  await writeFile(file, jsonl([{ type: "session", id: "s", timestamp: "2099-01-01" }, entry(final(100))]));
  assert.equal(await readSessionCompletion(file), 100, "restart recovers final reply using message timestamp, not outer entry time");
  assert.equal(await readSessionCompletion(file), completedMessageTime([final(100)]), "snapshot and file share one marker");
@@ -32,7 +32,7 @@ try {
  await writeFile(file, jsonl([entry(final(25))]));
  assert.equal(await readSessionCompletion(file), 25, "file replacement invalidates cache");
  await rm(file);
- assert.equal(await readSessionCompletion(file), 0, "deleted file clears cache");
+ assert.equal(await readSessionCompletion(file), undefined, "deleted file clears cache without inventing an empty baseline");
 } finally {
  await rm(dir, { recursive: true, force: true });
 }

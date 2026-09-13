@@ -24,10 +24,10 @@ const cache = new Map<string, { signature: string; completed: number }>();
  * earlier completed reply. A snapshot compacted past that reply can return 0;
  * callers retain their previously observed marker rather than moving backward.
  */
-export async function readSessionCompletion(sessionPath: string): Promise<number> {
+export async function readSessionCompletion(sessionPath: string): Promise<number | undefined> {
 	try {
 		const info = await stat(sessionPath);
-		if (!info.isFile()) return 0;
+		if (!info.isFile()) return undefined;
 		const signature = `${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`;
 		const previous = cache.get(sessionPath);
 		if (previous?.signature === signature) return previous.completed;
@@ -48,6 +48,6 @@ export async function readSessionCompletion(sessionPath: string): Promise<number
 		return completed;
 	} catch {
 		cache.delete(sessionPath);
-		return 0;
+		return undefined;
 	}
 }

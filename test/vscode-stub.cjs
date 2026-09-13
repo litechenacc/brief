@@ -9,6 +9,8 @@ const quickPickBehavior = { pick: undefined };
 
 const vscodeStub = {
 	window: {
+		state: { focused: true },
+		onDidChangeWindowState: () => ({ dispose: () => {} }),
 		createOutputChannel: () => ({ append: () => {}, appendLine: () => {}, dispose: () => {} }),
 		showInformationMessage: async () => undefined,
 		showWarningMessage: async () => undefined,
@@ -23,6 +25,7 @@ const vscodeStub = {
 	workspace: {
 		getConfiguration: () => ({ get: (_key, fallback) => fallback }),
 		onDidChangeConfiguration: () => ({ dispose: () => {} }),
+		onDidSaveTextDocument: () => ({ dispose: () => {} }),
 		workspaceFolders: [{ uri: { fsPath: process.env.HOST_E2E_CWD ?? process.cwd(), scheme: "file" }, name: "e2e", index: 0 }],
 		createFileSystemWatcher: () => ({
 			onDidCreate: () => ({ dispose: () => {} }),

@@ -1,5 +1,5 @@
 /**
- * History view: recent workspace sessions, resumable in place.
+ * History view: workspace-scoped by default, with an all-session toggle.
  */
 
 import { el, icon } from "./dom.js";
@@ -7,19 +7,18 @@ import type { RecentSession } from "../src/protocol.js";
 import { deriveSessionLabel } from "../src/session-label.js";
 
 export interface HistoryFoldState {
-	workspace: boolean;
-	other: boolean;
+	active: boolean;
 	archive: boolean;
 }
 
 type HistorySort = "priority" | "birth";
+type HistoryScope = "workspace" | "all";
 
 export interface HistoryDeps {
 	onResume: (path: string, sessionId: string) => void;
 	onDelete: (path: string, sessionId: string) => void;
 	onArchive: (path: string, sessionId: string) => void;
 	onUnarchive: (path: string, sessionId: string) => void;
-	onMarkUnread: (path: string, sessionId: string) => void;
 	onRename: (path: string, sessionId: string, name: string) => void;
 	onStop: (path: string, sessionId: string) => void;
 	/** Ask the host to search the conversations themselves, not just these rows. */
@@ -29,6 +28,8 @@ export interface HistoryDeps {
 	writeFolds?: (folds: HistoryFoldState) => void;
 	readSort?: () => HistorySort | undefined;
 	writeSort?: (sort: HistorySort) => void;
+	readScope?: () => HistoryScope | undefined;
+	writeScope?: (scope: HistoryScope) => void;
 }
 
 /** Host round-trip debounce: long enough to not search every keystroke, short enough to feel live. */
@@ -36,8 +37,8 @@ const SEARCH_DEBOUNCE_MS = 220;
 /** 1.4s alternate animation: keep rebuilt status dots on one shared phase. */
 const RUNNING_PULSE_CYCLE_MS = 2_800;
 
-function historyLabel(session: { name?: string; firstPrompt?: string }): string {
-	return deriveSessionLabel(session) || "(untitled session)";
+function historyLabel(session: { name?: string; firstPrompt?: string; isNew?: boolean }): string {
+	return deriveSessionLabel(session) || (session.isNew ? "New session" : "(untitled session)");
 }
 
 export class HistoryView {
@@ -48,11 +49,21 @@ export class HistoryView {
 		this.root = el("div", "history-view");
 		const header = el("div", "history-header");
 		const backBtn = document.createElement("button");
-		backBtn.className = "icon-btn";
+		backBtn.className = "icon-btn history-back";
 		backBtn.title = "Back to chat";
 		backBtn.appendChild(icon("back", 15));
 		backBtn.addEventListener("click", () => this.deps.onBack());
-		header.append(backBtn, el("span", "history-title", "Sessions"));
+		this.scope = this.deps.readScope?.() === "all" ? "all" : "workspace";
+		this.scopeEl = document.createElement("button");
+		this.scopeEl.className = "history-scope";
+		this.scopeEl.addEventListener("click", () => {
+			this.scope = this.scope === "workspace" ? "all" : "workspace";
+			this.deps.writeScope?.(this.scope);
+			this.updateScopeControl();
+			this.render(this.lastSessions ?? [], this.currentId);
+		});
+		this.updateScopeControl();
+		header.append(backBtn, el("span", "history-title", "Sessions"), this.scopeEl);
 		// Search bar. The local filter is the instant layer; the host searches the
 		// conversation bodies in parallel and hands back the extra rows with a
 		// snippet, so a phrase the operator only half-remembers still finds them.
@@ -89,15 +100,16 @@ export class HistoryView {
 		this.root.append(header, this.searchEl, this.sortEl, this.listEl);
 		const saved = this.deps.readFolds?.();
 		this.folds = {
-			workspace: saved?.workspace ?? false,
-			other: saved?.other ?? false,
+			active: saved?.active ?? false,
 			archive: saved?.archive ?? true,
 		};
 	}
 
 	private searchEl: HTMLInputElement;
 	private sortEl: HTMLSelectElement;
+	private scopeEl: HTMLButtonElement;
 	private sort: HistorySort = "priority";
+	private scope: HistoryScope = "workspace";
 	private headerEl: HTMLElement;
 	private lastSessions: RecentSession[] | null = null;
 	private query = "";
@@ -155,6 +167,7 @@ export class HistoryView {
 		const seen = new Set<string>();
 		const withRanks: Array<{ s: RecentSession; rank: number }> = [];
 		for (const s of sessions) {
+			if (this.scope === "workspace" && !s.inWorkspace) continue;
 			if (seen.has(s.path)) continue;
 			seen.add(s.path);
 			const rank = rankOf(s);
@@ -170,7 +183,10 @@ export class HistoryView {
 		this.root.classList.remove("refreshing");
 		this.listEl.textContent = "";
 		if (withRanks.length === 0) {
-			this.listEl.appendChild(el("div", "history-empty", needle ? `No sessions match "${needle}".` : "No previous sessions found."));
+			const emptyText = needle
+				? `No sessions match "${needle}".`
+				: this.scope === "workspace" ? "No sessions in this workspace." : "No previous sessions found.";
+			this.listEl.appendChild(el("div", "history-empty", emptyText));
 			return;
 		}
 		const activityOf = (s: RecentSession): number =>
@@ -185,31 +201,24 @@ export class HistoryView {
 			this.sort === "birth"
 				? birthOf(b.s) - birthOf(a.s)
 				: priorityOf(a.s) - priorityOf(b.s) || b.rank - a.rank || activityOf(b.s) - activityOf(a.s);
+		const active = withRanks.filter(({ s }) => !s.archived).sort(bySelectedSort);
 		const archived = withRanks.filter(({ s }) => s.archived).sort(bySelectedSort);
-		const active = withRanks.filter(({ s }) => !s.archived);
-		const inWorkspace = active.filter(({ s }) => s.inWorkspace).sort(bySelectedSort);
-		const others = active.filter(({ s }) => !s.inWorkspace).sort(bySelectedSort);
 		const searching = needle !== "";
-		if (inWorkspace.length > 0) {
-			this.listEl.appendChild(
-				this.buildGroup("This workspace", inWorkspace.length, "workspace", searching, inWorkspace, false),
-			);
-		}
-		if (others.length > 0) {
-			this.listEl.appendChild(
-				this.buildGroup(
-					inWorkspace.length > 0 ? "Other folders" : "Sessions",
-					others.length,
-					"other",
-					searching,
-					others,
-					true,
-				),
-			);
+		if (active.length > 0) {
+			this.listEl.appendChild(this.buildGroup("Active", active.length, "active", searching, active, false));
 		}
 		if (archived.length > 0) {
 			this.listEl.appendChild(this.buildGroup("Archive", archived.length, "archive", searching, archived, false));
 		}
+	}
+
+	private updateScopeControl(): void {
+		const showingWorkspace = this.scope === "workspace";
+		this.scopeEl.textContent = showingWorkspace ? "This workspace" : "All sessions";
+		this.scopeEl.title = showingWorkspace ? "Show all sessions" : "Show this workspace only";
+		this.scopeEl.setAttribute("aria-label", showingWorkspace
+			? "Showing this workspace. Switch to all sessions"
+			: "Showing all sessions. Switch to this workspace");
 	}
 
 	private persistFolds(): void {
@@ -274,28 +283,22 @@ export class HistoryView {
 				relativeTime(session.modifiedMs != null ? new Date(session.modifiedMs).toISOString() : session.timestamp),
 			),
 		);
-		// Execution and unread notifications are independent, including unknown execution state.
+		if (session.isNew) meta.appendChild(el("span", "history-new-session", "New session"));
 		const status = session.status;
-		const lamp =
-			status === "running" || session.running
-				? "working"
-				: session.unreadComplete
-					? "complete"
-					: "seen";
-		const mark = el("span", `running-mark ${lamp}`) as HTMLElement;
-		mark.title =
-			lamp === "working"
-				? session.statusLabel != null
-					? `Working — flagged by the daemon as ${session.statusLabel}`
-					: "Working"
-				: lamp === "complete"
-					? "Unread"
-					: "No unread notifications";
-		if (status === undefined && !session.running) mark.title += " — Execution status unavailable";
-		const dot = el("span", "running-dot");
-		if (lamp === "working") dot.style.animationDelay = `${-(Date.now() % RUNNING_PULSE_CYCLE_MS)}ms`;
-		mark.appendChild(dot);
-		meta.appendChild(mark);
+		const lamp = status === "running" || session.running ? "working" : session.unreadComplete ? "complete" : "";
+		if (lamp) {
+			const mark = el("span", `running-mark ${lamp}`);
+			mark.title = lamp === "working"
+				? session.statusLabel != null ? `Working — flagged by the daemon as ${session.statusLabel}` : "Working"
+				: "Newly completed";
+			const dot = el("span", "running-dot");
+			if (lamp === "working") dot.style.animationDelay = `${-(Date.now() % RUNNING_PULSE_CYCLE_MS)}ms`;
+			mark.appendChild(dot);
+			meta.appendChild(mark);
+		}
+		if (status === undefined && !session.running) {
+			meta.appendChild(el("span", "history-execution-unknown", "Execution status unavailable"));
+		}
 		resume.append(meta);
 		const actions = el("div", "history-actions");
 		if (session.running) {
@@ -309,10 +312,6 @@ export class HistoryView {
 			});
 			actions.appendChild(stop);
 		}
-		const unread = document.createElement("button");
-		unread.className = "history-action"; unread.title = "Mark unread"; unread.appendChild(icon("message", 11));
-		unread.addEventListener("click", (event) => { event.stopPropagation(); this.deps.onMarkUnread(session.path, session.id); });
-		actions.appendChild(unread);
 		const rename = document.createElement("button");
 		rename.className = "history-action";
 		rename.title = "Rename session";
@@ -359,6 +358,8 @@ export class HistoryView {
 			// Delete stays last: the furthest from a stray click.
 			actions.appendChild(del);
 		}
+		// Unsaved entries only focus their open tab; file actions need a saved session.
+		if (session.isNew) actions.replaceChildren();
 		top.append(resume, actions);
 		item.appendChild(top);
 		// A row surfaced by a transcript hit shows the hit, so the operator can see

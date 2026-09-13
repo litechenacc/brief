@@ -127,7 +127,6 @@ export interface SessionController {
 	markHistoryWaitingForUser(sessionPath: string | undefined, completedAt: number): void;
 	markHistorySessionOpened(sessionPath: string, completedAt: number): void;
 	refreshHistoryCompletions(rows: Array<{ path: string }>): Promise<void>;
-	markHistoryUnread(sessionPath: string, sessionId: string): Promise<void>;
 	markHistoryArchived(sessionPath: string): void;
 	markHistoryUnarchived(sessionPath?: string): void;
 	unarchiveSession(sessionPath: string, sessionId: string): Promise<void>;
@@ -238,9 +237,9 @@ export class SessionController implements vscode.Disposable {
 	historySortMs = new Map<string, number>();
 	/** Sessions the operator archived from Brief. Daemon auto-archive is not this. */
 	historyArchived = new Set<string>();
-	/** Finished turns the operator has not opened since. */
+	/** Completions observed in this window and not yet opened. Never persisted. */
 	historyUnreadComplete = new Set<string>();
-	/** Durable terminal-message timestamps; read receipts refer to the same revision. */
+	/** Window-local completion baselines; read receipts use the same timestamps. */
 	historyCompletedAt = new Map<string, number>();
 	historyReadAt = new Map<string, number>();
 	historyRuntime = new Map<string, { status: RecentSession["status"]; statusLabel?: string; revision: number }>();
@@ -336,9 +335,10 @@ export class SessionController implements vscode.Disposable {
 		if (this.disposed) return;
 		if (message.type === "snapshot" || message.type === "status") {
 			const sessionPath = message.status.sessionFile;
+			const runtime = sessionPath ? this.historyRuntime.get(this.historyPathKey(sessionPath)) : undefined;
 			message = { ...message, status: { ...message.status,
 				unreadComplete: Boolean(sessionPath && this.historyUnreadComplete.has(this.historyPathKey(sessionPath))),
-				historyRunning: Boolean(sessionPath && this.historyRuntime.get(this.historyPathKey(sessionPath))?.status === "running"),
+				historyRunning: runtime ? runtime.status === undefined ? null : runtime.status === "running" : undefined,
 			} };
 		}
 		if (this.sinks.size === 0) this.debugLog.append(`broadcast ${message.type} with no sinks`);
@@ -604,16 +604,30 @@ export class SessionController implements vscode.Disposable {
 			this.markHistoryUnarchived();
 		}
 		switch (event.type) {
-			case "agent_start":
+			case "agent_start": {
 				this.streaming = true;
 				this.awaitingInput = false;
+				const sessionPath = this.viewedSessionPath();
+				if (sessionPath) {
+					this.historyUnreadComplete.delete(sessionPath);
+					this.historyReadAt.set(sessionPath, this.historyCompletedAt.get(sessionPath) ?? 0);
+					this.updateHistoryRuntime(sessionPath, "running");
+					this.paintHistory();
+				}
 				break;
+			}
 			case "agent_end":
 				this.streaming = false;
 				if (this.attached && this.rentedState) this.rentedState = { ...this.rentedState, isStreaming: false };
 				else if (this.state) this.state = { ...this.state, isStreaming: false };
 				this.awaitingInput = true;
 				this.retrying = false;
+				// A root ending does not prove its daemon-backed children ended.
+				// The scheduled catalog refresh supplies the aggregate verdict.
+				if (!this.attached && !this.sidecar) {
+					const sessionPath = this.viewedSessionPath();
+					if (sessionPath) this.updateHistoryRuntime(sessionPath, "idle");
+				}
 				this.onBusySettled();
 				this.scheduleChildrenRefresh();
 				// Rank only moves when the turn is done and the agent is waiting.

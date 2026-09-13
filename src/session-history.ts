@@ -68,17 +68,8 @@ restoreHistoryUiState(this: SessionController): void {
 	const saved = this.context.workspaceState?.get<{
 		sortMs?: Record<string, number>;
 		archived?: string[];
-		unread?: string[];
-		completedAt?: Record<string, number>;
-		readAt?: Record<string, number>;
 	}>(HISTORY_UI_STATE_KEY);
 	if (!saved) return;
-	for (const [key, ms] of Object.entries(saved.completedAt ?? {})) {
-		if (Number.isFinite(ms) && ms > 0) this.historyCompletedAt.set(key, ms);
-	}
-	for (const [key, ms] of Object.entries(saved.readAt ?? {})) {
-		if (Number.isFinite(ms) && ms >= 0) this.historyReadAt.set(key, ms);
-	}
 	if (saved.sortMs) {
 		for (const [path, ms] of Object.entries(saved.sortMs)) {
 			if (typeof ms === "number" && Number.isFinite(ms)) this.historySortMs.set(path, ms);
@@ -89,20 +80,12 @@ restoreHistoryUiState(this: SessionController): void {
 			if (typeof path === "string" && path) this.historyArchived.add(path);
 		}
 	}
-	if (Array.isArray(saved.unread)) {
-		for (const path of saved.unread) {
-			if (typeof path === "string" && path) this.historyUnreadComplete.add(path);
-		}
-	}
 },
 
 persistHistoryUiState(this: SessionController): void {
 	void this.context.workspaceState?.update(HISTORY_UI_STATE_KEY, {
 		sortMs: Object.fromEntries(this.historySortMs),
 		archived: [...this.historyArchived],
-		unread: [...this.historyUnreadComplete],
-		completedAt: Object.fromEntries(this.historyCompletedAt),
-		readAt: Object.fromEntries(this.historyReadAt),
 	});
 },
 
@@ -140,7 +123,6 @@ recordHistoryCompletion(this: SessionController, sessionPath: string, completedA
 markHistoryWaitingForUser(this: SessionController, sessionPath: string | undefined, completedAt: number): void {
 	const target = sessionPath ?? this.viewedSessionPath();
 	if (!target || !this.recordHistoryCompletion(target, completedAt)) return;
-	this.persistHistoryUiState();
 	this.paintHistory();
 },
 
@@ -149,17 +131,7 @@ markHistorySessionOpened(this: SessionController, sessionPath: string, completed
 	const key = this.historyPathKey(sessionPath);
 	this.historyReadAt.set(key, Math.max(this.historyReadAt.get(key) ?? 0, completedAt));
 	if ((this.historyCompletedAt.get(key) ?? 0) <= completedAt) this.historyUnreadComplete.delete(key);
-	this.persistHistoryUiState();
 	this.paintHistory();
-},
-
-async markHistoryUnread(this: SessionController, sessionPath: string, sessionId: string): Promise<void> {
-	const session = await this.resolveHistorySession(sessionPath, sessionId);
-	if (!session) return;
-	this.historyUnreadComplete.add(this.historyPathKey(session.path));
-	this.persistHistoryUiState();
-	this.paintHistory();
-	this.broadcast({ type: "notice", level: "info", text: "Marked unread." });
 },
 
 markHistoryArchived(this: SessionController, sessionPath: string): void {
@@ -253,10 +225,20 @@ async resolveHistorySession(this: SessionController, sessionPath: string, sessio
 updateHistoryRuntime(this: SessionController, sessionPath: string, status: RecentSession["status"], statusLabel?: string, revision = ++this.historyRuntimeClock.revision): void {
 	const key = this.historyPathKey(sessionPath);
 	if ((this.historyRuntime.get(key)?.revision ?? 0) > revision) return;
+	if (status === "running" && this.historyRuntime.get(key)?.status !== "running") {
+		// A new run replaces the previous reminder, even if it later fails.
+		this.historyUnreadComplete.delete(key);
+		this.historyReadAt.set(key, this.historyCompletedAt.get(key) ?? 0);
+	}
 	this.historyRuntime.set(key, { status, statusLabel, revision });
 },
 
 rowsFromCatalog(this: SessionController, catalog: SessionSummaryRef[], revision = ++this.historyRuntimeClock.revision): RecentSession[] {
+	const present = new Set(catalog.filter((s) => s.sessionFile && (s.rlmDepth ?? 0) === 0)
+		.map((s) => this.historyPathKey(s.sessionFile!)));
+	for (const key of this.historyRuntime.keys()) {
+		if (!present.has(key)) this.updateHistoryRuntime(key, undefined, undefined, revision);
+	}
 	const root = normalizeFsPath(this.workspaceRoot);
 	const inWorkspaceRows: Array<{ row: RecentSession; source: SessionSummaryRef }> = [];
 	const otherRows: Array<{ row: RecentSession; source: SessionSummaryRef }> = [];
@@ -338,7 +320,14 @@ async refreshHistoryCompletions(this: SessionController, rows: Array<{ path: str
 	for (const row of rows) {
 		const completedAt = await readSessionCompletion(row.path);
 		if (this.disposed) break;
-		changed = this.recordHistoryCompletion(row.path, completedAt) || changed;
+		if (completedAt === undefined) continue;
+		const key = this.historyPathKey(row.path);
+		if (!this.historyCompletedAt.has(key)) {
+			// First observation is a baseline, not a completion in this window.
+			this.historyCompletedAt.set(key, completedAt);
+		} else {
+			changed = this.recordHistoryCompletion(row.path, completedAt) || changed;
+		}
 	}
 	if (changed) {
 		this.persistHistoryUiState();
@@ -366,6 +355,7 @@ async collectHistory(this: SessionController): Promise<RecentSession[]> {
 			workspaceLimit: HISTORY_WORKSPACE_LIMIT,
 			otherLimit: HISTORY_OTHER_LIMIT,
 		});
+		for (const key of this.historyRuntime.keys()) this.updateHistoryRuntime(key, undefined, undefined, revision);
 		for (const row of rows) this.updateHistoryRuntime(row.path, undefined, undefined, revision);
 		await this.refreshHistoryCompletions(rows);
 		this.paintHistory();
@@ -474,11 +464,8 @@ async searchHistory(this: SessionController, query: string): Promise<void> {
 				name: info.name,
 				firstPrompt: info.firstMessage,
 				inWorkspace: normalizeFsPath(info.cwd) === root,
-				// `running` stays unset: the saved catalog has no runtime state, and
-				// "we did not ask" must not render as "not running". The status dot
-				// says "inactive" for the same reason the on-disk scan does — this
-				// row exists only because the roster did not carry it.
-				status: "inactive",
+				// The saved catalog cannot establish execution state.
+				status: undefined,
 				matchSnippet: snippet,
 			}),
 		);

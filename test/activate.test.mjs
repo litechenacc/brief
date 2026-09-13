@@ -16,6 +16,8 @@ const registeredSerializers = [];
 
 const vscodeStub = {
 	window: {
+		state: { focused: true },
+		onDidChangeWindowState: () => ({ dispose: () => {} }),
 		registerWebviewPanelSerializer: (id, serializer) => {
 			registeredSerializers.push({ id, serializer });
 			return { dispose: () => {} };

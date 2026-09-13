@@ -33,7 +33,7 @@ The default location is the **editor area**. Use the Command Palette to choose t
 | `Brief: Use Sidebar` | Moves the current session to the sidebar and remembers the workspace preference. |
 | `Brief: Toggle Chat Location` | Switches the current session between editor and sidebar. |
 | `Brief: Switch Session` | Chooses an open session to display in the sidebar. |
-| `Brief: Sessions in this workspace` | Reopens a session from workspace history without duplicating an already open session. |
+| `Brief: Session history` | Reopens a session from this workspace or the full session history without duplicating an already open session. |
 
 Moving a session does not stop its agent or move other editor tabs. The sidebar shows one session at a time; a displaced session remains available in the session menu.
 
@@ -56,7 +56,7 @@ This fork focuses on how chat feels during real coding work, not only on renderi
 - **Immediate feedback.** Sending a prompt shows the working indicator immediately. New Session opens the empty composer while the worker starts, with sending disabled until the new session is ready.
 - **Refined animation.** Animated working indicators, cycling activity text, and elapsed time make ongoing work visible between replies and tool calls.
 - **Less visual noise.** Unfinished thinking and tool arguments stay behind the working row by default. Live transcript rendering, tool-output streaming, thought-process blocks, and usage details are separately configurable.
-- **History 與燈號。** 紅燈表示仍有工作執行中，綠燈表示有未讀完成通知，灰燈表示沒有未讀通知。開啟 session 不會強制清除執行中的紅燈。只有對話成功呈現且視窗取得焦點後才確認已讀；背景分頁完成、清單刷新與連線中斷都不會自動清除未讀。`Mark unread` 可手動保留提醒，並立即同步其他分頁。
+- **History 與燈號。** 紅燈表示工作中，包含仍在執行的 subagent；綠燈表示目前 VS Code window 觀察到新的完成、尚未開啟查看。成功顯示對話後清除綠燈，不影響執行中的紅燈；已在前景查看時完成，不保留提醒。開始下一輪也會清除舊提醒。其他情況不顯示燈號。新安裝、開新 window 或 Reload Window 時，既有歷史只建立基準，不補發完成通知。提醒在同 window 的分頁與 sidebar 之間同步，不跨 window 保存；斷線或無法確認執行狀態時以文字提示，不推論為完成。
 - **Stable reading.** Transcript updates, scrolling, and view handoff are designed to keep you oriented while work continues.
 - **Native visual integration.** Chat colors follow the VS Code Color Theme, including High Contrast. Brief has its own app, activity-bar, and tab branding.
 

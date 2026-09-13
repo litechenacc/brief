@@ -125,7 +125,7 @@ check("closing another panel leaves the first panel attachment intact", live.con
 const sharedMemory = new Map();
 const sharedContext = context(sharedMemory);
 const panelA = new SessionController(sharedContext, output);
-const panelB = new SessionController(sharedContext, output);
+const panelB = new SessionController({ ...sharedContext }, output);
 panelA.markHistoryArchived("/history/a.jsonl");
 panelB.markHistoryArchived("/history/b.jsonl");
 check("two panels preserve each other's archive overlays", sharedMemory.get("brief.historyUi").archived.length === 2 && panelB.historyArchived.has("/history/a.jsonl"));
@@ -134,7 +134,12 @@ panelB.markHistoryWaitingForUser("/history/b.jsonl", 200);
 panelA.markHistorySessionOpened("/history/b.jsonl", 200);
 panelB.persistHistoryUiState();
 const sharedHistory = sharedMemory.get("brief.historyUi");
-check("another panel cannot restore a cleared unread marker or lose rank times", sharedHistory.unread.includes("/history/a.jsonl") && !sharedHistory.unread.includes("/history/b.jsonl") && Object.keys(sharedHistory.sortMs).length === 2);
+check("another panel cannot restore a cleared unread marker or lose rank times", panelB.historyUnreadComplete.has("/history/a.jsonl") && !panelB.historyUnreadComplete.has("/history/b.jsonl") && Object.keys(sharedHistory.sortMs).length === 2);
+check("completion and read state are not persisted", !Object.hasOwn(sharedHistory, "unread") && !Object.hasOwn(sharedHistory, "completedAt") && !Object.hasOwn(sharedHistory, "readAt"));
+check("panels share window-local completion and read maps", panelA.historyCompletedAt === panelB.historyCompletedAt && panelA.historyReadAt === panelB.historyReadAt && panelA.historyUnreadComplete === panelB.historyUnreadComplete);
+const reloadedWindow = new SessionController(context(sharedMemory), output);
+check("a re-created window restores archive and rank but not notifications", reloadedWindow.historyArchived.has("/history/a.jsonl") && reloadedWindow.historySortMs.get("/history/a.jsonl") === 100 && reloadedWindow.historyUnreadComplete.size === 0 && reloadedWindow.historyCompletedAt.size === 0 && reloadedWindow.historyReadAt.size === 0);
+reloadedWindow.dispose();
 panelB.decorateHistoryRow({ id: "history-b", path: "/history/b.jsonl", cwd: "/history", timestamp: new Date().toISOString(), inWorkspace: true, status: "running" });
 panelA.markHistorySessionOpened("/history/b.jsonl", 200);
 panelB.decorateHistoryRow({ id: "history-b", path: "/history/b.jsonl", cwd: "/history", timestamp: new Date().toISOString(), inWorkspace: true, status: "idle" });
@@ -154,8 +159,9 @@ check("history overlays do not leak to another workspace", otherWorkspace.histor
 const titlePosts = [];
 panelA.attach({ post: (message) => titlePosts.push(message) });
 panelA.lastHistory = [{ id: "history-b", path: "/history/b.jsonl", cwd: "/history", timestamp: new Date().toISOString(), inWorkspace: true }];
-panelA.historyUnreadComplete.add("/history/b.jsonl");
-panelA.markHistorySessionOpened("/history/b.jsonl", 200);
+panelA.markHistoryWaitingForUser("/history/b.jsonl", 300);
+titlePosts.length = 0;
+panelA.markHistorySessionOpened("/history/b.jsonl", 300);
 check("opening a finished session immediately repaints it as read",
 	titlePosts.some((message) => message.type === "history" && message.sessions[0]?.unreadComplete === false));
 titlePosts.length = 0;

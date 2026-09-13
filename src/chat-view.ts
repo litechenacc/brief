@@ -2,7 +2,7 @@
 import { randomBytes } from "node:crypto";
 import { completedMessageTime } from "./session-completion.js";
 import * as vscode from "vscode";
-import type { ChatReadReceipt, ChatViewState, HostToWebview, WebviewToHost } from "./protocol.js";
+import type { ChatReadReceipt, ChatViewState, HostToWebview, RecentSession, WebviewToHost } from "./protocol.js";
 import { SessionController } from "./session-controller.js";
 import { normalizeFsPath } from "./recent-sessions.js";
 export { parseWebviewMessage } from "./webview-message.js";
@@ -18,6 +18,7 @@ type ChatTab = {
 	controller: SessionController;
 	session?: SessionReference;
 	title: string;
+	entry?: RecentSession;
 	view?: ChatView;
 	state?: ChatViewState;
 	stateSessionId?: string;
@@ -36,8 +37,6 @@ type ChatView = {
 	missedMessages: boolean;
 	readReceipt?: ChatReadReceipt;
 	readRevision?: number;
-	readInvalidated?: boolean;
-	markingUnread?: boolean;
 	openingReadCutoff?: number;
 	markReady: () => void;
 	transferring: boolean;
@@ -68,8 +67,51 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 	private operations: Promise<unknown> = Promise.resolve();
 	private movingView: ChatView | undefined;
 	private disposed = false;
+	private historyRows: RecentSession[] = [];
 
-	constructor(private readonly context: vscode.ExtensionContext, private readonly output: vscode.OutputChannel) {}
+	private historyMessage(): HostToWebview {
+		const entries = [...this.tabs].flatMap((tab) => tab.entry ? [tab.entry] : []);
+		const rows = new Map(this.historyRows.map((row) => [normalizeFsPath(row.path), row]));
+		for (const entry of entries) {
+			const key = normalizeFsPath(entry.path);
+			const saved = rows.get(key);
+			rows.set(key, saved ? { ...saved, isNew: entry.isNew } : entry);
+		}
+		return { type: "history", sessions: [...rows.values()] };
+	}
+
+	private markTabSubmitted(tab: ChatTab): void {
+		if (!tab.entry) return;
+		tab.entry.isNew = false;
+		this.paintTabHistory();
+	}
+
+	private paintTabHistory(): void {
+		const message = this.historyMessage();
+		if (this.sidebar && !this.sidebar.tab && !this.sidebar.closed) void this.sidebar.webview.postMessage(message);
+		for (const tab of this.tabs) {
+			if (tab.view && !tab.view.closed) void tab.view.webview.postMessage(message);
+		}
+	}
+
+
+	private readonly windowFocus: vscode.Disposable;
+
+	constructor(private readonly context: vscode.ExtensionContext, private readonly output: vscode.OutputChannel) {
+		this.windowFocus = vscode.window.onDidChangeWindowState((state) => {
+			if (!state.focused) return;
+			for (const tab of this.tabs) {
+				if (tab.view) this.requestReadReceipt(tab.view);
+			}
+		});
+	}
+
+	private requestReadReceipt(view: ChatView): void {
+		if (view.readReceipt && !view.closed && !view.transferring && vscode.window.state.focused &&
+			(view.panel ? view.panel.visible && view.panel.active : view.sidebar?.visible)) {
+			void view.webview.postMessage({ type: "requestReadReceipt" });
+		}
+	}
 
 	private location(): ChatLocation {
 		return vscode.workspace.getConfiguration("brief").get<ChatLocation>("chatLocation", "editor");
@@ -130,14 +172,23 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 	}
 
 	private async openSession(source: SessionController, sessionFile: string, sessionId: string): Promise<void> {
-		const session = await source.resolveHistorySession(sessionFile, sessionId);
+		const draft = [...this.tabs].find((tab) => tab.entry?.isNew && !tab.session && tab.entry.id === sessionId && tab.entry.path === sessionFile);
+		if (draft) {
+			await this.enqueue(async () => {
+				if (draft.closed) return;
+				if (draft.view) { this.lastActive = draft; await this.reveal(draft.view); }
+				else await this.move(draft, this.location());
+			});
+			return;
+		}
+		const openEntry = [...this.tabs].find((tab) => tab.entry?.isNew && tab.session?.sessionId === sessionId && tab.session.sessionFile === sessionFile)?.entry;
+		const session = openEntry ?? await source.resolveHistorySession(sessionFile, sessionId);
 		if (!session || source.disposed) return;
 		await this.enqueue(async () => {
 			if (source.disposed) return;
 			const existing = [...this.tabs].find((tab) => tab.session?.sessionId === session.id ||
 				(tab.session && normalizeFsPath(tab.session.sessionFile) === normalizeFsPath(session.path)));
 			if (existing?.view) {
-				existing.view.readInvalidated = false;
 				existing.view.openingReadCutoff = existing.controller.historyCompletedAt.get(normalizeFsPath(session.path)) ?? 0;
 				this.lastActive = existing;
 				await this.reveal(existing.view);
@@ -178,6 +229,7 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 		if (!this.historyController) {
 			this.historyController = new SessionController(this.context, this.output);
 			this.historyAttachment = this.historyController.attach({ post: (message) => {
+				if (message.type === "history") { this.historyRows = message.sessions; message = this.historyMessage(); }
 				if (this.sidebar && !this.sidebar.tab && !this.sidebar.closed) void this.sidebar.webview.postMessage(message);
 			} });
 		}
@@ -193,19 +245,41 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 	private create(session?: SessionReference): ChatTab {
 		const controller = new SessionController(this.context, this.output);
 		const tab: ChatTab = { controller, session, title: "New Session", closed: false, attachment: { dispose() {} } };
+		if (!session) {
+			const id = `new-${getNonce()}`;
+			tab.entry = { id, path: id, cwd: controller.workspaceRoot, timestamp: new Date().toISOString(), inWorkspace: true, isNew: true, status: "idle" };
+		}
 		this.tabs.add(tab);
+		this.paintTabHistory();
 		this.lastActive = tab;
 		tab.attachment = controller.attach({ post: (message) => {
 			if (tab.closed) return;
+			if (message.type === "promptAccepted") this.markTabSubmitted(tab);
+			if (message.type === "history") { this.historyRows = message.sessions; message = this.historyMessage(); }
 			if (message.type === "snapshot" || message.type === "status") {
 				const status = message.status;
 				if (tab.view && tab.session && status.sessionId && status.sessionId !== tab.session.sessionId) {
 					tab.view.readReceipt = undefined;
 					tab.view.openingReadCutoff = undefined;
-					tab.view.readInvalidated = false;
 				}
 				if (status.sessionId && status.sessionFile) tab.session = { sessionId: status.sessionId, sessionFile: status.sessionFile };
 				const label = (status.sessionLabel ?? status.sessionName)?.trim() || (status.sessionId ? `Session ${status.sessionId.slice(0, 8)}` : "New Session");
+				if (tab.entry) {
+					const previousEntry = JSON.stringify(tab.entry);
+					if (tab.session) { tab.entry.id = tab.session.sessionId; tab.entry.path = tab.session.sessionFile; }
+					tab.entry.name = status.sessionLabel ?? status.sessionName;
+					// Until the catalog contains this session, use the same runtime
+					// verdict as the chat lamp. Submission alone is not execution.
+					const running = status.historyRunning !== undefined
+						? status.historyRunning === true
+						: status.connected && (status.streaming || status.compacting || status.retrying);
+					tab.entry.running = !!running;
+					tab.entry.status = status.historyRunning === null ? undefined : running ? "running" : status.connected ? "idle" : "inactive";
+					tab.entry.unreadComplete = status.unreadComplete;
+					// Token statuses must not rebuild history buttons between pointerdown
+					// and click. Only publish when the row itself changed.
+					if (JSON.stringify(tab.entry) !== previousEntry) this.paintTabHistory();
+				}
 				tab.title = label;
 				this.updateTitle(tab);
 				if (this.lastActive === tab) this.syncHistorySelection();
@@ -214,7 +288,7 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 				void this.sidebar.webview.postMessage(message);
 			}
 			const view = tab.view;
-			if (view && tab.session && !view.markingUnread && ((message.type === "snapshot" && !view.readInvalidated && message.status.sessionId === tab.session.sessionId && !message.status.restoring) || (message.type === "event" && message.event.type === "agent_end"))) {
+			if (view && tab.session && ((message.type === "snapshot" && message.status.sessionId === tab.session.sessionId && !message.status.restoring) || (message.type === "event" && message.event.type === "agent_end"))) {
 				const messages = message.type === "snapshot" ? message.messages : message.event.type === "agent_end" ? message.event.messages : [];
 				view.readReceipt = {
 					sessionId: tab.session.sessionId, path: tab.session.sessionFile,
@@ -272,29 +346,6 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 				}
 				return;
 			}
-			if (message.type === "markSessionUnread") {
-				if (view.closed || view.transferring || view.tab?.closed) return;
-				const invalidate = (renew: boolean) => {
-					for (const tab of this.tabs) {
-						if (tab.view && tab.session && normalizeFsPath(tab.session.sessionFile) === normalizeFsPath(message.path)) {
-							tab.view.readReceipt = undefined;
-							tab.view.openingReadCutoff = undefined;
-							tab.view.readInvalidated = renew;
-							tab.view.markingUnread = !renew;
-						}
-					}
-				};
-				invalidate(false);
-				const controller = view.tab?.controller ?? this.history();
-				void (async () => {
-					try {
-						if (view.tab) await this.initialize(view.tab);
-						await controller.markHistoryUnread(message.path, message.sessionId);
-					}
-					finally { invalidate(true); }
-				})().catch((error) => controller.showErrorNotice(String(error)));
-				return;
-			}
 			if (message.type === "ready") view.markReady();
 			const tab = view.tab;
 			if (view.sidebar && !tab && !view.closed && !view.transferring) {
@@ -302,31 +353,21 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 					if (message.type === "ready") { if (!this.sidebarResolved && this.location() === "editor") await this.showSidebarHistory(view); return; }
 					if (message.type === "newSession") { await this.newSession(); return; }
 					if (message.type === "switchSession") { await this.openSession(this.history(), message.path, message.sessionId); return; }
-					if (["requestHistory", "searchHistory", "renameHistorySession", "markSessionUnread", "stopSession", "archiveSession", "unarchiveSession", "deleteSession"].includes(message.type)) {
+					if (["requestHistory", "searchHistory", "renameHistorySession", "stopSession", "archiveSession", "unarchiveSession", "deleteSession"].includes(message.type)) {
 						await handleMessage(message, this.history(), (reply) => { void view.webview.postMessage(reply); });
 					}
 				})().catch((error) => this.history().showErrorNotice(String(error)));
 				return;
 			}
 			if (!tab || view.closed || tab.closed) return;
-			if (message.type === "chatFocused") {
-				if (view.readInvalidated && !view.transferring && tab.view === view && tab.session?.sessionId === message.sessionId &&
-					vscode.window.state.focused && (view.panel ? view.panel.visible && view.panel.active : view.sidebar?.visible)) {
-					view.readInvalidated = false;
-					view.openingReadCutoff = tab.controller.historyCompletedAt.get(normalizeFsPath(tab.session.sessionFile)) ?? 0;
-					void tab.controller.refreshSnapshot({ keepDraft: true }).catch((error) => { view.readInvalidated = true; tab.controller.showErrorNotice(String(error)); });
-				}
-				return;
-			}
 			if (message.type === "chatRendered") {
 				const receipt = view.readReceipt;
-				if (!view.transferring && !view.markingUnread && tab.view === view && vscode.window.state.focused &&
+				if (!view.transferring && tab.view === view && vscode.window.state.focused &&
 					(view.panel ? view.panel.visible && view.panel.active : view.sidebar?.visible) &&
 					receipt && receipt.revision === message.receipt.revision && receipt.sessionId === message.receipt.sessionId &&
 					receipt.path === message.receipt.path && tab.session?.sessionId === receipt.sessionId) {
 					view.readReceipt = undefined;
 					view.openingReadCutoff = undefined;
-					view.readInvalidated = false;
 					tab.controller.markHistorySessionOpened(receipt.path, receipt.completedAt);
 				}
 				return;
@@ -337,7 +378,7 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 				tab.controller.sendCachedModels();
 				view.loading = (view.loading ?? Promise.resolve()).catch(() => {}).then(async () => {
 					await this.initialize(tab);
-					if (!view.closed && !tab.closed && tab.view === view) await tab.controller.refreshSnapshot();
+					if (!view.closed && !tab.closed && tab.view === view) await tab.controller.refreshSnapshot({ keepDraft: tab.entry?.isNew === true });
 				});
 				void view.loading.then(async () => {
 					if (view.closed || tab.closed || tab.view !== view) return;
@@ -447,9 +488,13 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 			if (source) source.tab = undefined;
 			this.bind(tab, target);
 			await target.webview.postMessage({ type: "setHistoryMode", enabled: false });
+			if (displaced && tab.entry?.isNew === true && !tab.initialized) {
+				await target.webview.postMessage({ type: "newThread" });
+				await target.webview.postMessage({ type: "setViewMoving", moving: false });
+			}
 			tab.controller.sendCachedModels();
 			await this.initialize(tab);
-			await tab.controller.refreshSnapshot();
+			await tab.controller.refreshSnapshot({ keepDraft: tab.entry?.isNew === true });
 			if (tab.state) await this.restore(target, tab, tab.state);
 			if (target.closed || tab.closed) throw new Error("Chat view was closed.");
 			tab.state = undefined;
@@ -511,12 +556,16 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 
 	private close(tab: ChatTab): void {
 		tab.closed = true; tab.attachment.dispose(); tab.controller.dispose(); this.tabs.delete(tab);
+		if (tab.entry?.isNew) this.historyRows = this.historyRows.filter((row) => row.path !== tab.entry!.path);
+		else if (tab.entry && !this.historyRows.some((row) => row.path === tab.entry!.path)) this.historyRows.push(tab.entry);
+		this.paintTabHistory();
 		if (this.sidebarSession === tab) this.sidebarSession = undefined;
 		if (this.lastActive === tab) this.lastActive = [...this.tabs].at(-1);
 	}
 
 	dispose(): void {
 		this.disposed = true;
+		this.windowFocus.dispose();
 		this.historyAttachment?.dispose();
 		this.historyController?.dispose();
 		this.sidebar?.disposeBinding();
@@ -560,9 +609,6 @@ async function handleMessage(message: WebviewToHost, controller: SessionControll
 			return;
 		case "stopSession":
 			await controller.stopSession(message.path, message.sessionId);
-			return;
-		case "markSessionUnread":
-			await controller.markHistoryUnread(message.path, message.sessionId);
 			return;
 		case "archiveSession":
 			await controller.archiveSession(message.path, message.sessionId);

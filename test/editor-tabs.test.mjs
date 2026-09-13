@@ -76,12 +76,12 @@ class Controller {
 	async prompt(payload, reply) { this.calls.push(["prompt", payload]); reply({ type: "promptAccepted", clientRequestId: payload.clientRequestId }); }
 	persistDraft(...args) { this.calls.push(["draft", ...args]); }
 	markHistorySessionOpened(...args) { this.calls.push(["read", ...args]); }
-	async markHistoryUnread(...args) { this.calls.push(["unread", ...args]); await this.unreadGate; }
 	async abort() { this.calls.push(["abort"]); }
 	newSession() { throw new Error("New tab must not replace an existing session"); }
 	showErrorNotice(text) { throw new Error(text); }
 	dispose() { this.disposed = true; }
 }
+const windowStateChange = event();
 const stub = {
 	ConfigurationTarget: { Workspace: 2 },
 	workspace: { getConfiguration: () => ({ get: (key, fallback) => key === "chatLocation" ? chatLocation : fallback,
@@ -91,7 +91,7 @@ const stub = {
 		if (!sidebar || sidebar.disposed) { sidebar = makePanel(false); manager.resolveWebviewView(sidebar); }
 	} },
 	ThemeIcon: class { constructor(id) { this.id = id; } },
-	window: { state: { focused: true }, showQuickPick: async (items) => items.find((item) => item.description === pickedSession), createWebviewPanel(type, title, column, options) {
+	window: { state: { focused: true }, onDidChangeWindowState: windowStateChange.subscribe, showQuickPick: async (items) => items.find((item) => item.description === pickedSession), createWebviewPanel(type, title, column, options) {
 		assert.equal(type, "brief.chatPanel"); assert.equal(options.retainContextWhenHidden, true);
 		const panel = makePanel(); panel.activate(); return panel;
 	} },
@@ -125,6 +125,8 @@ try {
 	assert.ok(!controllers[0].calls.some(([name]) => name === "setModel"), "model operation waits for runtime, not the picker UI");
 	finishStart(); await opening; startGate = undefined;
 	await tick();
+	assert.ok(controllers[0].calls.filter(([name]) => name === "snapshot").every(([, options]) => options?.keepDraft === true),
+		"new chat refreshes must not replace the draft typed during startup");
 	assert.deepEqual(controllers[0].calls.find(([name]) => name === "setModel"), ["setModel", "cached", "cached-model"], "cached choice reaches the new runtime after startup");
 	await manager.newSession();
 	const [a, b] = panels, [ca, cb] = controllers;
@@ -148,48 +150,31 @@ try {
 	let receipt = publishReadSnapshot();
 	a.send({ type: "chatRendered", receipt });
 	assert.equal(ca.calls.filter(([name]) => name === "read").length, 0, "background editor cannot read");
-	a.activate(); stub.window.state.focused = false;
+	a.activate();
+	assert.equal(a.webview.messages.at(-1).type, "requestReadReceipt", "native tab activation asks visible chat to acknowledge without input focus");
+	stub.window.state.focused = false;
 	a.send({ type: "chatRendered", receipt });
 	assert.equal(ca.calls.filter(([name]) => name === "read").length, 0, "unfocused window cannot read");
 	stub.window.state.focused = true;
+	windowStateChange.fire({ focused: true });
+	assert.equal(a.webview.messages.at(-1).type, "requestReadReceipt", "returning to the window asks active chat to acknowledge");
 	a.send({ type: "chatRendered", receipt: { ...receipt, sessionId: "session-b" } });
 	assert.equal(ca.calls.filter(([name]) => name === "read").length, 0, "wrong identity cannot read");
 	a.send({ type: "chatRendered", receipt }); a.send({ type: "chatRendered", receipt });
 	assert.deepEqual(ca.calls.filter(([name]) => name === "read"), [["read", "/known/a.jsonl", 42]], "successful display reads once");
-	receipt = publishReadSnapshot();
-	b.send({ type: "markSessionUnread", path: "/known/a.jsonl", sessionId: "session-a" });
-	a.send({ type: "chatRendered", receipt }); await tick();
-	assert.equal(ca.calls.filter(([name]) => name === "read").length, 1, "manual unread invalidates receipts in other views");
-	const snapshotsBeforeFocus = ca.calls.filter(([name]) => name === "snapshot").length;
 	ca.historyCompletedAt.set("/known/a.jsonl", 100);
-	a.send({ type: "chatFocused", sessionId: "session-a" });
-	assert.equal(ca.calls.filter(([name]) => name === "snapshot").length, snapshotsBeforeFocus + 1, "returning to manually unread native chat renews its snapshot");
+	await manager.openSession(ca, "/known/a.jsonl", "session-a");
 	ca.historyCompletedAt.set("/known/a.jsonl", 200);
 	const stale = receipt; receipt = publishReadSnapshot([]);
-	assert.equal(receipt.completedAt, 100, "opening cutoff covers compacted history but excludes completion discovered after focus");
+	assert.equal(receipt.completedAt, 100, "opening cutoff covers compacted history but excludes later completion");
 	const firstCompacted = receipt;
 	receipt = publishReadSnapshot([]);
-	assert.equal(receipt.completedAt, 100, "consecutive snapshots retain opening cutoff until an accepted acknowledgement");
+	assert.equal(receipt.completedAt, 100, "consecutive snapshots retain opening cutoff until acknowledgement");
 	a.send({ type: "chatRendered", receipt: firstCompacted });
-	assert.equal(ca.calls.filter(([name]) => name === "read").length, 1, "first compacted snapshot acknowledgement is stale");
 	a.send({ type: "chatRendered", receipt: stale });
 	assert.equal(ca.calls.filter(([name]) => name === "read").length, 1, "stale render cannot clear a newer completion");
 	a.send({ type: "chatRendered", receipt });
 	assert.equal(ca.calls.filter(([name]) => name === "read").length, 2);
-	let finishUnread;
-	cb.unreadGate = new Promise((resolve) => { finishUnread = resolve; });
-	b.send({ type: "markSessionUnread", path: "/known/a.jsonl", sessionId: "session-a" }); await tick();
-	assert.equal(publishReadSnapshot(), undefined, "snapshot during manual unread cannot issue a receipt");
-	a.send({ type: "chatRendered", receipt });
-	assert.equal(ca.calls.filter(([name]) => name === "read").length, 2, "snapshot during manual unread cannot clear it");
-	finishUnread(); await tick();
-	assert.equal(publishReadSnapshot(), undefined, "ordinary snapshot after manual unread cannot issue a receipt");
-	a.send({ type: "chatRendered", receipt });
-	assert.equal(ca.calls.filter(([name]) => name === "read").length, 2, "manual completion invalidates in-flight snapshot receipts");
-	a.send({ type: "chatFocused", sessionId: "session-a" });
-	receipt = publishReadSnapshot();
-	a.send({ type: "chatRendered", receipt });
-	assert.equal(ca.calls.filter(([name]) => name === "read").length, 3, "only explicit chat focus renews reading after manual unread");
 	b.activate();
 
 	const longTitle = "很長的對話標題用來確認原生分頁不再無限制變寬";
@@ -205,7 +190,7 @@ try {
 	assert.equal(ca.calls.find(([name]) => name === "prompt")[1].text, "only alpha");
 	assert.ok(!cb.calls.some(([name]) => name === "prompt"));
 	assert.ok(!ca.calls.some(([name]) => name === "draft"));
-	assert.deepEqual(cb.calls.find(([name]) => name === "draft"), ["draft", "beta draft", "session-b"]);
+	assert.deepEqual(cb.calls.find(([name]) => name === "draft"), ["draft", "beta draft", "session-b", undefined]);
 	assert.ok(a.webview.messages.some((m) => m.clientRequestId === "alpha-1"));
 	assert.ok(!b.webview.messages.some((m) => m.clientRequestId === "alpha-1"));
 	const snapshotsBefore = ca.calls.filter(([name]) => name === "snapshot").length;
@@ -243,11 +228,12 @@ try {
 	assert.equal(longActionFinished, false);
 	finishLongAction(); await Promise.all([longAction, concurrentAbort]);
 	assert.equal(longActionFinished, true);
+	const revealsBeforeResume = a.reveals;
 	b.send({ type: "switchSession", path: "/known/a.jsonl", sessionId: "session-a" }); await tick();
-	assert.equal(panels.length, 2); assert.equal(a.reveals, 1);
+	assert.equal(panels.length, 2); assert.equal(a.reveals, revealsBeforeResume + 1);
 	assert.equal(a.webview.messages.at(-1).type, "focusComposer", "history resume reveals chat rather than retained history view");
 	b.send({ type: "switchSession", path: "/forged/a.jsonl", sessionId: "session-a" }); await tick();
-	assert.equal(a.reveals, 1, "already-open history still validates path");
+	assert.equal(a.reveals, revealsBeforeResume + 1, "already-open history still validates path");
 	let resolveHistory;
 	cb.historyGate = new Promise((resolve) => { resolveHistory = resolve; });
 	b.send({ type: "switchSession", path: "/known/c.jsonl", sessionId: "session-c" });
@@ -259,7 +245,7 @@ try {
 	assert.ok(!cb.calls.some(([name]) => name === "switch"), "history preserves source session");
 	const beforeNew = a.webview.messages.length;
 	a.send({ type: "newSession" }); await tick();
-	assert.equal(panels.length, 4); assert.equal(a.webview.messages.length, beforeNew);
+	assert.equal(panels.length, 4); assert.ok(a.webview.messages.slice(beforeNew).every((message) => message.type === "history"), "new tab only updates history in existing chats");
 	panels[3].send({ type: "ready" }); await tick();
 	assert.ok(controllers[3].calls.some(([name]) => name === "start"));
 	c.activate(); b.dispose();
@@ -439,14 +425,59 @@ try {
 	assert.deepEqual(controllers.at(-1).calls, [["history"]]);
 	assert.ok(sidebar.webview.messages.some(m => m.type === "setHistoryMode" && m.enabled));
 	const catalogController = controllers.at(-1);
-	sidebar.send({ type: "markSessionUnread", path: "/known/old.jsonl", sessionId: "old" }); await tick();
-	assert.ok(catalogController.calls.some(([name]) => name === "unread"), "history-only sidebar dispatches manual unread");
 	sidebar.send({ type: "chatRendered", receipt: { sessionId: "old", path: "/known/old.jsonl", revision: 1, completedAt: 42 } }); await tick();
 	assert.ok(!catalogController.calls.some(([name]) => name === "read"), "history-only sidebar cannot acknowledge chat");
 	const beforeResume = panels.length;
 	sidebar.send({ type: "switchSession", path: "/known/old.jsonl", sessionId: "old" }); await tick();
 	assert.equal(panels.length, beforeResume + 1, "history opens unopened sessions in editor");
 	assert.deepEqual(controllers.at(-1).calls.find(([name]) => name === "switch"), ["switch", "/known/old.jsonl", "old"]);
+	await manager.newSession();
+	const draftPanel = panels.at(-1), draftController = controllers.at(-1);
+	const latestHistory = () => sidebar.webview.messages.filter((message) => message.type === "history").at(-1).sessions;
+	let entry = latestHistory().find((row) => row.isNew);
+	assert.ok(entry, "new tab appears in history before runtime identity exists");
+	const tabCount = panels.length;
+	sidebar.send({ type: "switchSession", path: entry.path, sessionId: entry.id }); await tick();
+	assert.equal(panels.length, tabCount, "provisional entry focuses its existing tab");
+	draftController.sink.post({ type: "status", status: { sessionId: "draft", sessionFile: "/known/draft.jsonl" } });
+	assert.equal(latestHistory().filter((row) => row.isNew).length, 1, "runtime identity replaces provisional entry");
+	catalogController.sink.post({ type: "history", sessions: [{ id: "draft", path: "/known/draft.jsonl", cwd: "/ws", timestamp: new Date().toISOString(), inWorkspace: true, status: "running", running: true }] });
+	assert.equal(latestHistory().find((row) => row.id === "draft")?.running, true, "new marker must not override catalog running state before acceptance");
+	catalogController.sink.post({ type: "history", sessions: [] });
+	draftController.sink.post({ type: "promptAccepted", kind: "prompt" });
+	assert.equal(latestHistory().find((row) => row.id === "draft")?.isNew, false, "daemon broadcast acceptance clears new marker");
+	draftController.sink.post({ type: "status", status: { sessionId: "draft", sessionFile: "/known/draft.jsonl", connected: true, streaming: true, historyRunning: true } });
+	assert.equal(latestHistory().find((row) => row.id === "draft")?.running, true, "daemon-accepted new session turns red");
+	const historyPaints = () => sidebar.webview.messages.filter((message) => message.type === "history").length;
+	const paintsBeforeTokens = historyPaints();
+	for (let token = 0; token < 20; token++) {
+		draftController.sink.post({ type: "event", event: { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "token" } } });
+		draftController.sink.post({ type: "status", status: { sessionId: "draft", sessionFile: "/known/draft.jsonl", connected: true, streaming: true, historyRunning: true } });
+	}
+	assert.equal(historyPaints(), paintsBeforeTokens, "token updates must not rebuild history buttons during a click");
+	sidebar.send({ type: "switchSession", path: "/known/old.jsonl", sessionId: "old" }); await tick();
+	assert.ok(!draftController.calls.some(([name]) => name === "abort"), "history navigation does not stop the streaming session");
+	assert.ok(panels.some((panel) => panel.active && panel !== draftPanel), "history can focus another editor while tokens arrive");
+	// Use another unsent tab to cover close-without-send independently.
+	await manager.newSession();
+	const unsentPanel = panels.at(-1);
+	controllers.at(-1).sink.post({ type: "status", status: { sessionId: "unsent", sessionFile: "/known/unsent.jsonl" } });
+	unsentPanel.dispose();
+	assert.ok(!latestHistory().some((row) => row.id === "unsent"), "closing unsent tab removes entry");
+	await manager.newSession();
+	const sentPanel = panels.at(-1), sentController = controllers.at(-1);
+	sentController.sink.post({ type: "status", status: { sessionId: "sent", sessionFile: "/known/sent.jsonl" } });
+	sentPanel.send({ type: "prompt", payload: { text: "Keep this session", images: [], selections: [], streamingBehavior: "steer" } }); await tick();
+	assert.equal(latestHistory().find((row) => row.id === "sent")?.isNew, false, "accepted prompt clears new marker");
+	const sentStatus = { sessionId: "sent", sessionFile: "/known/sent.jsonl", connected: true, streaming: true, historyRunning: true };
+	sentController.sink.post({ type: "status", status: sentStatus });
+	assert.equal(latestHistory().find((row) => row.id === "sent")?.status, "running", "newly submitted entry follows runtime before catalog catches up");
+	sentController.sink.post({ type: "status", status: { ...sentStatus, historyRunning: false } });
+	assert.equal(latestHistory().find((row) => row.id === "sent")?.running, false, "authoritative idle clears red despite stale streaming");
+	sentController.sink.post({ type: "status", status: { ...sentStatus, historyRunning: null } });
+	assert.equal(latestHistory().find((row) => row.id === "sent")?.status, undefined, "unknown runtime does not keep red");
+	sentPanel.dispose();
+	assert.ok(latestHistory().some((row) => row.id === "sent"), "closing submitted tab retains history entry");
 	console.log("PASS native editor session tabs");
 } finally {
 	manager?.dispose(); Module._load = originalLoad; rmSync(dir, { recursive: true, force: true });

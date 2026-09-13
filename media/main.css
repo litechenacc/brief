@@ -907,6 +907,22 @@ details.thinking .thinking-body {
 	font-weight: 600;
 }
 
+.history-scope {
+	margin-left: auto;
+	padding: 3px 7px;
+	font: inherit;
+	font-size: 11px;
+	color: var(--pa-text);
+	background: transparent;
+	border: 1px solid var(--pa-border);
+	border-radius: 4px;
+	cursor: pointer;
+}
+
+.history-scope:hover {
+	background: var(--pa-surface-2);
+}
+
 .history-sort {
 	margin: 0 12px;
 	padding: 4px 7px;
@@ -1383,7 +1399,7 @@ body.vscode-high-contrast-light .history-item.current {
 	display: flex;
 	align-items: center;
 	gap: 7px;
-	padding: 3px 11px 5px;
+	padding: 3px 0 0;
 	font-size: 10px;
 	color: var(--pa-dim);
 	flex-shrink: 0;
@@ -1398,11 +1414,16 @@ body.vscode-high-contrast-light .history-item.current {
 }
 
 .conn-dot {
+	display: none;
 	width: 7px;
 	height: 7px;
 	border-radius: 50%;
-	background: #8b8d98;
 	flex-shrink: 0;
+}
+
+.conn-dot.working,
+.conn-dot.complete {
+	display: inline-block;
 }
 
 .conn-dot.working {
@@ -1416,16 +1437,15 @@ body.vscode-high-contrast-light .history-item.current {
 	box-shadow: 0 0 6px #30a46c99;
 }
 
-.conn-dot.seen {
-	background: #8b8d98;
-	box-shadow: none;
-}
-
 .live-label {
 	display: inline-flex;
 	align-items: center;
 	line-height: 1;
 	white-space: nowrap;
+}
+
+.live-label:empty {
+	display: none;
 }
 
 .live-label.working {
@@ -1436,10 +1456,6 @@ body.vscode-high-contrast-light .history-item.current {
 
 .live-label.complete {
 	color: #30a46c;
-}
-
-.live-label.seen {
-	color: #8b8d98;
 }
 
 .session-id {
@@ -2324,46 +2340,13 @@ pre.term {
 	border-color: transparent;
 }
 
-/* ---------- boot splash ---------- */
-
-.boot-splash {
-	position: absolute;
-	inset: 0;
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	justify-content: center;
-	gap: 12px;
-	background: var(--pa-bg);
-	z-index: 120;
-	transition: opacity 0.55s ease;
-}
-
-.boot-splash.gone {
-	opacity: 0;
-	pointer-events: none;
-}
-
-.boot-splash-mark svg {
-	opacity: 0.9;
-	animation: boot-breathe 1.8s ease-in-out infinite;
-}
-
-.boot-splash-name {
-	font-size: 15px;
-	font-weight: 600;
-	letter-spacing: 0.02em;
-	animation: boot-breathe 1.8s ease-in-out infinite;
-}
-
-.boot-splash-sub {
-	font-size: 11px;
+.send-btn.unavailable,
+.send-btn.unavailable:hover {
+	border: 1px dashed currentColor;
+	background: transparent;
 	color: var(--pa-dim);
-}
-
-@keyframes boot-breathe {
-	0%, 100% { opacity: 0.35; }
-	50% { opacity: 1; }
+	opacity: 1;
+	cursor: not-allowed;
 }
 
 /* ---------- history search + stateful refresh ---------- */
@@ -2814,7 +2797,6 @@ pre.term {
 	width: 7px;
 	height: 7px;
 	border-radius: 50%;
-	background: #8b8d98;
 }
 
 .running-mark.working .running-dot {
@@ -2829,12 +2811,6 @@ pre.term {
 	animation: none;
 }
 
-.running-mark.seen .running-dot {
-	background: #8b8d98;
-	box-shadow: none;
-	animation: none;
-	opacity: 0.7;
-}
 
 
 
@@ -2923,4 +2899,11 @@ pre.term {
 }
 
 /* Editor conversations leave a persistent history list in the sidebar. */
-.history-only .history-header > button { display: none; }
+.history-only .history-back { display: none; }
+
+/* Attachment markers keep the textarea glyph metrics for mirror parity. */
+.composer-mirror .attachment-marker { color: var(--vscode-textLink-foreground); background: var(--vscode-textBlockQuote-background); border-radius: 3px; }
+.attachment-open { display: flex; flex: 1; min-width: 0; align-items: center; gap: 6px; border: 0; background: none; color: inherit; cursor: pointer; font: inherit; }
+.attachment-card .chip-remove { flex-shrink: 0; }
+.attachment-open img { width: 32px; height: 32px; object-fit: cover; border-radius: 3px; }
+.attachment-open:focus-visible, .attachment-card .chip-remove:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
