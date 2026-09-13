@@ -1,7 +1,7 @@
 /**
  * Parse untrusted webview postMessage payloads into bounded protocol objects.
  */
-import type { ChatViewState, ComposerDraft, ImageAttachment, PromptPayload, SelectionAttachment, WebviewToHost } from "./protocol.js";
+import type { ChatViewState, ComposerAttachment, ComposerDraft, ImageAttachment, PromptPayload, SelectionAttachment, WebviewToHost } from "./protocol.js";
 
 const MAX_PROMPT_TEXT_CHARS = 200_000;
 // Keep this transport envelope aligned with the image picker and composer.
@@ -61,6 +61,22 @@ function base64ByteLength(value: string): number {
 	return (value.length / 4) * 3 - padding;
 }
 
+function parseAttachment(value: unknown): ComposerAttachment | undefined {
+	if (!isRecord(value) || !isIdentifier(value.id) || (value.kind !== "text" && value.kind !== "image")) return undefined;
+	if (!isBoundedString(value.label, 256) || /[\[\]\r\n]/.test(value.label)) return undefined;
+	if (!isRequestId(value.start) || !isRequestId(value.end) || value.end < value.start || value.end > MAX_PROMPT_TEXT_CHARS) return undefined;
+	if (!["pending", "ready", "error"].includes(String(value.status))) return undefined;
+	if (value.text !== undefined && !isBoundedString(value.text, MAX_PROMPT_TEXT_CHARS, true)) return undefined;
+	let image: ImageAttachment | undefined;
+	if (value.image !== undefined) {
+		const parsed = parsePromptPayload({ text: "", images: [value.image], selections: [], streamingBehavior: "steer" });
+		if (!parsed) return undefined;
+		image = parsed.images[0];
+	}
+	return { id: value.id, kind: value.kind, label: value.label, start: value.start, end: value.end,
+		status: value.status as ComposerAttachment["status"], ...(value.text === undefined ? {} : { text: value.text }), ...(image ? { image } : {}) };
+}
+
 function parsePromptPayload(value: unknown, allowEmpty = false): PromptPayload | undefined {
 	if (!isRecord(value)) return undefined;
 	if (!isBoundedString(value.text, MAX_PROMPT_TEXT_CHARS, true)) return undefined;
@@ -103,11 +119,29 @@ function parsePromptPayload(value: unknown, allowEmpty = false): PromptPayload |
 		});
 	}
 
+	let attachments: ComposerAttachment[] | undefined;
+	if (value.attachments !== undefined) {
+		if (!Array.isArray(value.attachments) || value.attachments.length > 64) return undefined;
+		attachments = [];
+		const ids = new Set<string>();
+		let end = 0, cachedText = 0;
+		for (const raw of value.attachments) {
+			const ref = parseAttachment(raw);
+			if (!ref || ids.has(ref.id) || ref.start < end || value.text.slice(ref.start, ref.end) !== `[${ref.label}]`) return undefined;
+			ids.add(ref.id); end = ref.end;
+			cachedText += ref.text?.length ?? 0;
+			if (cachedText > MAX_PROMPT_TEXT_CHARS) return undefined;
+			if (ref.image) { totalImageBytes += base64ByteLength(ref.image.data); if (totalImageBytes > MAX_TOTAL_IMAGE_BYTES) return undefined; }
+			attachments.push(ref);
+		}
+		if (images.length + attachments.filter((ref) => ref.kind === "image").length > MAX_PROMPT_IMAGES) return undefined;
+	}
 	if (!allowEmpty && value.text.length === 0 && images.length === 0 && selections.length === 0) return undefined;
 	if (value.clientRequestId !== undefined && !isIdentifier(value.clientRequestId)) return undefined;
 	if (value.sessionId !== undefined && !isIdentifier(value.sessionId)) return undefined;
 	return {
 		text: value.text,
+		...(attachments === undefined ? {} : { attachments }),
 		images,
 		selections,
 		streamingBehavior: value.streamingBehavior,
@@ -125,7 +159,7 @@ function parseComposerDraft(value: unknown): ComposerDraft | undefined {
 	if (!isRecord(value)) return undefined;
 	const payload = parsePromptPayload({ ...value, streamingBehavior: "steer" }, true);
 	if (!payload || !Array.isArray(value.accepted) || value.accepted.length > 256 || !value.accepted.every(isPath)) return undefined;
-	return { text: payload.text, images: payload.images, selections: payload.selections, accepted: [...value.accepted] };
+	return { text: payload.text, images: payload.images, selections: payload.selections, accepted: [...value.accepted], ...(payload.attachments === undefined ? {} : { attachments: payload.attachments }) };
 }
 
 export function parseChatViewState(value: unknown): ChatViewState | undefined {
@@ -152,6 +186,13 @@ export function parseWebviewMessage(value: unknown): WebviewToHost | undefined {
 	if (!isRecord(value) || typeof value.type !== "string") return undefined;
 
 	switch (value.type) {
+		case "createAttachment": {
+			const attachment = parseAttachment(value.attachment);
+			return isIdentifier(value.sessionId) && attachment && (attachment.kind === "text" ? attachment.text !== undefined : attachment.image !== undefined)
+				? { type: "createAttachment", sessionId: value.sessionId, attachment } : undefined;
+		}
+		case "openAttachment":
+			return isIdentifier(value.sessionId) && isIdentifier(value.id) ? { type: "openAttachment", sessionId: value.sessionId, id: value.id } : undefined;
 		case "viewStateCaptured": {
 			if (!isIdentifier(value.requestId) || !(value.sessionId === "" || isIdentifier(value.sessionId))) return undefined;
 			const state = parseChatViewState(value.state);
@@ -222,10 +263,13 @@ export function parseWebviewMessage(value: unknown): WebviewToHost | undefined {
 			return isPath(value.path) && isIdentifier(value.sessionId)
 				? { type: "deleteSession", path: value.path, sessionId: value.sessionId }
 				: undefined;
-		case "draftChanged":
-			return isBoundedString(value.text, MAX_DRAFT_CHARS, true) && isIdentifier(value.sessionId)
-				? { type: "draftChanged", text: value.text, sessionId: value.sessionId }
-				: undefined;
+		case "draftChanged": {
+			if (!isBoundedString(value.text, MAX_DRAFT_CHARS, true) || !isIdentifier(value.sessionId)) return undefined;
+			if (value.attachmentDraft === undefined) return { type: "draftChanged", text: value.text, sessionId: value.sessionId };
+			if (!isRecord(value.attachmentDraft) || !Array.isArray(value.attachmentDraft.attachments)) return undefined;
+			const draft = parsePromptPayload({ ...value.attachmentDraft, images: [], selections: [], streamingBehavior: "steer" }, true);
+			return draft ? { type: "draftChanged", text: value.text, sessionId: value.sessionId, attachmentDraft: { text: draft.text, attachments: draft.attachments! } } : undefined;
+		}
 		case "setCompactThreshold":
 			return value.percent === null || (isLineNumber(value.percent) && value.percent >= 20 && value.percent <= 97)
 				? { type: "setCompactThreshold", percent: value.percent }

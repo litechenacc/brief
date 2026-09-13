@@ -65,6 +65,21 @@ check("cached selection immediately paints and queues the host operation", early
 // while the composer accepts a draft before the first status arrives.
 const splash = document.querySelector(".boot-splash");
 check("boot does not block the chat", !splash && !document.querySelector("textarea")?.disabled && document.querySelector(".live-label")?.textContent === "connecting");
+const startupInput = document.querySelector("textarea");
+const startupSend = document.querySelector(".send-btn:not(.stop)");
+check("startup send is disabled with a static unavailable border", startupSend.disabled && startupSend.classList.contains("unavailable"));
+check("startup send has an accessible connection explanation", startupSend.getAttribute("aria-label").includes("Connecting"));
+startupInput.value = "draft while connecting";
+startupInput.dispatchEvent(new window.Event("input", { bubbles: true }));
+for (const restoring of [false, true]) {
+	hostMessage({ type: "status", status: { connected: false, restoring, streaming: false, modelLabel: "Agent", thinkingLevel: "off" } });
+	check(`startup remains editable (restoring=${restoring})`, !startupInput.disabled && startupInput.placeholder === "Message Brief…");
+	check("connection-only status preserves the cached choice", earlyModelButton.textContent.includes("cached-model"));
+	startupInput.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+	startupSend.click();
+	check("startup cannot send by Enter or click", !posted.some((m) => m.type === "prompt") && startupInput.value === "draft while connecting");
+}
+// A restoring status must not overwrite the cached local choice.
 hostMessage({ type: "status", status: { connected: false, restoring: true, streaming: false, modelLabel: "Agent", thinkingLevel: "off" } });
 check("startup status does not erase cached selection", earlyModelButton.textContent.includes("cached-model"));
 
@@ -105,6 +120,12 @@ hostMessage({
 	status: baseStatus,
 	steerDefault: "steer",
 });
+
+check("first session identity preserves the startup draft", startupInput.value === "draft while connecting");
+check("ready session enables send before live models arrive", !startupSend.disabled && !startupSend.classList.contains("unavailable"));
+check("ready send restores its accessible label", startupSend.getAttribute("aria-label") === "Send (Enter)");
+startupInput.value = "";
+startupInput.dispatchEvent(new window.Event("input", { bubbles: true }));
 
 check("status persists the exact session for editor restoration", savedWebviewState.session?.sessionId === baseStatus.sessionId && savedWebviewState.session?.sessionFile === baseStatus.sessionFile);
 check("session persistence preserves history fold state", savedWebviewState.historyFolds?.archive === true);
@@ -481,7 +502,7 @@ check("Enter after composition sends the committed text",
 
 // --- history view (grouped) ---
 posted.length = 0;
-const historyBtn = document.querySelector('button[title="Sessions in this workspace"]');
+const historyBtn = document.querySelector('button[title="Session history"]');
 historyBtn.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
 check("requests history on toggle", posted.some((m) => m.type === "requestHistory"));
 hostMessage({
@@ -491,6 +512,29 @@ hostMessage({
 		{ path: "/tmp/b.jsonl", cwd: "/other/proj", timestamp: new Date().toISOString(), firstPrompt: "work on proj", inWorkspace: false },
 	],
 });
+const historyScope = document.querySelector(".history-scope");
+check("history defaults to this workspace", historyScope.textContent === "This workspace" && document.querySelectorAll(".history-item").length === 1);
+check("workspace scope uses Active and hides other sessions",
+	document.querySelector(".history-group-summary")?.textContent === "Active (1)" && !document.querySelector(".history-list")?.textContent.includes("work on proj"));
+historyScope.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+check("scope toggle shows all sessions", historyScope.textContent === "All sessions" && document.querySelectorAll(".history-item").length === 2);
+check("scope toggle persists", savedWebviewState.historyScope === "all");
+check("all-session scope keeps folder context", [...document.querySelectorAll(".history-item")].some((i) => i.textContent.includes("proj")));
+historyScope.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+hostMessage({
+	type: "history",
+	sessions: [
+		{ id: "scope-live", path: "/tmp/scope-live.jsonl", cwd: "/ws", timestamp: new Date().toISOString(), name: "workspace active", inWorkspace: true },
+		{ id: "scope-arch", path: "/tmp/scope-arch.jsonl", cwd: "/ws", timestamp: new Date().toISOString(), name: "workspace archive", inWorkspace: true, archived: true },
+		{ id: "other-arch", path: "/tmp/other-arch.jsonl", cwd: "/other", timestamp: new Date().toISOString(), name: "other archive", inWorkspace: false, archived: true },
+	],
+});
+check("workspace scope filters Active and Archive alike",
+	[...document.querySelectorAll(".history-group-summary")].map((n) => n.textContent).join("|") === "Active (1)|Archive (1)" &&
+	!document.querySelector(".history-list")?.textContent.includes("other archive"));
+historyScope.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+check("all-session scope keeps lifecycle groups without workspace groups",
+	[...document.querySelectorAll(".history-group-summary")].map((n) => n.textContent).join("|") === "Active (1)|Archive (2)");
 hostMessage({
 	type: "history",
 	sessions: [
@@ -505,8 +549,8 @@ check("priority sort keeps running sessions ahead, then uses frozen sortMs", ite
 const relativeTimes = [...document.querySelectorAll(".history-item .history-item-time")].map((n) => n.textContent);
 check("renamed session labels by activity time", relativeTimes[2].includes("d"), JSON.stringify(relativeTimes));
 check("history groups rendered", document.querySelectorAll(".history-item").length === 4);
-check("workspace group is foldable",
-	[...document.querySelectorAll(".history-group-summary")].some((n) => n.textContent.includes("This workspace")));
+check("active group is foldable",
+	[...document.querySelectorAll(".history-group-summary")].some((n) => n.textContent.includes("Active")));
 const historySort = document.querySelector(".history-sort");
 historySort.value = "birth";
 historySort.dispatchEvent(new window.Event("change", { bubbles: true }));
@@ -554,7 +598,7 @@ hostMessage({
 	check("other resumes are not marked current", [...document.querySelectorAll(".history-item:not(.current) .history-resume")].every((button) => !button.hasAttribute("aria-current")));
 	check("history has a concise heading and named search", document.querySelector(".history-title")?.textContent === "Sessions" && document.querySelector(".history-search")?.getAttribute("aria-label") === "Search sessions");
 	check("current row title is not suffixed", currentRow?.querySelector(".history-item-name")?.textContent === "current thread");
-	check("current row still has time + status on the right", !!currentRow?.querySelector(".history-item-meta .history-item-time") && !!currentRow?.querySelector(".history-item-meta .running-mark"));
+	check("current idle row keeps time without a lamp", !!currentRow?.querySelector(".history-item-meta .history-item-time") && !currentRow?.querySelector(".history-item-meta .running-mark"));
 	check("current row still has a resume control", currentRow?.querySelector("button.history-resume") instanceof window.HTMLButtonElement);
 	posted.length = 0;
 	currentRow.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
@@ -670,6 +714,15 @@ document.querySelector(".history-search").value = "";
 document.querySelector(".history-search").dispatchEvent(new window.Event("input", { bubbles: true }));
 check("search cleared restores both groups", document.querySelectorAll(".history-item").length === 2);
 
+hostMessage({ type: "history", sessions: [{ id: "new-tab", path: "new-tab", cwd: "/ws", timestamp: new Date().toISOString(), inWorkspace: true, isNew: true, status: "idle" }] });
+check("unsent session has explicit new label", document.querySelector(".history-item-name")?.textContent === "New session" && document.querySelector(".history-new-session")?.textContent === "New session");
+check("unsent session has no file management actions", document.querySelectorAll(".history-actions button").length === 0);
+posted.length = 0;
+document.querySelector(".history-resume").click();
+check("new session row routes to its open tab", posted.some((message) => message.type === "switchSession" && message.sessionId === "new-tab"));
+hostMessage({ type: "history", sessions: [] });
+check("closed unsent session leaves no row", document.querySelectorAll(".history-item").length === 0);
+
 // The history-only sidebar follows editor focus, including list refreshes.
 hostMessage({ type: "setHistoryMode", enabled: true });
 const focusSessions = ["focus-a", "focus-b"].map(id => ({ id, path: `/tmp/${id}.jsonl`, cwd: "/ws", timestamp: new Date().toISOString(), name: id, inWorkspace: true }));
@@ -699,7 +752,12 @@ hostMessage({ type: "setHistoryMode", enabled: false });
 check("context label shows capacity", document.querySelector(".context-label").textContent === "Context 23% · 60K / 262K");
 check("context tooltip shows used and total tokens", document.querySelector(".context-meter").title === "Context 23% · 60,000 / 262,144 tokens");
 const sessionUsage = document.querySelector("details.stats-label");
-check("session fee is labeled and details collapsed", !sessionUsage.open && sessionUsage.querySelector("summary").textContent === "This session $0.0040");
+check("session footer is inside the prompt card at the bottom", document.querySelector(".composer-card").lastElementChild === document.querySelector(".status-strip"));
+check("session footer has no conversation copy button", !document.querySelector(".status-strip button"));
+check("session fee uses two decimals and details stay collapsed", !sessionUsage.open && sessionUsage.querySelector("summary").textContent === "$0.00");
+hostMessage({ type: "status", status: { ...baseStatus, costUsd: 1.236 } });
+check("session fee rounds to two decimals", sessionUsage.querySelector("summary").textContent === "$1.24");
+hostMessage({ type: "status", status: baseStatus });
 check("session details state scope and cumulative usage", sessionUsage.textContent.includes("4.5k tokens") && sessionUsage.textContent.includes("subagents") && sessionUsage.textContent.includes("$0.0040"));
 sessionUsage.open = true;
 hostMessage({ type: "status", status: { ...baseStatus, costUsd: 0 } });
@@ -828,15 +886,12 @@ const wallClockPhase = Date.now() % 2800;
 const phaseDelta = Math.min(Math.abs(runningDotPhase - wallClockPhase), 2800 - Math.abs(runningDotPhase - wallClockPhase));
 check("rebuilt running lamps join a shared animation phase", Number.isFinite(runningDotDelay) && phaseDelta < 50, `${runningDotDelay}ms, delta=${phaseDelta}ms`);
 check("a running row is the red working lamp", markOf("live worker")?.className.includes("working"), markOf("live worker")?.className);
-check("an idle row still gets a dot, not nothing", !!markOf("quiet archive")?.querySelector(".running-dot"));
-check("an idle row without unread is grey", markOf("quiet archive")?.className.includes("seen"), markOf("quiet archive")?.className);
-check("an inactive row is shown and marked seen until a turn finishes", markOf("retired thread")?.className.includes("seen"), markOf("retired thread")?.className);
-check("each state says what it means", [markOf("live worker"), markOf("quiet archive"), markOf("retired thread")]
-	.map((m) => m?.title ?? "").every((t) => t.length > 0));
-check("a host that sends no status still reads as seen, never as working",
-	markOf("legacy row")?.className.includes("seen") && !markOf("legacy row")?.className.includes("working"), markOf("legacy row")?.className);
-check("unknown execution does not claim completion", markOf("legacy row")?.title === "No unread notifications — Execution status unavailable");
-check("read history tooltip describes notifications", markOf("quiet archive")?.title === "No unread notifications");
+check("an idle row has no lamp", !markOf("quiet archive"));
+check("an inactive row has no lamp", !markOf("retired thread"));
+check("working tooltip describes execution", markOf("live worker")?.title === "Working");
+check("unknown execution has no lamp", !markOf("legacy row"));
+check("unknown execution is conveyed in text", rowNamed("legacy row")?.textContent.includes("Execution status unavailable"));
+check("history has no manual unread action", !document.querySelector('[title="Mark unread"]'));
 hostMessage({
 	type: "history",
 	sessions: [
@@ -844,7 +899,7 @@ hostMessage({
 	],
 });
 check("a finished unread row is the green complete lamp", markOf("just finished")?.className.includes("complete"), markOf("just finished")?.className);
-check("unread tooltip does not claim a finished run", markOf("just finished")?.title === "Unread");
+check("completion tooltip describes the window reminder", markOf("just finished")?.title === "Newly completed");
 posted.length = 0;
 rowNamed("just finished")?.querySelector(".history-resume")?.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
 check("opening a finished row keeps its lamp until a successful host-confirmed render",
@@ -877,7 +932,7 @@ hostMessage({
 });
 
 check("session chrome actions stay in the webview for tests and welcome",
-	!!document.querySelector('button[title="New session"]') && !!document.querySelector('button[title="Sessions in this workspace"]'));
+	!!document.querySelector('button[title="New session"]') && !!document.querySelector('button[title="Session history"]'));
 
 // --- the strip header tallies each state, and stays right as they change -----
 {
@@ -947,6 +1002,25 @@ check("session chrome actions stay in the webview for tests and welcome",
 	bubble.open = true;
 	check("the expanded reply renders markdown", bubble.querySelector("strong")?.textContent === "budgets drifted");
 	check("an entry marked display:false stays hidden", !document.body.textContent.includes("should never be shown"));
+}
+
+// Unnamed daemon agents have endpoint IDs but no sessionName.
+{
+	const content = "Agent-to-agent message received.\nSource: agent_message\nFrom: active 0d1a3b8a04c5, session child-session, client daemon-client:sender\nTo: active receiver, session parent-session\nMessage id: agentmsg_test\n\n我已完成，**不再編輯**。";
+	const senders = [
+		{ activeSessionId: "0d1a3b8a04c5", sessionId: "child-session", clientId: "daemon-client:sender" },
+		{ sessionName: "  ", sessionId: "session-only" },
+		{ clientId: "daemon-client:only" },
+		undefined,
+	];
+	hostMessage({ type: "snapshot", state: null, status: baseStatus, messages: senders.map((from) => ({
+		role: "custom", customType: "agent_message", display: true, content,
+		details: { message: "我已完成，**不再編輯**。", from },
+	})) });
+	const replies = [...document.querySelectorAll(".conversation-message")];
+	check("unnamed agent messages render as conversation bubbles", replies.length === 4 && !document.querySelector(".custom-note"));
+	check("unnamed senders use endpoint identity or an agent label", JSON.stringify(replies.map((row) => row.querySelector(".conversation-sender")?.textContent)) === JSON.stringify(["0d1a3b8a04c5", "session-only", "daemon-client:only", "agent"]));
+	check("unnamed replies hide the transport envelope and render body markdown", replies.length === 4 && replies.every((row) => !row.textContent.includes("Source: agent_message") && row.querySelector("strong")?.textContent === "不再編輯"));
 }
 
 // Async shell completions and background-task wake prompts use the same folded conversation bubble.
@@ -1620,42 +1694,37 @@ check(
 );
 check("paste did not post a prompt", !posted.some((m) => m.type === "prompt"));
 
-// --- imagePicked on a text-only model is refused with a hint; on vision it attaches ---
+// --- Native image picker retains tracked position and rejects text-only sends without data loss. ---
 posted.length = 0;
 hostMessage({ type: "status", status: { ...baseStatus } });
 const textOnlyImageRequest = requestImageFromPicker();
 hostMessage({ type: "status", status: { ...baseStatus, modelProvider: "chutes", modelId: "glm", modelLabel: "chutes/glm" } });
 hostMessage({ type: "imagePicked", requestId: textOnlyImageRequest.requestId, images: [{ data: "aGk=", mimeType: "image/png", name: "pic.png" }] });
-check("image pick refused on text-only model", document.querySelectorAll(".composer-chips .compose-chip.image").length === 0);
+check("image pick refused on text-only model", document.querySelectorAll(".composer-chips .attachment-card").length === 0);
 check("refusal hint visible", pasteHint.classList.contains("visible") && pasteHint.textContent.includes("text-only"), pasteHint.textContent);
-// switch back to a vision model: the chip now attaches
 hostMessage({ type: "status", status: { ...baseStatus } });
+textarea.value = "with image ";
+textarea.dispatchEvent(new window.Event("input"));
+textarea.setSelectionRange(textarea.value.length, textarea.value.length);
 const visionImageRequest = requestImageFromPicker();
 hostMessage({ type: "imagePicked", requestId: visionImageRequest.requestId, images: [{ data: "aGk=", mimeType: "image/png", name: "pic.png" }] });
-check("image chip rendered on vision model", document.querySelectorAll(".composer-chips .compose-chip.image").length === 1);
-// then switching to a text-only model strips + warns on send
+const createdImage = posted.filter(m => m.type === "createAttachment").at(-1);
+check("image picker requests a host-owned temporary image", createdImage?.attachment.kind === "image");
+if (createdImage) hostMessage({ type: "attachmentCreated", sessionId: createdImage.sessionId, id: createdImage.attachment.id });
+check("image card rendered on vision model", document.querySelectorAll(".composer-chips .attachment-card").length === 1);
+const imageDraft = textarea.value;
 hostMessage({ type: "status", status: { ...baseStatus, modelProvider: "chutes", modelId: "glm", modelLabel: "chutes/glm" } });
 posted.length = 0;
-textarea.value = "with image";
 textarea.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
-const guardedPrompt = posted.find((m) => m.type === "prompt");
-check("send still posts prompt text", !!guardedPrompt && guardedPrompt.payload.text === "with image");
-check("images stripped on text-only send", !!guardedPrompt && guardedPrompt.payload.images.length === 0);
-check("send guard hint visible", pasteHint.classList.contains("visible") && pasteHint.textContent.includes("Dropped images"),
-	pasteHint.textContent);
-check("chips cleared after guarded send", document.querySelectorAll(".composer-chips .compose-chip").length === 0);
-check("optimistic bubble has no image strip", !document.querySelector(".bubble-images"));
-// Reattach one image, then prove the guard does not turn an image-only send on
-// a text-only model into an empty prompt.
-hostMessage({ type: "status", status: { ...baseStatus } });
-const onlyImageRequest = requestImageFromPicker();
-hostMessage({ type: "imagePicked", requestId: onlyImageRequest.requestId, images: [{ data: "aGk=", mimeType: "image/png", name: "only-image.png" }] });
-hostMessage({ type: "status", status: { ...baseStatus, modelProvider: "chutes", modelId: "glm", modelLabel: "chutes/glm" } });
+check("text-only send keeps image draft instead of silently discarding it", !posted.some(m => m.type === "prompt") && textarea.value === imageDraft);
+check("send guard explains text-only refusal", pasteHint.classList.contains("visible") && pasteHint.textContent.includes("text-only"), pasteHint.textContent);
+check("refused send preserves image card", document.querySelectorAll(".composer-chips .attachment-card").length === 1);
+check("refused send has no optimistic image bubble", !document.querySelector(".bubble-images"));
+document.querySelector(".composer-chips .attachment-card .chip-remove")?.click();
+check("explicit card removal also removes its marker", textarea.value === "with image " && document.querySelectorAll(".composer-chips .attachment-card").length === 0);
 posted.length = 0;
-textarea.value = "";
 textarea.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
-check("text-only image-only send does not post an empty prompt", !posted.some((m) => m.type === "prompt"), JSON.stringify(posted));
-check("image-only guard clears the unusable chip", document.querySelectorAll(".composer-chips .compose-chip.image").length === 0);
+check("text-only text sends after explicit image removal", posted.some(m => m.type === "prompt" && m.payload.text === "with image" && m.payload.images.length === 0));
 hostMessage({ type: "status", status: { ...baseStatus } });
 
 // --- @-mention chips in user bubbles ---
@@ -1729,7 +1798,7 @@ hostMessage({ type: "event", event: { type: "message_start", message: { role: "u
 check("confirmed second prompt does not duplicate its optimistic row", scroller.querySelectorAll(".row-user").length === 1, String(scroller.querySelectorAll(".row-user").length));
 
 // --- history delete: inline confirm posts deleteSession ---
-const historyBtnAgain = document.querySelector('button[title="Sessions in this workspace"]');
+const historyBtnAgain = document.querySelector('button[title="Session history"]');
 historyBtnAgain.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
 // Search must be cleared BEFORE the fixture: the needle blocks lastSessions updates.
 document.querySelector(".history-search").value = "";
@@ -1865,16 +1934,21 @@ check("insertSelection retains the attached selection", [...document.querySelect
 hostMessage({ type: "newThread" });
 check("host newThread returns to chat", document.querySelector(".history-view")?.style.display === "none");
 check("newThread paints the empty session immediately", !!document.querySelector(".welcome"), document.querySelector(".messages")?.textContent?.slice(0, 80) ?? "none");
-check("newThread accepts a draft while send waits for the session", !textarea.disabled && textarea.placeholder.includes("Connecting"), `${textarea.disabled} ${textarea.placeholder}`);
+check("newThread accepts a draft while send waits for the session", !textarea.disabled && textarea.placeholder === "Message Brief…" && document.querySelector(".send-btn.unavailable"), `${textarea.disabled} ${textarea.placeholder}`);
 posted.length = 0;
 textarea.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
 check("Enter during create does not post a prompt", !posted.some((m) => m.type === "prompt"), JSON.stringify(posted.map((m) => m.type)));
+textarea.value = "new thread startup draft";
+textarea.dispatchEvent(new window.Event("input", { bubbles: true }));
 hostMessage({
 	type: "snapshot",
 	messages: [],
 	state: { model: { provider: "chutes", id: "kimi" }, thinkingLevel: "max" },
 	status: { ...baseStatus, sessionId: "session-created", sessionName: "", restoring: false },
 });
+check("new thread draft survives session creation", textarea.value === "new thread startup draft");
+textarea.value = "";
+textarea.dispatchEvent(new window.Event("input", { bubbles: true }));
 check("the created session unlocks the composer", !textarea.disabled && textarea.placeholder === "Message Brief…", `${textarea.disabled} ${textarea.placeholder}`);
 
 // --- #5/C10: steer vs queue while a run is live, and a Stop that really aborts ---
@@ -2113,7 +2187,7 @@ arrow("ArrowUp");
 check("a host draft push restarts recall at the newest", textarea.value === "steer now", JSON.stringify(textarea.value));
 clearBox();
 
-// Read receipts require a successfully rendered, focused chat, not history repaints.
+// Read receipts require a successfully rendered visible chat; the host checks foreground focus.
 let readingFocused = true;
 Object.defineProperty(document, "hasFocus", { configurable: true, value: () => readingFocused });
 Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
@@ -2131,26 +2205,41 @@ hostMessage({ type: "history", sessions: [] }); await readFrame();
 check("status and history repaint do not acknowledge read", !posted.some((m) => m.type === "chatRendered"));
 check("header uses shared unread state", document.querySelector(".conn-dot")?.classList.contains("complete"));
 hostMessage({ type: "status", status: { ...baseStatus, connected: false, streaming: true, compacting: true, retrying: true, sessionId: readReceipt.sessionId } });
-check("offline header ignores stale local execution state", document.querySelector(".conn-dot")?.classList.contains("seen"));
+check("offline header has no lamp for stale local execution", document.querySelector(".conn-dot")?.className === "conn-dot" && document.querySelector(".live-label")?.textContent === "offline");
 hostMessage({ type: "status", status: { ...baseStatus, connected: false, historyRunning: true, sessionId: readReceipt.sessionId } });
 check("known global execution stays red without a local attachment", document.querySelector(".conn-dot")?.classList.contains("working"));
 hostMessage({ type: "status", status: { ...baseStatus, statusText: "opened", historyRunning: true, sessionId: readReceipt.sessionId } });
 check("running lamp never labels an attached session opened", document.querySelector(".conn-dot")?.classList.contains("working") && document.querySelector(".live-label")?.textContent === "working");
 hostMessage({ type: "status", status: { ...baseStatus, statusText: "opened", historyRunning: false, sessionId: readReceipt.sessionId } });
-check("authoritative idle clears red after response ends", document.querySelector(".conn-dot")?.classList.contains("seen") && document.querySelector(".live-label")?.textContent === "opened");
+check("authoritative idle clears red after response ends", document.querySelector(".conn-dot")?.className === "conn-dot" && document.querySelector(".live-label")?.textContent === "");
+hostMessage({ type: "sessionChildren", children: [{ id: "stale", activeSessionId: "stale", status: "running" }] });
+hostMessage({ type: "status", status: { ...baseStatus, streaming: true, compacting: true, retrying: true, historyRunning: false, sessionId: readReceipt.sessionId } });
+for (const statusText of ["running", "working", "compacting…", "retrying…"]) {
+	hostMessage({ type: "status", status: { ...baseStatus, streaming: true, statusText, historyRunning: false, sessionId: readReceipt.sessionId } });
+	check(`known idle overrides stale ${statusText} label`, document.querySelector(".live-label")?.textContent === "live");
+}
+check("known idle beats stale streaming and child state", document.querySelector(".conn-dot")?.className === "conn-dot" && document.querySelector(".live-label")?.textContent === "live");
+hostMessage({ type: "status", status: { ...baseStatus, streaming: true, historyRunning: null, sessionId: readReceipt.sessionId } });
+check("explicit unknown suppresses stale work and uses text", document.querySelector(".conn-dot")?.className === "conn-dot" && document.querySelector(".live-label")?.textContent === "Execution status unavailable");
+hostMessage({ type: "sessionChildren", children: [] });
 hostMessage({ type: "showHistory" });
 posted.length = 0;
 hostMessage({ ...readSnapshot, readReceipt: { ...readReceipt, revision: 2 } }); await readFrame();
 check("hidden chat does not acknowledge a snapshot", !posted.some((m) => m.type === "chatRendered"));
+hostMessage({ type: "requestReadReceipt" }); await readFrame();
+check("native activation does not acknowledge hidden chat", !posted.some((m) => m.type === "chatRendered"));
 window.dispatchEvent(new window.Event("focus"));
 check("focusing history actions does not request chat reading", !posted.some((m) => m.type === "chatFocused"));
 readingFocused = false;
 hostMessage({ type: "focusComposer" }); await readFrame();
-check("unfocused document does not acknowledge", !posted.some((m) => m.type === "chatRendered"));
+check("opening rendered chat acknowledges without document focus", posted.some((m) => m.type === "chatRendered" && m.receipt.revision === 2));
+posted.length = 0;
+hostMessage({ type: "requestReadReceipt" }); await readFrame();
+check("native tab activation acknowledges rendered chat without document focus", posted.some((m) => m.type === "chatRendered" && m.receipt.revision === 2));
 readingFocused = true;
 window.dispatchEvent(new window.Event("focus")); await readFrame();
 check("focusing rendered chat acknowledges pending snapshot", posted.some((m) => m.type === "chatRendered" && m.receipt.revision === 2));
-check("returning to chat requests a fresh receipt after manual unread", posted.some((m) => m.type === "chatFocused" && m.sessionId === readReceipt.sessionId));
+check("returning to chat does not use the removed manual-unread focus message", !posted.some((m) => m.type === "chatFocused"));
 hostMessage({ type: "setHistoryMode", enabled: true });
 posted.length = 0;
 hostMessage({ ...readSnapshot, readReceipt: { ...readReceipt, revision: 3 } });

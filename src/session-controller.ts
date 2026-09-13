@@ -57,6 +57,8 @@ import { buildMarkdownExport } from "./markdown-export.js";
 import { listRecentSessions, normalizeFsPath } from "./recent-sessions.js";
 import { deriveSessionLabel, firstUserPrompt } from "./session-label.js";
 import { archiveSessionFile, deleteSession, isSessionActive, renameSessionOffline } from "./session-actions.js";
+import { ComposerAttachments } from "./composer-attachments.js";
+import type { ComposerAttachment } from "./protocol.js";
 import { RpcClient } from "./rpc-client.js";
 
 const execFileAsync = promisify(execFile);
@@ -262,6 +264,14 @@ export class SessionController implements vscode.Disposable {
 		readonly output: vscode.OutputChannel,
 	) {
 		this.restoreHistoryUiState();
+		this.disposables.push(vscode.workspace.onDidSaveTextDocument(async (doc) => {
+			if (doc.uri.scheme !== "file") return;
+			for (const [sessionId, saved] of this.attachmentDrafts) {
+				if (this.composerAttachments.referencesTextPath(sessionId, saved.draft.attachments, doc.uri.fsPath)) {
+					await this.saveDraft("", sessionId, saved.key, saved.draft);
+				}
+			}
+		}));
 		this.disposables.push(
 			vscode.workspace.onDidChangeConfiguration((event) => {
 				if (
@@ -952,11 +962,51 @@ export class SessionController implements vscode.Disposable {
 		return restored;
 	}
 
+	private readonly composerAttachments = new ComposerAttachments();
+
+	private attachmentSession(sessionId: string): void {
+		const current = this.attached ? this.attached.sessionId ?? path.basename(this.attached.sessionPath, ".jsonl") : this.state?.sessionId;
+		if (this.disposed || this.observingId || !current || current !== sessionId) throw new Error("The attachment belongs to a different or unavailable session.");
+	}
+
+	async createAttachment(sessionId: string, attachment: ComposerAttachment, reply: (message: HostToWebview) => void): Promise<void> {
+		try {
+			this.attachmentSession(sessionId);
+			await this.composerAttachments.create(sessionId, attachment);
+			this.attachmentSession(sessionId);
+			reply({ type: "attachmentCreated", sessionId, id: attachment.id });
+		} catch (error) {
+			reply({ type: "attachmentCreated", sessionId, id: attachment.id, error: error instanceof Error ? error.message : String(error) });
+		}
+	}
+
+	async openAttachment(sessionId: string, id: string): Promise<void> {
+		this.attachmentSession(sessionId);
+		await this.composerAttachments.open(sessionId, id);
+	}
+
+	async prompt(payload: PromptPayload, reply: (message: HostToWebview) => void = (message) => this.broadcast(message)): Promise<void> {
+		try {
+			if (payload.attachments?.length) {
+				this.attachmentSession(payload.sessionId ?? "");
+				const epoch = this.viewEpoch;
+				const expanded = await this.composerAttachments.expand(payload);
+				const recallText = expanded.recallText;
+				this.attachmentSession(payload.sessionId ?? "");
+				if (epoch !== this.viewEpoch) throw new Error("The viewed session changed before the prompt could be sent.");
+				if (this.composeMessageText(expanded).length > 200_000) throw new Error("Expanded prompt exceeds 200,000 characters. Shorten the attachments before sending.");
+				await this.sendPrompt(expanded, reply, recallText);
+			} else await this.sendPrompt(payload, reply);
+		} catch (error) {
+			this.rejectPrompt(payload, error instanceof Error ? error.message : String(error), reply);
+		}
+	}
+
 	rejectPrompt(payload: PromptPayload, error: string, reply: (message: HostToWebview) => void = (message) => this.broadcast(message)): void {
 		reply({ type: "promptRejected", error, clientRequestId: payload.clientRequestId });
 	}
 
-	async prompt(payload: PromptPayload, reply: (message: HostToWebview) => void = (message) => this.broadcast(message)): Promise<void> {
+	private async sendPrompt(payload: PromptPayload, reply: (message: HostToWebview) => void = (message) => this.broadcast(message), recallText?: string): Promise<void> {
 		if (this.isCreatingSession()) {
 			this.rejectPrompt(payload, "The new session is still being created — nothing was sent.", reply);
 			return;
@@ -980,7 +1030,7 @@ export class SessionController implements vscode.Disposable {
 			try {
 				sidecar = await this.ensureSidecar();
 			} catch (err) {
-				if (this.isCurrentAttachment(attached)) this.rejectPrompt(payload, err instanceof Error ? err.message : "daemon prompt failed", reply);
+				this.rejectPrompt(payload, err instanceof Error ? err.message : "daemon prompt failed", reply);
 				return;
 			}
 			if (!this.isCurrentAttachment(attached)) {
@@ -995,9 +1045,9 @@ export class SessionController implements vscode.Disposable {
 			try {
 				await sidecar.prompt(attached.activeSessionId, text, behavior, images);
 				if (!this.isCurrentAttachment(attached)) return;
-				this.broadcast({ type: "promptAccepted", kind: "prompt", clientRequestId: payload.clientRequestId });
+				this.broadcast({ type: "promptAccepted", kind: "prompt", clientRequestId: payload.clientRequestId, ...(recallText === undefined ? {} : { recallText }) });
 			} catch (err) {
-				if (this.isCurrentAttachment(attached)) this.rejectPrompt(payload, err instanceof Error ? err.message : "daemon prompt failed", reply);
+				this.rejectPrompt(payload, err instanceof Error ? err.message : "daemon prompt failed", reply);
 			}
 			return;
 		}
@@ -1020,7 +1070,10 @@ export class SessionController implements vscode.Disposable {
 			let liveId: string | undefined;
 			try {
 				const liveRes = await client.request({ type: "get_state" }, 30_000);
-				if (!this.isCurrentRpcView(client, epoch)) return;
+				if (!this.isCurrentRpcView(client, epoch)) {
+					this.rejectPrompt(payload, "The viewed session changed before the prompt could be sent.", reply);
+					return;
+				}
 				if (liveRes.success) {
 					const live = liveRes.data as RpcSessionState;
 					this.state = live;
@@ -1060,7 +1113,7 @@ export class SessionController implements vscode.Disposable {
 			this.debugLog.append(`prompt response: success=${response.success}`);
 			this.output.appendLine(`[prime-agent] prompt response: success=${response.success}`);
 			if (response.success) {
-				this.broadcast({ type: "promptAccepted", kind, clientRequestId: payload.clientRequestId });
+				this.broadcast({ type: "promptAccepted", kind, clientRequestId: payload.clientRequestId, ...(recallText === undefined ? {} : { recallText }) });
 			} else {
 				this.rejectPrompt(payload, response.error ?? "prompt rejected", reply);
 			}
@@ -1437,12 +1490,30 @@ export class SessionController implements vscode.Disposable {
 		return `brief-draft:${this.sessionKey()}`;
 	}
 
-	persistDraft(text: string, sessionId: string): void {
-		// The webview sends debounced changes. Refuse a late message from the
-		// outgoing thread rather than writing it under the new thread's key.
+	private readonly draftRevisions = new Map<string, number>();
+	private readonly attachmentDrafts = new Map<string, { key: string; draft: { text: string; attachments: ComposerAttachment[] } }>();
+
+	async persistDraft(text: string, sessionId: string, attachmentDraft?: { text: string; attachments: ComposerAttachment[] }): Promise<void> {
 		if (sessionId !== this.sessionKey()) return;
-		const bounded = text.slice(0, 16_000);
-		void this.context.globalState.update(this.draftKey(), bounded && bounded.trim() ? bounded : undefined);
+		// Capture the outgoing session's key before attachment reads yield.
+		const key = this.draftKey();
+		if (attachmentDraft?.attachments.length) this.attachmentDrafts.set(sessionId, { key, draft: attachmentDraft });
+		else this.attachmentDrafts.delete(sessionId);
+		await this.saveDraft(text, sessionId, key, attachmentDraft);
+	}
+
+	private async saveDraft(text: string, sessionId: string, key: string, attachmentDraft?: { text: string; attachments: ComposerAttachment[] }): Promise<void> {
+		const revision = (this.draftRevisions.get(sessionId) ?? 0) + 1;
+		this.draftRevisions.set(sessionId, revision);
+		try {
+			if (attachmentDraft) text = await this.composerAttachments.draftText(sessionId, attachmentDraft);
+			if (text.length > 200_000) throw new Error("Draft exceeds 200,000 characters; shorten it before saving.");
+			if (revision !== this.draftRevisions.get(sessionId)) return;
+			await this.context.globalState.update(key, text.trim() ? text : undefined);
+		} catch (error) {
+			// Pending/missing attachments must not replace a previously saved draft.
+			this.output.appendLine(`Draft was not saved: ${String(error)}`);
+		}
 	}
 
 	restoreDraft(): void {

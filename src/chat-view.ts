@@ -393,15 +393,26 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 				if (message.type === "newSession") { await this.newSession(); return; }
 				if (message.type === "switchSession") { await this.openSession(tab.controller, message.path, message.sessionId); return; }
 				await handleMessage(message, tab.controller, (reply) => {
+					if (reply.type === "promptAccepted" && tab.entry) {
+						if (message.type === "prompt") tab.entry.firstPrompt = message.payload.text;
+						this.markTabSubmitted(tab);
+					}
 					if (!view.closed && tab.view === view) void view.webview.postMessage(reply);
 				});
-			})().catch((error) => tab.controller.showErrorNotice(`Operation failed: ${String(error)}`));
+			})().catch((error) => {
+				const detail = error instanceof Error ? error.message : String(error);
+				if (message.type === "prompt") void view.webview.postMessage({ type: "promptRejected", clientRequestId: message.payload.clientRequestId, error: detail });
+				if (message.type === "createAttachment") void view.webview.postMessage({ type: "attachmentCreated", sessionId: message.sessionId, id: message.attachment.id, error: detail });
+				tab.controller.showErrorNotice(`Operation failed: ${detail}`);
+			});
 		});
 		const visibility = panel ? panel.onDidChangeViewState(() => {
 			if (panel.active && view.tab) this.lastActive = view.tab;
 			this.refreshVisible(view);
+			this.requestReadReceipt(view);
 		}) : sidebar!.onDidChangeVisibility(() => {
 			this.refreshVisible(view);
+			this.requestReadReceipt(view);
 		});
 		view.disposeBinding = () => {
 			if (view.closed) return;
@@ -576,6 +587,12 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 
 async function handleMessage(message: WebviewToHost, controller: SessionController, reply: (message: HostToWebview) => void): Promise<void> {
 	switch (message.type) {
+		case "createAttachment":
+			await controller.createAttachment(message.sessionId, message.attachment, reply);
+			return;
+		case "openAttachment":
+			await controller.openAttachment(message.sessionId, message.id);
+			return;
 		case "prompt":
 			try {
 				await controller.prompt(message.payload, reply);
@@ -626,7 +643,7 @@ async function handleMessage(message: WebviewToHost, controller: SessionControll
 			await controller.dismissInstallPrompt();
 			return;
 		case "draftChanged":
-			controller.persistDraft(message.text, message.sessionId);
+			await controller.persistDraft(message.text, message.sessionId, message.attachmentDraft);
 			return;
 		case "setCompactThreshold":
 			controller.setCompactThreshold(message.percent);

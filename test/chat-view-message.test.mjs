@@ -96,8 +96,15 @@ assert.deepEqual(parseWebviewMessage({ type: "chatRendered", receipt }), { type:
 for (const invalid of [{ ...receipt, revision: -1 }, { ...receipt, sessionId: "bad/id" }, { ...receipt, path: "" }, { ...receipt, completedAt: NaN }]) {
 	assert.equal(parseWebviewMessage({ type: "chatRendered", receipt: invalid }), undefined);
 }
-assert.deepEqual(parseWebviewMessage({ type: "markSessionUnread", path: "/known/one.jsonl", sessionId: "session-1" }), { type: "markSessionUnread", path: "/known/one.jsonl", sessionId: "session-1" });
-assert.equal(parseWebviewMessage({ type: "markSessionUnread", path: "", sessionId: "session-1" }), undefined);
+assert.equal(parseWebviewMessage({ type: "markSessionUnread", path: "/known/one.jsonl", sessionId: "session-1" }), undefined);
+assert.equal(parseWebviewMessage({ type: "chatFocused", sessionId: "session-1" }), undefined);
 
-assert.deepEqual(parseWebviewMessage({ type: "chatFocused", sessionId: "session-1" }), { type: "chatFocused", sessionId: "session-1" });
-assert.equal(parseWebviewMessage({ type: "chatFocused", sessionId: "bad/id" }), undefined);
+const attachment = { id: "ref", kind: "text", label: "Text 1", start: 0, end: 8, status: "ready", text: "original" };
+assert.ok(parseWebviewMessage({ type: "createAttachment", sessionId: "session", attachment }));
+assert.equal(parseWebviewMessage({ type: "openAttachment", sessionId: "session", id: "../../etc/passwd" }), undefined);
+const refPrompt = { type: "prompt", payload: { text: "[Text 1]", images: [], selections: [], streamingBehavior: "steer", sessionId: "session", attachments: [attachment] } };
+assert.ok(parseWebviewMessage(refPrompt));
+assert.equal(parseWebviewMessage({ ...refPrompt, payload: { ...refPrompt.payload, text: "forged" } }), undefined);
+assert.equal(parseWebviewMessage({ ...refPrompt, payload: { ...refPrompt.payload, attachments: [attachment, attachment] } }), undefined);
+assert.ok(parseWebviewMessage({ type: "draftChanged", sessionId: "session", text: "original", attachmentDraft: { text: "[Text 1]", attachments: [attachment] } }));
+console.log("PASS attachment bus bounds, markers, duplicate refs, draft refs");

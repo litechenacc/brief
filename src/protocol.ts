@@ -233,7 +233,19 @@ export interface SelectionAttachment {
 	languageId: string;
 }
 
+export interface ComposerAttachment {
+	id: string;
+	kind: "text" | "image";
+	label: string;
+	start: number;
+	end: number;
+	status: "pending" | "ready" | "error";
+	text?: string;
+	image?: ImageAttachment;
+}
+
 export interface PromptPayload {
+	attachments?: ComposerAttachment[];
 	text: string;
 	images: ImageAttachment[];
 	selections: SelectionAttachment[];
@@ -252,6 +264,7 @@ export interface PromptPayload {
 }
 
 export interface ComposerDraft {
+	attachments?: ComposerAttachment[];
 	text: string;
 	images: ImageAttachment[];
 	selections: SelectionAttachment[];
@@ -273,13 +286,14 @@ export interface ChatViewState {
 export interface ChatReadReceipt { sessionId: string; path: string; revision: number; completedAt: number; }
 
 export type WebviewToHost =
+	| { type: "createAttachment"; sessionId: string; attachment: ComposerAttachment }
+	| { type: "openAttachment"; sessionId: string; id: string }
 	| { type: "chatRendered"; receipt: ChatReadReceipt }
 	| { type: "viewStateCaptured"; requestId: string; sessionId: string; state: ChatViewState }
 	| { type: "viewStateRestored"; requestId: string; sessionId: string }
 	| { type: "viewStateFailed"; requestId: string; sessionId: string; error: string }
 	| { type: "ready" }
 	| { type: "viewFocused" }
-	| { type: "chatFocused"; sessionId: string }
 	| { type: "prompt"; payload: PromptPayload }
 	| { type: "abort" }
 	| { type: "newSession" }
@@ -315,8 +329,7 @@ export type WebviewToHost =
 	| { type: "stopSession"; path: string; sessionId: string }
 	| { type: "archiveSession"; path: string; sessionId: string }
 	| { type: "unarchiveSession"; path: string; sessionId: string }
-	| { type: "markSessionUnread"; path: string; sessionId: string }
-	| { type: "draftChanged"; text: string; sessionId: string }
+	| { type: "draftChanged"; text: string; sessionId: string; attachmentDraft?: { text: string; attachments: ComposerAttachment[] } }
 	| { type: "setCompactThreshold"; percent: number | null }
 	| { type: "openExternal"; url: string };
 
@@ -421,6 +434,7 @@ export interface RecentSession {
 }
 
 export type HostToWebview =
+	| { type: "attachmentCreated"; sessionId: string; id: string; error?: string }
 	| { type: "setHistoryMode"; enabled: boolean }
 	| { type: "setViewMoving"; moving: boolean }
 	| { type: "captureViewState"; requestId: string; sessionId: string }

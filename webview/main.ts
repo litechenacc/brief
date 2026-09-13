@@ -14,6 +14,7 @@ import type {
 	AgentMessage,
 	HostToWebview,
 	ImageAttachment,
+	ComposerAttachment,
 	RpcModel,
 	SelectionAttachment,
 	SessionActionSnapshot,
@@ -103,7 +104,7 @@ const promptClientScope =
 		? crypto.randomUUID()
 		: `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 let nextPromptClientRequestId = 0;
-const pendingPrompts = new Map<string, { text: string; images: ImageAttachment[]; selections: SelectionAttachment[]; optimistic: boolean }>();
+const pendingPrompts = new Map<string, { text: string; images: ImageAttachment[]; selections: SelectionAttachment[]; attachments: ComposerAttachment[]; optimistic: boolean }>();
 // Native image pickers resolve later; replies must stay with the requesting
 // document, including when an editor tab is closed and reopened.
 const imageRequestScope = Math.floor(Math.random() * 4_000_000_000);
@@ -115,21 +116,31 @@ const pendingFileSearches = new Map<number, number>();
 /** Last host-confirmed session identity displayed in this panel. */
 let authoritativeSessionId: string | undefined;
 const composerDeps = {
-	onSend: (text: string, images: import("../src/protocol.js").ImageAttachment[], selections: import("../src/protocol.js").SelectionAttachment[]) => {
+	onSend: (text: string, images: ImageAttachment[], selections: SelectionAttachment[], attachments: ComposerAttachment[] = []) => {
 		const clientRequestId = `${promptClientScope}-${++nextPromptClientRequestId}`;
-		const optimistic = !composer.queuesNextSend;
-		pendingPrompts.set(clientRequestId, { text, images: [...images], selections: [...selections], optimistic });
-		if (optimistic) {
-			transcript.showOptimisticUserMessage(clientRequestId, text, images);
-			transcript.markSending();
-		}
+		// Attachment files can have changed in an editor. Only the host can know
+		// the actual message; wait for its authoritative echo instead of inventing one.
+		const optimistic = !composer.queuesNextSend && attachments.length === 0;
+		pendingPrompts.set(clientRequestId, { text, images: [...images], selections: [...selections], attachments: attachments.map((attachment) => ({ ...attachment, ...(attachment.image ? { image: { ...attachment.image } } : {}) })), optimistic });
+		if (optimistic) transcript.showOptimisticUserMessage(clientRequestId, text, images);
+		if (!composer.queuesNextSend) transcript.markSending();
 		post({
 			type: "prompt",
 			// Stamp the thread this was typed in. The host refuses the send if that
 			// is no longer the thread it would deliver to, so a view that moved
 			// under the operator cannot put their words in another conversation.
-			payload: { text, images, selections, streamingBehavior: composer.streamingBehavior, clientRequestId, sessionId: authoritativeSessionId },
+			payload: { text, images, selections, ...(attachments.length ? { attachments } : {}), streamingBehavior: composer.streamingBehavior, clientRequestId, sessionId: authoritativeSessionId },
 		});
+	},
+	onCreateAttachment: (attachment: ComposerAttachment) => {
+		if (!authoritativeSessionId) {
+			composer.attachmentCreated(attachment.id, "Wait for the session to connect before attaching content.");
+			return;
+		}
+		post({ type: "createAttachment", sessionId: authoritativeSessionId, attachment });
+	},
+	onOpenAttachment: (id: string) => {
+		if (authoritativeSessionId) post({ type: "openAttachment", sessionId: authoritativeSessionId, id });
 	},
 	onStop: () => post({ type: "abort" }),
 	onSearchFiles: (query: string, requestId: number) => {
@@ -137,12 +148,13 @@ const composerDeps = {
 		pendingFileSearches.set(hostRequestId, requestId);
 		post({ type: "searchFiles", query, requestId: hostRequestId });
 	},
-	onDraftChanged: (text: string) => {
-		if (authoritativeSessionId) post({ type: "draftChanged", text, sessionId: authoritativeSessionId });
+	onDraftChanged: (text: string, attachmentDraft?: { text: string; attachments: ComposerAttachment[] }) => {
+		if (authoritativeSessionId) post({ type: "draftChanged", text, sessionId: authoritativeSessionId, ...(attachmentDraft ? { attachmentDraft } : {}) });
 	},
 	onPickImage: () => {
 		const requestId = imageRequestScope * 1_000_000 + ++nextImageRequestId;
 		pendingImageRequests.add(requestId);
+		composer.beginImagePick(requestId);
 		post({ type: "pickImage", requestId });
 	},
 	onAttachSelection: () => post({ type: "attachSelection" }),
@@ -776,9 +788,12 @@ function dispatchHostMessage(message: HostToWebview): void {
 			pendingFileSearches.delete(message.requestId);
 			composer.onFileSearchResults(composerRequestId, message.files);
 			break;
+		case "attachmentCreated":
+			if (message.sessionId === authoritativeSessionId) composer.attachmentCreated(message.id, message.error);
+			break;
 		case "imagePicked":
 			if (!pendingImageRequests.delete(message.requestId)) break;
-			if (message.images.length > 0) void composer.addImages(message.images);
+			composer.imagePicked(message.requestId, message.images);
 			break;
 		case "insertSelection":
 			showView("chat");
@@ -789,6 +804,7 @@ function dispatchHostMessage(message: HostToWebview): void {
 			showView("chat");
 			break;
 		case "promptAccepted":
+			if (message.clientRequestId && pendingPrompts.has(message.clientRequestId) && message.recallText !== undefined) composer.rememberAcceptedPrompt(message.recallText);
 			// Host acceptance makes the prompt durable. Keep its optimistic row until
 			// the transcript echoes it, but do not block switching away from a run.
 			if (message.clientRequestId) pendingPrompts.delete(message.clientRequestId);
@@ -811,7 +827,7 @@ function dispatchHostMessage(message: HostToWebview): void {
 			// it — gating the restore on `removed` alone silently ate the operator's
 			// attachments when the host refused the send.
 			const hadEcho = Boolean(rejected?.optimistic && (rejected.text.length > 0 || rejected.images.length > 0));
-			if (rejected && (removed || !hadEcho)) composer.restoreRejectedPayload(rejected.text, rejected.images, rejected.selections);
+			if (rejected && (removed || !hadEcho)) composer.restoreRejectedPayload(rejected.text, rejected.images, rejected.selections, rejected.attachments);
 			addNotice("error", `Prompt rejected: ${message.error}`);
 			break;
 	}

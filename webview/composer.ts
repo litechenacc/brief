@@ -10,7 +10,7 @@
 import { Dropdown, type DropdownItem } from "./dropdown.js";
 import { fitImageDataUrl, MAX_DECODED_IMAGE_BYTES, planImageFit } from "./image-fit.js";
 import { el, icon, iconButton, svgIcon } from "./dom.js";
-import type { ChatViewState, ImageAttachment, ModelRef, RpcModel, RpcSlashCommand, SelectionAttachment } from "../src/protocol.js";
+import type { ChatViewState, ComposerAttachment, ImageAttachment, ModelRef, RpcModel, RpcSlashCommand, SelectionAttachment } from "../src/protocol.js";
 
 /** Keys that move the caret without producing an input event. */
 const CARET_KEYS = new Set(["ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"]);
@@ -42,6 +42,7 @@ interface ComposerStash {
 	images: ImageAttachment[];
 	selections: SelectionAttachment[];
 	accepted: string[];
+	attachments?: ComposerAttachment[];
 }
 
 function emptyStash(): ComposerStash {
@@ -58,6 +59,7 @@ function cloneStash(stash: ComposerStash): ComposerStash {
 		images: [...stash.images],
 		selections: [...stash.selections],
 		accepted: [...stash.accepted],
+		attachments: stash.attachments?.map((a) => ({ ...a })),
 	};
 }
 
@@ -70,7 +72,9 @@ function base64Bytes(value: string): number {
 }
 
 export interface ComposerDeps {
-	onSend: (text: string, images: ImageAttachment[], selections: SelectionAttachment[]) => void;
+	onSend: (text: string, images: ImageAttachment[], selections: SelectionAttachment[], attachments?: ComposerAttachment[]) => void;
+	onCreateAttachment: (attachment: ComposerAttachment) => void;
+	onOpenAttachment: (id: string) => void;
 	onStop: () => void;
 	onSearchFiles: (query: string, requestId: number) => void;
 	onPickImage: () => void;
@@ -80,7 +84,7 @@ export interface ComposerDeps {
 	onSetThinking: (level: string) => void;
 	onToggleFavorite: (provider: string, modelId: string) => void;
 	onOpenFile: (path: string, startLine?: number, endLine?: number) => void;
-	onDraftChanged: (text: string) => void;
+	onDraftChanged: (text: string, attachmentDraft?: { text: string; attachments: ComposerAttachment[] }) => void;
 	onNewSession: () => void;
 }
 
@@ -105,7 +109,16 @@ export class Composer {
 	private hintEl: HTMLElement | null = null;
 	private hintTimer: number | undefined;
 
-	private pendingImageReads = 0;
+	private editRange: { start: number; end: number } | null = null;
+	private attachments: ComposerAttachment[] = [];
+	private attachmentRegistry = new Map<string, ComposerAttachment>();
+	private attachmentErrors = new Map<string, string>();
+	private attachmentSerial = 0;
+	private sessionGeneration = 0;
+	private trackedText = "";
+	private undoEdits: Array<{ text: string; attachments: ComposerAttachment[] }> = [];
+	private redoEdits: Array<{ text: string; attachments: ComposerAttachment[] }> = [];
+
 	private images: ImageAttachment[] = [];
 	private selections: SelectionAttachment[] = [];
 	private commands: RpcSlashCommand[] = [];
@@ -147,6 +160,7 @@ export class Composer {
 	private accepted = new Set<string>();
 	/** IME composition range in `textarea.value`, painted on the mirror. */
 	private composing = false;
+	private compositionUndoIndex: number | null = null;
 	private compositionStart = 0;
 	private compositionEnd = 0;
 	/** Confirming an IME candidate with Enter must not also send the prompt. */
@@ -221,7 +235,10 @@ export class Composer {
 		card.appendChild(this.autocompleteEl);
 
 		this.textarea.addEventListener("keydown", (event) => this.onKeyDown(event));
+		this.textarea.addEventListener("beforeinput", (event) => this.beforeEdit(event));
 		this.textarea.addEventListener("compositionstart", () => {
+			this.expandAttachmentSelection();
+			this.compositionUndoIndex = this.undoEdits.length;
 			this.composing = true;
 			const caret = this.textarea.selectionStart ?? 0;
 			this.compositionStart = caret;
@@ -233,6 +250,8 @@ export class Composer {
 		});
 		this.textarea.addEventListener("compositionend", () => {
 			this.composing = false;
+			if (this.compositionUndoIndex !== null) this.undoEdits.splice(this.compositionUndoIndex + 1);
+			this.compositionUndoIndex = null;
 			this.compositionStart = 0;
 			this.compositionEnd = 0;
 			// Chromium fires keydown Enter after compositionend for a confirm.
@@ -240,21 +259,35 @@ export class Composer {
 			window.setTimeout(() => { this.swallowEnterAfterComposition = false; }, 0);
 			this.autoGrow();
 		});
-		this.textarea.addEventListener("input", () => {
+		this.textarea.addEventListener("input", (event) => {
+			const inputType = (event as InputEvent).inputType;
+			if (inputType === "historyUndo" || inputType === "historyRedo") {
+				this.restoreNativeEdit(inputType === "historyRedo"); return;
+			}
 			// Real typing ends history browsing: from here the text is the
 			// operator's, so Up must go back to moving the caret.
 			this.historyIndex = null;
+			this.reconcileAttachments();
 			this.rememberNonSlashDraft();
 			if (this.composing) this.refreshCompositionRange();
 			this.autoGrow();
 			if (!this.composing) this.updateAutocomplete();
 			window.clearTimeout(this.draftDebounce);
-			this.draftDebounce = window.setTimeout(() => this.deps.onDraftChanged(this.textarea.value), 300);
+			this.draftDebounce = window.setTimeout(() => this.draftChanged(), 300);
 		});
 		// The caret moves without an input event too. A mention armed at one offset
 		// and accepted at another splices the path into the middle of the line, and
 		// a panel left armed over zero results swallows Enter with nothing on screen.
-		this.textarea.addEventListener("click", () => this.updateAutocomplete());
+		this.textarea.addEventListener("click", (event) => {
+			if (event.ctrlKey || event.metaKey) {
+				for (const span of Array.from(this.mirror.querySelectorAll<HTMLElement>(".attachment-marker"))) {
+					if (Array.from(span.getClientRects()).some((r) => event.clientX >= r.left && event.clientX <= r.right && event.clientY >= r.top && event.clientY <= r.bottom)) {
+						this.deps.onOpenAttachment(span.dataset.id!); return;
+					}
+				}
+			}
+			this.updateAutocomplete();
+		});
 		this.textarea.addEventListener("keyup", (event) => {
 			// ArrowUp/Down belong to the open panel — they move the selection, not the caret.
 			if (CARET_KEYS.has(event.key) && !this.composing) this.updateAutocomplete();
@@ -280,7 +313,7 @@ export class Composer {
 	// ---------------------------------------------------------------
 
 	captureViewState(): ChatViewState["composer"] {
-		if (this.composing || this.pendingImageReads > 0) throw new Error("Finish composing or attaching images before moving this chat.");
+		if (this.composing || this.attachments.some((a) => a.status === "pending")) throw new Error("Finish composing or attaching images before moving this chat.");
 		// Picker menus are portaled outside the inert app. Closing a slash picker
 		// also puts its parked draft back before we take the transfer snapshot.
 		this.attachMenu?.hide();
@@ -378,14 +411,15 @@ export class Composer {
 		const blocked = !this.canSend();
 		this.textarea.disabled = this.observing || (!this.enabled && !this.draftAllowed);
 		this.sendBtn.disabled = blocked;
-		this.sendBtn.style.opacity = blocked ? "0.4" : "";
+		this.sendBtn.classList.toggle("unavailable", !this.enabled && !this.observing);
+		const sendLabel = !this.enabled ? (this.blockedReason ?? "Connecting — send unavailable") : "Send (Enter)";
+		this.sendBtn.title = sendLabel;
+		this.sendBtn.setAttribute("aria-label", sendLabel);
 		this.textarea.placeholder = this.observing
 			? "Watching a live session — read-only"
-			: this.enabled
+			: this.enabled || this.draftAllowed
 				? "Message Brief…"
-				: this.draftAllowed
-					? "Connecting… you can start typing"
-					: (this.blockedReason ?? "Not connected — the agent runtime isn't answering");
+				: (this.blockedReason ?? "Not connected — the agent runtime isn't answering");
 		this.updateSendState();
 	}
 
@@ -529,56 +563,235 @@ export class Composer {
 		this.focus();
 	}
 
-	addImages(images: ImageAttachment[]): void {
-		if (images.length === 0) return;
-		if (!this.vision) {
-			this.showHint("Current model is text-only — switch to a vision model to attach images.");
+	private imagePicks = new Map<number, { attachment: ComposerAttachment; generation: number; replacedText: string; replacedAttachments: ComposerAttachment[] }>();
+
+	beginImagePick(requestId: number): void {
+		this.expandAttachmentSelection();
+		const start = this.textarea.selectionStart, end = this.textarea.selectionEnd;
+		const replacedText = this.textarea.value.slice(start, end);
+		const replacedAttachments = this.attachments.filter((a) => a.start >= start && a.end <= end)
+			.map((a) => ({ ...a, start: a.start - start, end: a.end - start }));
+		const attachment = this.reserveAttachment("image");
+		if (attachment) this.imagePicks.set(requestId, { attachment, generation: this.sessionGeneration, replacedText, replacedAttachments });
+	}
+
+	imagePicked(requestId: number, images: ImageAttachment[]): void {
+		const pick = this.imagePicks.get(requestId); this.imagePicks.delete(requestId);
+		if (!pick || pick.generation !== this.sessionGeneration) return;
+		const current = this.attachments.find((a) => a.id === pick.attachment.id);
+		if (!current) return;
+		if (!images.length || !this.vision) {
+			if (current.status !== "pending") return;
+			const cancelled = this.attachmentRegistry.get(current.id);
+			if (cancelled) cancelled.status = "error";
+			this.attachmentErrors.set(current.id, images.length
+				? "Current model is text-only. Remove this attachment or undo again."
+				: "Image selection was cancelled. Remove this attachment or undo again.");
+			const start = current.start;
+			this.replaceTracked(start, current.end, pick.replacedText);
+			for (const a of pick.replacedAttachments) {
+				const cached = this.attachmentRegistry.get(a.id);
+				this.attachments.push({ ...a, start: start + a.start, end: start + a.end,
+					status: cached?.status ?? a.status, text: cached?.text ?? a.text, image: cached?.image ?? a.image });
+			}
+			this.attachments.sort((a, b) => a.start - b.start);
+			this.changedAttachments();
+			if (images.length) this.showHint("Current model is text-only — switch to a vision model to attach images.");
 			return;
 		}
-		// Keep the fully synchronous accept path for everything the provider
-		// already accepts; only an image over the byte budget pays for the
-		// encoder's microtasks (and its canvas).
-		const oversized: ImageAttachment[] = [];
-		let totalBytes = this.images.reduce((total, image) => total + base64Bytes(image.data), 0);
-		let accepted = 0;
-		for (const image of images) {
-			if (planImageFit(base64Bytes(image.data)).action !== "send") {
-				oversized.push(image);
-				continue;
-			}
-			const bytes = base64Bytes(image.data);
-			if (this.images.length >= MAX_IMAGES || bytes > MAX_IMAGE_BYTES || totalBytes + bytes > MAX_TOTAL_IMAGE_BYTES) continue;
-			this.images.push(image);
-			totalBytes += bytes;
-			accepted += 1;
+		void this.finishImage(current, images[0], pick.generation);
+		this.textarea.setSelectionRange(current.end, current.end);
+		this.addImages(images.slice(1));
+	}
+
+	attachmentCreated(id: string, error?: string): void {
+		const registered = this.attachmentRegistry.get(id);
+		if (!registered) return;
+		registered.status = error ? "error" : "ready";
+		if (error) this.attachmentErrors.set(id, error); else this.attachmentErrors.delete(id);
+		for (const a of this.attachments) if (a.id === id) a.status = registered.status;
+		if (error) this.showHint(error);
+		this.changedAttachments();
+	}
+
+	private draftChanged(): void {
+		const expanded = this.expandedText();
+		if (expanded.length > 200_000 || expanded.includes("\0")) {
+			this.showHint("Draft exceeds 200,000 characters or contains NUL. Shorten it before saving or sending.");
+			return;
 		}
-		if (accepted < images.length - oversized.length) this.showHint("Some images were skipped (maximum 8 images, 7 MiB each after resizing, 16 MiB total).");
+		this.deps.onDraftChanged(expanded, this.attachments.length ? {
+			text: this.textarea.value, attachments: this.attachments.map((a) => ({ ...a })),
+		} : undefined);
+	}
+
+	private expandedText(): string {
+		let text = this.textarea.value;
+		for (const a of [...this.attachments].sort((a, b) => b.start - a.start)) {
+			text = text.slice(0, a.start) + (a.kind === "text" ? a.text ?? "" : "") + text.slice(a.end);
+		}
+		return text;
+	}
+
+	private editSnapshot(): { text: string; attachments: ComposerAttachment[] } {
+		return { text: this.trackedText, attachments: this.attachments.map((a) => ({ ...a })) };
+	}
+
+	private restoreEdit(redo: boolean): void {
+		const from = redo ? this.redoEdits : this.undoEdits;
+		const next = from.pop(); if (!next) return;
+		(redo ? this.undoEdits : this.redoEdits).push(this.editSnapshot());
+		this.trackedText = this.textarea.value = next.text;
+		this.attachments = next.attachments.map((a) => {
+			const cached = this.attachmentRegistry.get(a.id);
+			return { ...a, status: cached?.status ?? a.status, text: cached?.text ?? a.text, image: cached?.image ?? a.image };
+		});
+		this.textarea.setSelectionRange(next.text.length, next.text.length);
+		this.changedAttachments();
+	}
+
+	private restoreNativeEdit(redo: boolean): void {
+		const from = redo ? this.redoEdits : this.undoEdits;
+		// Chromium can coalesce ordinary typing. Only a browser history event
+		// can select a saved edit; literal marker-looking input never does.
+		let index = from.length - 1;
+		while (index >= 0 && from[index].text !== this.textarea.value) index--;
+		if (index < 0) { this.reconcileAttachments(); this.changedAttachments(); return; }
+		const next = from[index];
+		(redo ? this.undoEdits : this.redoEdits).push(this.editSnapshot());
+		from.splice(index);
+		this.trackedText = next.text; this.editRange = null;
+		this.attachments = next.attachments.map((a) => {
+			const cached = this.attachmentRegistry.get(a.id);
+			return { ...a, status: cached?.status ?? a.status, text: cached?.text ?? a.text, image: cached?.image ?? a.image };
+		});
+		this.changedAttachments();
+	}
+
+	private expandAttachmentSelection(inputType = ""): void {
+		let start = this.textarea.selectionStart, end = this.textarea.selectionEnd;
+		if (start === end) {
+			if (inputType === "deleteContentBackward") start = Math.max(0, start - 1);
+			if (inputType === "deleteContentForward") end = Math.min(this.textarea.value.length, end + 1);
+		}
+		for (const a of this.attachments) {
+			if ((start < a.end && end > a.start) || (start === end && start > a.start && start < a.end)) {
+				start = Math.min(start, a.start); end = Math.max(end, a.end);
+			}
+		}
+		this.textarea.setSelectionRange(start, end);
+	}
+
+	private beforeEdit(event: InputEvent): void {
+		if (event.inputType === "historyUndo" || event.inputType === "historyRedo") {
+			if (typeof document.execCommand !== "function") { event.preventDefault(); this.restoreEdit(event.inputType === "historyRedo"); }
+			return;
+		}
+		if (!this.composing) this.expandAttachmentSelection(event.inputType);
+		this.editRange = { start: this.textarea.selectionStart, end: this.textarea.selectionEnd };
+	}
+
+	private reconcileAttachments(): void {
+		let next = this.textarea.value;
+		const old = this.trackedText;
+		const range = this.editRange; this.editRange = null;
+		if (next === old && (!range || range.start === range.end)) return;
+		this.undoEdits.push(this.editSnapshot());
+		if (this.undoEdits.length > 200) this.undoEdits.shift();
+		this.redoEdits = [];
+		let start = 0;
+		while (start < old.length && start < next.length && old[start] === next[start]) start++;
+		let oldEnd = old.length, newEnd = next.length;
+		while (oldEnd > start && newEnd > start && old[oldEnd - 1] === next[newEnd - 1]) { oldEnd--; newEnd--; }
+		if (range && old.slice(0, range.start) === next.slice(0, range.start) && old.slice(range.end) === next.slice(range.end + next.length - old.length)) {
+			start = range.start; oldEnd = range.end; newEnd = range.end + next.length - old.length;
+		}
+		// Non-cancelable input (IME, browser word deletion) may skip beforeinput.
+		// Expand its actual edit against owned ranges, never against marker text.
+		let expandedStart = start, expandedEnd = oldEnd;
+		for (const a of this.attachments) {
+			if ((start < a.end && oldEnd > a.start) || (start === oldEnd && start > a.start && start < a.end)) {
+				expandedStart = Math.min(expandedStart, a.start); expandedEnd = Math.max(expandedEnd, a.end);
+			}
+		}
+		if (expandedStart !== start || expandedEnd !== oldEnd) {
+			const inserted = next.slice(start, newEnd);
+			next = old.slice(0, expandedStart) + inserted + old.slice(expandedEnd);
+			start = expandedStart; oldEnd = expandedEnd; newEnd = start + inserted.length;
+			this.textarea.value = next; this.textarea.setSelectionRange(newEnd, newEnd);
+		}
+		const delta = newEnd - oldEnd;
+		this.attachments = this.attachments.filter((a) => {
+			if (a.end <= start) return true;
+			if (a.start >= oldEnd) { a.start += delta; a.end += delta; return true; }
+			return false;
+		});
+		this.trackedText = next;
 		this.renderChips();
-		if (oversized.length > 0) {
-			this.pendingImageReads++;
-			void this.fitAndAppendOversized(oversized).finally(() => { this.pendingImageReads--; });
+	}
+
+	private replaceTracked(start: number, end: number, text: string): void {
+		this.textarea.setSelectionRange(start, end);
+		this.expandAttachmentSelection();
+		start = this.textarea.selectionStart; end = this.textarea.selectionEnd;
+		this.editRange = { start, end };
+		// insertText is the textarea editing command that preserves Chromium's
+		// native undo stack (including menu Undo/Redo and earlier typing).
+		this.textarea.focus();
+		if (typeof document.execCommand !== "function" || !document.execCommand("insertText", false, text)) {
+			this.textarea.value = this.textarea.value.slice(0, start) + text + this.textarea.value.slice(end);
+		}
+		this.textarea.setSelectionRange(start + text.length, start + text.length);
+		this.reconcileAttachments();
+		this.changedAttachments();
+	}
+
+	private reserveAttachment(kind: "text" | "image"): ComposerAttachment | null {
+		if (this.textarea.disabled) return null;
+		if (this.attachments.length >= 64) { this.showHint("Maximum 64 attachments per prompt."); return null; }
+		if (kind === "image" && this.attachments.filter((a) => a.kind === "image").length + this.images.length >= MAX_IMAGES) {
+			this.showHint("Maximum 8 images per prompt."); return null;
+		}
+		this.expandAttachmentSelection();
+		const start = this.textarea.selectionStart;
+		let label: string;
+		do { label = `${kind === "text" ? "Text" : "Image"} ${++this.attachmentSerial}`; }
+		while ([...this.attachmentRegistry.values()].some((a) => a.label === label));
+		const marker = `[${label}]`;
+		this.replaceTracked(start, this.textarea.selectionEnd, marker);
+		const a: ComposerAttachment = { id: crypto.randomUUID(), kind, label, start, end: start + marker.length, status: "pending" };
+		this.attachments.push(a); this.attachments.sort((a, b) => a.start - b.start);
+		this.attachmentRegistry.set(a.id, a);
+		this.changedAttachments(); return a;
+	}
+
+	private changedAttachments(): void {
+		this.renderChips(); this.autoGrow(); this.rememberNonSlashDraft();
+		window.clearTimeout(this.draftDebounce);
+		this.draftDebounce = window.setTimeout(() => this.draftChanged(), 300);
+	}
+
+	addImages(images: ImageAttachment[]): void {
+		if (!this.vision) { this.showHint("Current model is text-only — switch to a vision model to attach images."); return; }
+		for (const image of images) {
+			const attachment = this.reserveAttachment("image");
+			if (attachment) void this.finishImage(attachment, image, this.sessionGeneration);
 		}
 	}
 
-	/** Shrink what the provider would refuse, then append under the normal budget. */
-	private async fitAndAppendOversized(oversized: ImageAttachment[]): Promise<void> {
-		let accepted = 0;
-		let resizedCount = 0;
-		let totalBytes = this.images.reduce((total, image) => total + base64Bytes(image.data), 0);
-		for (const raw of oversized) {
-			if (this.images.length >= MAX_IMAGES) break;
-			const fitted = await fitImageDataUrl({ data: raw.data, mimeType: raw.mimeType });
-			const candidate = fitted ?? raw;
-			const bytes = base64Bytes(candidate.data);
-			if (bytes > MAX_IMAGE_BYTES || totalBytes + bytes > MAX_TOTAL_IMAGE_BYTES) continue;
-			this.images.push({ ...candidate, name: raw.name });
-			if (fitted?.resized) resizedCount += 1;
-			totalBytes += bytes;
-			accepted += 1;
+	private async finishImage(attachment: ComposerAttachment, raw: ImageAttachment, generation: number): Promise<void> {
+		try {
+			const fitted = planImageFit(base64Bytes(raw.data)).action === "send" ? raw : await fitImageDataUrl(raw);
+			if (generation !== this.sessionGeneration) return;
+			const image = fitted ? { ...fitted, name: raw.name } : raw;
+			const total = this.attachments.reduce((n, a) => n + (a.image ? base64Bytes(a.image.data) : 0), this.images.reduce((n, image) => n + base64Bytes(image.data), 0));
+			if (!SUPPORTED_IMAGE_MIME_TYPES.has(image.mimeType) || base64Bytes(image.data) > MAX_IMAGE_BYTES || total + base64Bytes(image.data) > MAX_TOTAL_IMAGE_BYTES) throw new Error("Image exceeds attachment limits");
+			attachment.image = image;
+			this.deps.onCreateAttachment({ ...attachment });
+		} catch (error) {
+			if (generation === this.sessionGeneration) this.attachmentCreated(attachment.id, String(error));
 		}
-		if (accepted < oversized.length) this.showHint("Some images were skipped (maximum 8 images, 7 MiB each after resizing, 16 MiB total).");
-		else this.showHint(resizedCount === 1 ? "Image resized to fit provider limits." : `${resizedCount} images resized to fit provider limits.`);
-		this.renderChips();
+		if (generation === this.sessionGeneration) { this.renderChips(); this.autoGrow(); }
 	}
 
 	insertMention(path: string): void {
@@ -600,20 +813,24 @@ export class Composer {
 	}
 
 	/** Restore one rejected send without overwriting an intervening draft. */
-	restoreRejectedPayload(text: string, images: ImageAttachment[], selections: SelectionAttachment[]): boolean {
+	restoreRejectedPayload(text: string, images: ImageAttachment[], selections: SelectionAttachment[], attachments?: ComposerAttachment[]): boolean {
 		if (this.textarea.value.trim() || this.images.length > 0 || this.selections.length > 0) return false;
 		this.historyIndex = null;
 		this.textarea.value = text;
+		this.trackedText = text;
+		this.attachments = attachments?.map((a) => ({ ...a })) ?? [];
+		for (const a of this.attachments) this.attachmentRegistry.set(a.id, a);
 		this.images = [...images];
 		this.selections = [...selections];
 		this.renderChips();
 		this.autoGrow();
-		this.deps.onDraftChanged(text);
+		this.draftChanged();
 		this.focus();
 		return true;
 	}
 
 	setText(text: string): void {
+		this.attachments = [];
 		this.historyIndex = null;
 		this.textarea.value = text;
 		this.autoGrow();
@@ -627,6 +844,7 @@ export class Composer {
 	 * where the next keystroke persisted it over B's own draft.
 	 */
 	setDraft(text: string): void {
+		this.attachments = [];
 		this.historyIndex = null;
 		this.textarea.value = text;
 		this.autoGrow();
@@ -643,6 +861,16 @@ export class Composer {
 	 * becoming the incoming session's draft.
 	 */
 	resetForSessionBoundary(): void {
+		this.sessionGeneration++;
+		this.editRange = null;
+		this.compositionUndoIndex = null;
+		this.imagePicks.clear();
+		this.attachments = [];
+		this.attachmentRegistry.clear();
+		this.attachmentErrors.clear();
+		this.undoEdits = [];
+		this.redoEdits = [];
+		this.trackedText = "";
 		window.clearTimeout(this.draftDebounce);
 		this.draftDebounce = undefined;
 		window.clearTimeout(this.mentionDebounce);
@@ -682,7 +910,7 @@ export class Composer {
 	/** Persist the last keystrokes under the OUTGOING session, before a switch. */
 	flushDraft(): void {
 		window.clearTimeout(this.draftDebounce);
-		this.deps.onDraftChanged(this.textarea.value);
+		this.draftChanged();
 	}
 
 	focus(): void {
@@ -706,11 +934,13 @@ export class Composer {
 	// ---------------------------------------------------------------
 
 	send(): void {
-		if (this.composing) return;
+		if (this.composing || this.attachments.some((a) => a.status !== "ready")) return;
+		if (this.expandedText().length > 200_000) { this.showHint("Prompt exceeds 200,000 characters. Remove or shorten an attachment."); return; }
 		if (this.tryRunUiSlashCommand(this.textarea.value)) return;
 		// Keyboard paths (Enter) bypass the disabled button, so the gate lives here too.
 		if (!this.canSend()) return;
-		const text = this.textarea.value.trim();
+		if (!this.vision && this.attachments.some((a) => a.kind === "image")) { this.showHint("Current model is text-only. Switch to a vision model or remove image attachments."); return; }
+		const text = this.attachments.length ? this.textarea.value : this.textarea.value.trim();
 		if (!text && this.images.length === 0 && this.selections.length === 0) return;
 		if (this.images.length > 0 && !this.vision) {
 			this.showHint("Dropped images: current model is text-only. Switch to a vision model or remove the chips.");
@@ -723,8 +953,12 @@ export class Composer {
 			this.closeAutocomplete();
 			return;
 		}
-		this.rememberPrompt(text);
-		this.deps.onSend(text, this.images, this.selections);
+		if (!this.attachments.length) this.rememberPrompt(this.expandedText());
+		this.deps.onSend(text, this.images, this.selections, this.attachments.map((a) => ({ ...a })));
+		this.attachments = [];
+		this.undoEdits = [];
+		this.redoEdits = [];
+		this.trackedText = "";
 		this.textarea.value = "";
 		this.images = [];
 		this.selections = [];
@@ -927,6 +1161,8 @@ export class Composer {
 		this.historyIndex = null;
 	}
 
+	rememberAcceptedPrompt(text: string): void { this.rememberPrompt(text); }
+
 	private rememberPrompt(text: string): void {
 		if (text.trim() && text !== this.promptHistory[this.promptHistory.length - 1]) {
 			this.promptHistory.push(text);
@@ -981,10 +1217,14 @@ export class Composer {
 		this.closeAutocomplete();
 		this.textarea.scrollTop = this.textarea.scrollHeight;
 		window.clearTimeout(this.draftDebounce);
-		this.draftDebounce = window.setTimeout(() => this.deps.onDraftChanged(this.textarea.value), 300);
+		this.draftDebounce = window.setTimeout(() => this.draftChanged(), 300);
 	}
 
 	private onKeyDown(event: KeyboardEvent): void {
+		if (!event.isComposing && !this.composing && (event.ctrlKey || event.metaKey) && (event.key.toLowerCase() === "z" || event.key.toLowerCase() === "y")) {
+			if (typeof document.execCommand !== "function") { event.preventDefault(); this.restoreEdit(event.shiftKey || event.key.toLowerCase() === "y"); }
+			return;
+		}
 		// IME candidate keys (arrows, Enter, numbers) must reach the IME.
 		// keyCode 229 is the legacy "processing" sentinel some IMEs still send.
 		if (event.isComposing || event.keyCode === 229) return;
@@ -1079,6 +1319,9 @@ export class Composer {
 	 */
 	private updateMentionHover(event: MouseEvent): void {
 		let hovered = "";
+		for (const span of Array.from(this.mirror.querySelectorAll<HTMLElement>(".attachment-marker"))) {
+			if (Array.from(span.getClientRects()).some((r) => event.clientX >= r.left && event.clientX <= r.right && event.clientY >= r.top && event.clientY <= r.bottom)) { this.textarea.title = "Ctrl/Cmd+click to open attachment in editor"; return; }
+		}
 		for (const span of Array.from(this.mirror.querySelectorAll<HTMLElement>(".mm"))) {
 			for (const rect of Array.from(span.getClientRects())) {
 				if (
@@ -1139,11 +1382,12 @@ export class Composer {
 			.replace(/>/g, "&gt;")
 			.replace(/"/g, "&quot;")
 			.replace(/'/g, "&#39;");
-		const mentions = this.mentionRanges(text);
+		const mentions = this.mentionRanges(text).filter((m) => !this.attachments.some((a) => a.start < m.end && a.end > m.start));
 		const imeStart = Math.max(0, Math.min(this.compositionStart, text.length));
 		const imeEnd = Math.max(0, Math.min(this.compositionEnd, text.length));
 		const ime = this.composing && imeEnd > imeStart ? { start: imeStart, end: imeEnd } : null;
 		const points = new Set<number>([0, text.length]);
+		for (const a of this.attachments) { points.add(a.start); points.add(a.end); }
 		for (const range of mentions) {
 			points.add(range.start);
 			points.add(range.end);
@@ -1163,7 +1407,10 @@ export class Composer {
 			const slice = esc(text.slice(from, to));
 			const mention = mentionAt(from);
 			const composing = inIme(from);
-			if (mention && composing) {
+			const attachment = this.attachments.find((a) => a.start <= from && from < a.end);
+			if (attachment) {
+				html += `<span class="attachment-marker" data-id="${esc(attachment.id)}">${slice}</span>`;
+			} else if (mention && composing) {
 				html += `<span class="mm" data-path="${esc(mention.path)}"><span class="ime">${slice}</span></span>`;
 			} else if (mention) {
 				html += `<span class="mm" data-path="${esc(mention.path)}">${slice}</span>`;
@@ -1181,6 +1428,7 @@ export class Composer {
 	}
 
 	private autoGrow(): void {
+		this.reconcileAttachments();
 		this.syncMirror();
 		this.textarea.style.height = "auto";
 		this.textarea.style.height = `${Math.min(this.textarea.scrollHeight, 200)}px`;
@@ -1193,12 +1441,31 @@ export class Composer {
 			this.textarea.value.trim().length > 0 ||
 			this.images.length > 0 ||
 			this.selections.length > 0;
-		this.sendBtn.classList.toggle("muted", !hasContent || !this.canSend());
+		this.sendBtn.disabled = !this.canSend() || this.attachments.some((a) => a.status !== "ready");
+		this.sendBtn.classList.toggle("muted", !hasContent || this.sendBtn.disabled);
 	}
 
 	private renderChips(): void {
 		this.updateSendState();
 		this.chipsEl.textContent = "";
+		for (const a of this.attachments) {
+			const chip = el("div", "compose-chip attachment-card");
+			const preview = a.kind === "text" ? (a.text ?? "").replace(/\s+/g, " ").trim().slice(0, 100) : "";
+			const summary = a.kind === "text" ? `${(a.text ?? "").split(/\r\n|\r|\n/).length} lines · ${(a.text ?? "").length} characters · Pasted snapshot` : a.image?.name ?? "";
+			chip.title = this.attachmentErrors.get(a.id) ?? [summary, preview].filter(Boolean).join("\n");
+			const open = document.createElement("button");
+			open.className = "attachment-open";
+			open.title = `${chip.title ? `${chip.title}\n` : ""}Open attachment in editor`;
+			open.setAttribute("aria-label", `Open ${a.label} in editor`);
+			if (a.image) { const thumb = document.createElement("img"); thumb.src = `data:${a.image.mimeType};base64,${a.image.data}`; open.appendChild(thumb); }
+			open.appendChild(el("span", "chip-label", `${a.label}${a.status === "ready" ? "" : ` · ${a.status}`}${summary ? ` · ${summary}` : ""}`));
+			open.disabled = a.status !== "ready";
+			open.addEventListener("click", () => this.deps.onOpenAttachment(a.id));
+			const remove = el("button", "chip-remove", "×");
+			remove.setAttribute("aria-label", `Remove ${a.label}`);
+			remove.addEventListener("click", () => this.replaceTracked(a.start, a.end, ""));
+			chip.append(open, remove); this.chipsEl.appendChild(chip);
+		}
 		for (const sel of this.selections) {
 			const chip = el("div", "compose-chip");
 			chip.title = `${sel.path} lines ${sel.startLine}-${sel.endLine}`;
@@ -1239,65 +1506,50 @@ export class Composer {
 	}
 
 	private onPaste(event: ClipboardEvent): void {
-		const files = event.clipboardData?.files;
-		if (!files || files.length === 0) return;
-		const imageFiles = Array.from(files).filter((f) => SUPPORTED_IMAGE_MIME_TYPES.has(f.type));
-		if (imageFiles.length === 0) return;
-		event.preventDefault();
-		if (!this.vision) {
-			this.showHint("Current model is text-only — switch to a vision model to attach images.");
-			return;
+		const files = Array.from(event.clipboardData?.files ?? []).filter((f) => SUPPORTED_IMAGE_MIME_TYPES.has(f.type));
+		if (files.length) { event.preventDefault(); this.readImageFiles(files); return; }
+		const text = event.clipboardData?.getData("text/plain") ?? "";
+		if (text.length > 1000 || text.split(/\r\n|\r|\n/).length > 10) {
+			event.preventDefault();
+			if (text.length > 200_000 || text.includes("\0")) {
+				this.showHint("Pasted text must be at most 200,000 characters and cannot contain NUL. Your draft was not changed.");
+				return;
+			}
+			this.expandAttachmentSelection();
+			const start = this.textarea.selectionStart, end = this.textarea.selectionEnd;
+			let replacedLength = end - start;
+			for (const a of this.attachments) {
+				if (a.start >= start && a.end <= end) replacedLength += (a.kind === "text" ? (a.text ?? "").length : 0) - (a.end - a.start);
+			}
+			if (this.expandedText().length - replacedLength + text.length > 200_000) {
+				this.showHint("Paste would exceed 200,000 characters. Your draft was not changed.");
+				return;
+			}
+			const a = this.reserveAttachment("text");
+			if (a) { a.text = text; this.deps.onCreateAttachment({ ...a }); this.changedAttachments(); }
 		}
-		this.readImageFiles(imageFiles);
 	}
 
 	private onDrop(event: DragEvent): void {
 		event.preventDefault();
-		const files = event.dataTransfer?.files;
-		if (!files) return;
-		if (!this.vision) {
-			this.showHint("Current model is text-only — switch to a vision model to attach images.");
-			return;
-		}
-		this.readImageFiles(Array.from(files).filter((f) => SUPPORTED_IMAGE_MIME_TYPES.has(f.type)));
+		this.readImageFiles(Array.from(event.dataTransfer?.files ?? []).filter((f) => SUPPORTED_IMAGE_MIME_TYPES.has(f.type)));
 	}
 
 	private readImageFiles(files: File[]): void {
-		const existingBytes = () => this.images.reduce((total, image) => total + base64Bytes(image.data), 0);
-		let skipped = files.length > MAX_IMAGES;
-		for (const file of files.slice(0, MAX_IMAGES)) {
-			// No byte pre-check on the raw file any more: oversized images are
-			// resized on read below (the provider's ceiling is measured on the
-			// encoded payload). Only the attachment- and total-budget counts
-			// still hard-stop here.
-			if (this.images.length >= MAX_IMAGES || existingBytes() + Math.min(file.size, MAX_IMAGE_BYTES) > MAX_TOTAL_IMAGE_BYTES) {
-				skipped = true;
-				continue;
-			}
+		if (!this.vision) { this.showHint("Current model is text-only — switch to a vision model to attach images."); return; }
+		for (const file of files) {
+			const a = this.reserveAttachment("image");
+			if (!a) continue;
+			const generation = this.sessionGeneration;
 			const reader = new FileReader();
-			this.pendingImageReads++;
-			reader.onerror = reader.onabort = () => { this.pendingImageReads--; };
-			reader.onload = async () => {
-				try {
-					const dataUrl = reader.result as string;
-					const [header, data] = dataUrl.split(",");
-					const mimeType = header.replace("data:", "").replace(";base64", "");
-					if (!SUPPORTED_IMAGE_MIME_TYPES.has(mimeType)) return;
-					const fitted = planImageFit(base64Bytes(data)).action === "send" ? { data, mimeType, resized: false } : await fitImageDataUrl({ data, mimeType });
-					const candidate = fitted ?? { data, mimeType, resized: false };
-					const bytes = base64Bytes(candidate.data);
-					if (this.images.length >= MAX_IMAGES || bytes > MAX_IMAGE_BYTES || existingBytes() + bytes > MAX_TOTAL_IMAGE_BYTES) {
-						this.showHint("Some images were skipped (maximum 8 images, 7 MiB each after resizing, 16 MiB total).");
-						return;
-					}
-					this.images.push({ data: candidate.data, mimeType: candidate.mimeType, name: file.name || "image" });
-					if (candidate.resized) this.showHint("Image resized to fit provider limits.");
-					this.renderChips();
-				} finally { this.pendingImageReads--; }
+			reader.onerror = reader.onabort = () => { if (generation === this.sessionGeneration) this.attachmentCreated(a.id, "Image read failed"); };
+			reader.onload = () => {
+				if (generation !== this.sessionGeneration) return;
+				const data = String(reader.result).split(",")[1] ?? "";
+				void this.finishImage(a, { data, mimeType: file.type, name: file.name || "image" }, generation);
 			};
 			reader.readAsDataURL(file);
 		}
-		if (skipped) this.showHint("Some images were skipped (maximum 8 images, 7 MiB each, 16 MiB total).");
 	}
 
 	// ---------------------------------------------------------------
@@ -1449,12 +1701,19 @@ export class Composer {
 			images: [...this.images],
 			selections: [...this.selections],
 			accepted: [...this.accepted],
+			attachments: this.attachments.map((a) => ({ ...a })),
 		};
 	}
 
 	private applyComposerSnapshot(stash: ComposerStash): void {
 		this.historyIndex = null;
 		this.textarea.value = stash.text;
+		this.trackedText = stash.text;
+		this.attachments = (stash.attachments ?? []).map((a) => {
+			const cached = this.attachmentRegistry.get(a.id);
+			return { ...a, status: cached?.status ?? a.status, text: cached?.text ?? a.text, image: cached?.image ?? a.image };
+		});
+		for (const a of this.attachments) this.attachmentRegistry.set(a.id, a);
 		this.images = [...stash.images];
 		this.selections = [...stash.selections];
 		this.accepted = new Set(stash.accepted);
@@ -1466,7 +1725,7 @@ export class Composer {
 	private restoreComposerStash(stash: ComposerStash): void {
 		this.applyComposerSnapshot(cloneStash(stash));
 		window.clearTimeout(this.draftDebounce);
-		this.deps.onDraftChanged(this.textarea.value);
+		this.draftChanged();
 	}
 
 	private rememberNonSlashDraft(): void {
@@ -1509,12 +1768,13 @@ export class Composer {
 			return;
 		}
 		if (action === "new") {
-			this.textarea.value = this.lastNonSlashDraft.text;
+			this.applyComposerSnapshot(this.lastNonSlashDraft);
 			this.deps.onNewSession();
 			return;
 		}
 		const snapshot = this.snapshotComposer();
-		snapshot.text = this.stripLeadingSlashCommand(snapshot.text);
+		const strippedText = this.stripLeadingSlashCommand(snapshot.text);
+		this.stripSnapshotPrefix(snapshot, strippedText);
 		if (stashHasContent(snapshot)) this.lastNonSlashDraft = snapshot;
 		this.clearComposerForSlash();
 		if (action === "model") {
@@ -1522,6 +1782,12 @@ export class Composer {
 			return;
 		}
 		this.handleEffortCommand(args);
+	}
+
+	private stripSnapshotPrefix(snapshot: ComposerStash, text: string): void {
+		const removed = snapshot.text.length - text.length;
+		snapshot.attachments = (snapshot.attachments ?? []).filter((a) => a.start >= removed).map((a) => ({ ...a, start: a.start - removed, end: a.end - removed }));
+		snapshot.text = text;
 	}
 
 	private stripLeadingSlashCommand(text: string): string {
@@ -1533,7 +1799,7 @@ export class Composer {
 	private handleStashCommand(): void {
 		const current = this.snapshotComposer();
 		const stripped = cloneStash(current);
-		if (this.parseLeadingSlash(current.text)) stripped.text = this.stripLeadingSlashCommand(current.text);
+		if (this.parseLeadingSlash(current.text)) this.stripSnapshotPrefix(stripped, this.stripLeadingSlashCommand(current.text));
 		const draft = stashHasContent(stripped) ? stripped : this.lastNonSlashDraft;
 		if (stashHasContent(draft)) {
 			if (this.promptStash && stashHasContent(this.promptStash)) {

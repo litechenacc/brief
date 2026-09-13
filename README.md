@@ -73,6 +73,17 @@ These improvements target interface response and rendering; model generation spe
 
 The fork also includes fixes for session routing and reconnection, duplicate reply rendering, history actions, image handling, and input method composition. The focus is the existing chat workflow—not a replacement for the Prime Agent runtime.
 
+## 貼上長文本與圖片
+
+超過 10 行或 1,000 字元的貼上內容會收成文本附件；短文本仍直接貼入輸入區。文本與圖片在輸入位置顯示 placeholder，並在上方顯示對應附件卡。點擊附件卡，或按住 Ctrl（macOS 為 Cmd）點擊 placeholder，使用 VS Code 開啟暫存文字檔或圖片預覽。
+
+- 文本可直接在 VS Code 編輯。送出時若引用的文本附件有未儲存修改，Brief 會詢問是否儲存這些附件並送出；取消或儲存失敗都不會送出。
+- 送出會讀取最新檔案內容：文本在 placeholder 位置展開，圖片沿用圖片附件傳送。不是只把暫存路徑交給 agent。
+- 刪除 placeholder 或附件卡會取消附加；Undo 可還原。取消附加不會立即刪除暫存檔。
+- 附件檔案位於平台暫存目錄內的 Brief 專屬子目錄。系統可能清理暫存檔；它們不是永久儲存。需要保留的內容請另存到工作區。
+- Editor/sidebar 搬移及 `/stash` 保留附件結構。跨重啟不保證圖片附件或卡片恢復；文本草稿可恢復成展開的純文字。
+- 圖片 placeholder 提供參照位置；目前 runtime 仍分開接收文字與圖片陣列，不保證文字／圖片內容區塊交錯排列。
+
 ## Install
 
 ### Requirements
