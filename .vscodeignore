@@ -14,17 +14,14 @@ image.png
 *.map
 media/*.map
 
-# Maintainer-only. .env holds the Marketplace PAT: vsce globs with dot:true and
-# never reads .gitignore, so without these lines the token ships to every user.
+# Keep local secrets and maintainer scripts out of distributable packages.
 .env
 .env.*
 release.sh
 install.sh
 
 dist/*.map
-dist/controller.cjs
-dist/daemon-sidecar.cjs
-dist/session-actions.cjs
+dist/*.cjs
 
 # Knowledge-graph output. Gitignored, which is exactly why it needs a line here:
 # vsce globs with dot:true and never reads .gitignore, so being invisible to git

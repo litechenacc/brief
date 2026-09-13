@@ -67,7 +67,7 @@ curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | sh
 
 完成設定並確認 `prime-agent` 可執行，再透過 VS Code 安裝 Brief：
 
-1. 前往 [GitHub Releases](https://github.com/litechenacc/brief/releases)，下載該版本的 `.vsix` 附件（0.3.1 版為 `brief-0.3.1.vsix`）。安裝插件不需要下載 source code 壓縮檔。
+1. 前往 [GitHub Releases](https://github.com/litechenacc/brief/releases)，下載該版本的 `.vsix` 附件（`brief-<version>.vsix`）。安裝插件不需要下載 source code 壓縮檔。
 2. 在 VS Code 開啟 **Extensions**，選擇 **… → Install from VSIX…**，再選取下載的檔案。也可從 Command Palette 執行 **Extensions: Install from VSIX...**。
 3. 若出現提示，重新載入 VS Code；開啟受信任的 workspace，再執行 **Brief: New Session**。
 

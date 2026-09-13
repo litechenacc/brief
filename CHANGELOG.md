@@ -4,14 +4,15 @@ All notable changes to this extension are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-<!--
-Maintainers: keep entries under [Unreleased] as flat bullets starting on the line right after
-the blank one. release.sh promotes that heading into the new version section and only detects
-entries within two lines of it, so a `### Added` sub-heading makes a release ship unlabelled.
-After a cut, add the new version's compare link at the bottom and re-point [Unreleased].
--->
+<!-- Add release notes under [Unreleased]. release.sh promotes them when bumping a version. -->
 
 ## [Unreleased]
+
+## [0.3.2]
+
+- Describe Brief as an independent Prime Agent frontend and add Prime search keywords.
+- Publish only to GitHub through release.sh, with explicit version bumps and safe resume of a prepared release.
+- Validate actual VSIX contents and move release instructions into the development guide.
 
 ## [0.3.1]
 
@@ -357,7 +358,8 @@ The entries below predate Brief's release documentation and retain their origina
 - Test layers: webview DOM harness, export harness, activation harness, smoke, host e2e, headless
   screenshot matrix, and a persistent live-shell driver for real VS Code verification.
 
-[Unreleased]: https://github.com/litechenacc/brief/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/litechenacc/brief/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/litechenacc/brief/releases/tag/v0.3.2
 [0.3.1]: https://github.com/litechenacc/brief/releases/tag/v0.3.1
 [1.0.33]: https://github.com/sirouk/prime-agent-vscode/compare/v1.0.32...v1.0.33
 [1.0.32]: https://github.com/sirouk/prime-agent-vscode/compare/v1.0.31...v1.0.32

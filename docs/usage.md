@@ -95,7 +95,7 @@ Clone this repository or your fork and work from its root. Source builds require
 ```sh
 npm ci
 npm run package
-code --install-extension brief-0.3.1.vsix --force
+code --install-extension "brief-$(node -p "require('./package.json').version").vsix" --force
 ```
 
 Use the filename matching the version in `package.json` if you change it. Run **Developer: Reload Window**, then **Brief: New Session**.
@@ -123,3 +123,28 @@ npm run package
 
 Open this folder in VS Code and press **F5** to launch an Extension Development Host. Use `npm run watch` for rebuilds while developing. `npm run test:live` runs integration checks that require a working Prime Agent environment.
 
+
+## GitHub releases
+
+Releases publish only to `litechenacc/brief` on GitHub. No Azure or Marketplace token is used. Install Python 3 and GitHub CLI (`gh`), then authenticate with `gh auth login`. Release from a clean `main` branch already pushed to `origin`. Build dependencies, Playwright Chromium, and a working Prime Agent environment are required for the full test suite.
+
+Write release notes under `[Unreleased]` in `CHANGELOG.md`, commit your changes, and push `main`. Then choose explicitly:
+
+```sh
+./release.sh patch          # 0.3.2 -> 0.3.3
+./release.sh minor          # 0.3.2 -> 0.4.0
+./release.sh major          # 0.3.2 -> 1.0.0
+./release.sh patch --dry-run
+```
+
+`--dry-run` only checks prerequisites and prints the plan. It does not run tests, build, edit files, or publish. Normal execution asks for confirmation; `--yes` confirms the plan for non-interactive use.
+
+The script runs typecheck, unit/browser tests, and live integration tests; updates package versions and the changelog; builds and validates the VSIX; then creates the release commit, tag, and GitHub Release. Unknown packaged files stop publication. A failed build leaves local edits for inspection rather than deleting them.
+
+For a version already bumped and committed, provide its matching changelog section and use:
+
+```sh
+./release.sh --current
+```
+
+This does not bump or create an empty commit. It can resume an interrupted publication only when existing tags point to the current commit. An existing VSIX is checked against the rebuilt archive contents and never overwritten with different content. After a failure, inspect `git status`; do not blindly run another bump. If version changes remain uncommitted, review and commit them, push `main`, then use `--current`.

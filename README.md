@@ -67,7 +67,7 @@ curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | sh
 
 Complete its setup and confirm that `prime-agent` works. Then install Brief through VS Code:
 
-1. Open [GitHub Releases](https://github.com/litechenacc/brief/releases) and download the release's `.vsix` asset (for version 0.3.1: `brief-0.3.1.vsix`). Do not download the source-code archive for installation.
+1. Open [GitHub Releases](https://github.com/litechenacc/brief/releases) and download the release's `.vsix` asset (`brief-<version>.vsix`). Do not download the source-code archive for installation.
 2. In VS Code, open **Extensions**, select **… → Install from VSIX…**, and choose the downloaded file. You can also run **Extensions: Install from VSIX...** from the Command Palette.
 3. Reload VS Code if prompted, open a trusted workspace, and run **Brief: New Session**.
 
