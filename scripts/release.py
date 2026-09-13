@@ -109,12 +109,7 @@ def main():
     print(f"Asset: brief-{version}.vsix; " + ("no version commit" if args.current else "create version commit and tag"), flush=True)
     if args.dry_run:
         return
-    require(args.yes or input("Run tests, build, and publish this release? [y/N] ").lower() in ["y", "yes"], "Cancelled")
-    run(sys.executable, "test/release.test.py")
-    run(sys.executable, "test/verify-vsix.test.py")
-    run("npm", "run", "typecheck")
-    run("npm", "test")
-    run("npm", "run", "test:live")
+    require(args.yes or input("Build and publish this release? [y/N] ").lower() in ["y", "yes"], "Cancelled")
     if not args.current:
         run("npm", "version", version, "--no-git-tag-version")
         (ROOT / "CHANGELOG.md").write_text(next_changelog)

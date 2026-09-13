@@ -126,7 +126,7 @@ Open this folder in VS Code and press **F5** to launch an Extension Development 
 
 ## GitHub releases
 
-Releases publish only to `litechenacc/brief` on GitHub. No Azure or Marketplace token is used. Install Python 3 and GitHub CLI (`gh`), then authenticate with `gh auth login`. Release from a clean `main` branch already pushed to `origin`. Build dependencies, Playwright Chromium, and a working Prime Agent environment are required for the full test suite.
+Releases publish only to `litechenacc/brief` on GitHub. No Azure or Marketplace token is used. Install Python 3 and GitHub CLI (`gh`), then authenticate with `gh auth login`. Release from a clean `main` branch already pushed to `origin`. Node.js and npm build dependencies are required for packaging. Release does not run tests or typecheck, and does not require Playwright or a running Prime Agent. Run development checks separately before deciding to release.
 
 Write release notes under `[Unreleased]` in `CHANGELOG.md`, commit your changes, and push `main`. Then choose explicitly:
 
@@ -139,7 +139,7 @@ Write release notes under `[Unreleased]` in `CHANGELOG.md`, commit your changes,
 
 `--dry-run` only checks prerequisites and prints the plan. It does not run tests, build, edit files, or publish. Normal execution asks for confirmation; `--yes` confirms the plan for non-interactive use.
 
-The script runs typecheck, unit/browser tests, and live integration tests; updates package versions and the changelog; builds and validates the VSIX; then creates the release commit, tag, and GitHub Release. Unknown packaged files stop publication. A failed build leaves local edits for inspection rather than deleting them.
+The script updates package versions and the changelog, builds and validates the VSIX, then creates the release commit, tag, and GitHub Release. Tests and typecheck are not part of this workflow. Unknown packaged files stop publication. A failed build leaves local edits for inspection rather than deleting them.
 
 For a version already bumped and committed, provide its matching changelog section and use:
 
