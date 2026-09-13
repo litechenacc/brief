@@ -328,16 +328,26 @@ export class HistoryView {
 			unarchive.appendChild(icon("back", 11));
 			unarchive.addEventListener("click", (event) => {
 				event.stopPropagation();
+				this.render((this.lastSessions ?? []).map((row) =>
+					row.path === session.path ? { ...row, archived: false } : row), this.currentId);
 				this.deps.onUnarchive(session.path, session.id);
 			});
 			actions.appendChild(unarchive);
 		} else {
 			const archive = document.createElement("button");
 			archive.className = "history-action";
-			archive.title = "Archive session (hides it in the Archive section)";
+			archive.disabled = !!session.running || (status !== "idle" && status !== "inactive");
+			archive.title = status === "running" || session.running
+				? "Archive unavailable while this session is running"
+				: archive.disabled
+					? "Archive unavailable: execution status unknown"
+					: "Archive session (hides it in the Archive section)";
 			archive.appendChild(icon("archive", 11));
 			archive.addEventListener("click", (event) => {
 				event.stopPropagation();
+				if (archive.disabled) return;
+				this.render((this.lastSessions ?? []).map((row) =>
+					row.path === session.path ? { ...row, archived: true } : row), this.currentId);
 				this.deps.onArchive(session.path, session.id);
 			});
 			actions.appendChild(archive);

@@ -260,25 +260,6 @@ export async function renameSessionOffline(sessionPath: string, sessionId: strin
 	}
 }
 
-/**
- * Archive a session file: append `{type:"session_state", state:{status:"archived"}}`,
- * exactly what the CLI persists after killing an agent (agents-view-mode.ts
- * deactivatePendingAgent). The transcript is untouched; the session simply drops
- * out of the roster. Callers must kill a resident session FIRST — otherwise the
- * daemon rewrites the file from its own entry list and drops this entry.
- */
-export async function archiveSessionFile(sessionPath: string, sessionId: string): Promise<RenameSessionResult> {
-	if (await isSessionActive(sessionPath)) {
-		return { ok: false, error: "Session is live in another process — archive it after it becomes inactive." };
-	}
-	try {
-		await appendEntry(sessionPath, sessionId, { type: "session_state", state: { status: "archived" } });
-		return { ok: true };
-	} catch (err) {
-		return { ok: false, error: err instanceof Error ? err.message : String(err) };
-	}
-}
-
 /** Delete session file (trash-first) and its artifacts — same semantics as the CLI. */
 export async function deleteSession(sessionPath: string, sessionId: string): Promise<DeleteSessionResult> {
 	if (await isSessionActive(sessionPath)) {

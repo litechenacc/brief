@@ -14,7 +14,7 @@ function check(name, condition, detail = "") {
 const workdir = fs.mkdtempSync(path.join(os.tmpdir(), "prime-agent-session-actions-"));
 const bundle = path.join(workdir, "session-actions.cjs");
 esbuild.buildSync({ entryPoints: ["src/session-actions.ts"], outfile: bundle, bundle: true, format: "cjs", platform: "node", target: "node20" });
-const { archiveSessionFile, renameSessionOffline } = await import(bundle);
+const { renameSessionOffline } = await import(bundle);
 
 const id = "tail-session";
 const file = path.join(workdir, `${id}.jsonl`);
@@ -28,20 +28,20 @@ check("newline-less transcript stays parseable after append", lines.length === 2
 check("blank rename persists an explicit clear and parent", lines[1]?.name === "" && lines[1]?.parentId === "leaf", JSON.stringify(lines[1]));
 
 // The parent lookup reads only a bounded tail. A multi-megabyte earlier history
-// must not prevent archive from finding the final leaf and writing one record.
+// must not prevent rename from finding the final leaf and writing one record.
 const largeId = "large-session";
 const largeFile = path.join(workdir, `${largeId}.jsonl`);
 fs.writeFileSync(largeFile, `${JSON.stringify({ type: "message", id: "old", text: "x".repeat(3 * 1024 * 1024) })}\n${JSON.stringify({ type: "message", id: "last" })}\n`);
-const archive = await archiveSessionFile(largeFile, largeId);
+const archive = await renameSessionOffline(largeFile, largeId, "Large");
 const archivedTail = fs.readFileSync(largeFile, "utf8").trimEnd().split("\n").at(-1);
-check("large transcript archive succeeds", archive.ok, JSON.stringify(archive));
-check("archive chains from the final bounded-tail record", JSON.parse(archivedTail).parentId === "last", archivedTail);
+check("large transcript rename succeeds", archive.ok, JSON.stringify(archive));
+check("rename chains from the final bounded-tail record", JSON.parse(archivedTail).parentId === "last", archivedTail);
 
 const brokenId = "broken-session";
 const brokenFile = path.join(workdir, `${brokenId}.jsonl`);
 const brokenBefore = `${JSON.stringify({ type: "message", id: "good" })}\n{"type":"message"`;
 fs.writeFileSync(brokenFile, brokenBefore);
-const broken = await archiveSessionFile(brokenFile, brokenId);
+const broken = await renameSessionOffline(brokenFile, brokenId, "Broken");
 check("truncated final JSONL record is rejected", !broken.ok && /incomplete/.test(broken.error ?? ""), JSON.stringify(broken));
 check("truncated transcript is never further corrupted", fs.readFileSync(brokenFile, "utf8") === brokenBefore);
 
@@ -49,7 +49,7 @@ if (process.platform !== "win32") {
 	const linkId = "link-session";
 	const link = path.join(workdir, `${linkId}.jsonl`);
 	fs.symlinkSync(file, link);
-	const linked = await archiveSessionFile(link, linkId);
+	const linked = await renameSessionOffline(link, linkId, "Link");
 	check("offline mutation rejects a session symlink", !linked.ok && /regular/.test(linked.error ?? ""), JSON.stringify(linked));
 }
 

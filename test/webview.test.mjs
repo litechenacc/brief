@@ -329,7 +329,8 @@ check("expanding sweeps the selection over the revealed thinking text",
 	thinking.querySelector(".thinking-body").contains(swept.endContainer),
 	`end=${swept.endContainer.nodeValue ?? swept.endContainer.nodeName}`);
 check("session id shown", document.querySelector(".session-id").textContent === "#019fd749");
-check("live badge", document.querySelector(".live-label").textContent === "live");
+check("runtime label is hidden from the composer", document.querySelector(".status-strip").hidden);
+check("live badge state is retained for webview updates", document.querySelector(".live-label").textContent === "live");
 check("context meter labeled", document.querySelector(".context-label").textContent === "Context 23% · 60K / 262K");
 
 // --- model menu with favorites ---
@@ -412,9 +413,11 @@ check("menu closed after select", !document.querySelector(".dropdown"));
 // brain is its own rail pill right of the model pill
 const brainPill = document.querySelector(".composer-rail .rail-pill.brain");
 check("brain rail pill present", !!brainPill);
+check("brain pill shows icon and current level", !!brainPill.querySelector("svg") && brainPill.textContent === "max");
 // non-reasoning model: brain pill disabled, and model rows have no per-row accessories beyond the star
 hostMessage({ type: "status", status: { ...baseStatus, modelProvider: "chutes", modelId: "glm", modelLabel: "chutes/glm", thinkingLevel: "off" } });
 check("brain pill disabled on non-reasoning model", document.querySelector(".composer-rail .rail-pill.brain").className.includes("disabled-pill"));
+check("brain pill shows off on non-reasoning model", brainPill.textContent === "off");
 modelBtn.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
 const glmRowAcc = [...document.querySelectorAll(".dropdown-item")].find((r) => r.textContent.includes("glm"));
 check("no brain accessory on model rows", glmRowAcc && !glmRowAcc.querySelector(".dropdown-brain"));
@@ -434,6 +437,8 @@ check("current level marked (max, unaliased)", [...(tDrop?.querySelectorAll(".dr
 posted.length = 0;
 [...tDrop.querySelectorAll(".dropdown-item")].find((r) => r.textContent.startsWith("high")).dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
 check("select posts setThinkingLevel", posted.some((m) => m.type === "setThinkingLevel" && m.level === "high"));
+hostMessage({ type: "status", status: { ...kimiLevels, thinkingLevel: "high" } });
+check("brain pill updates visible level after host confirmation", brainPill.textContent === "high" && !!brainPill.querySelector("svg"));
 // available-levels feed filters the list
 hostMessage({ type: "status", status: { ...baseStatus, availableThinkingLevels: ["off", "medium", "high"] } });
 document.querySelector(".composer-rail .rail-pill.brain").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
@@ -752,8 +757,9 @@ hostMessage({ type: "setHistoryMode", enabled: false });
 check("context label shows capacity", document.querySelector(".context-label").textContent === "Context 23% · 60K / 262K");
 check("context tooltip shows used and total tokens", document.querySelector(".context-meter").title === "Context 23% · 60,000 / 262,144 tokens");
 const sessionUsage = document.querySelector("details.stats-label");
-check("session footer is inside the prompt card at the bottom", document.querySelector(".composer-card").lastElementChild === document.querySelector(".status-strip"));
-check("session footer has no conversation copy button", !document.querySelector(".status-strip button"));
+check("session status remains below the prompt controls", document.querySelector(".composer-card").lastElementChild === document.querySelector(".status-strip"));
+check("session id and fee share the composer rail", document.querySelector(".composer-rail .session-id") && document.querySelector(".composer-rail .stats-label"));
+check("session status has no conversation copy button", !document.querySelector(".status-strip button"));
 check("session fee uses two decimals and details stay collapsed", !sessionUsage.open && sessionUsage.querySelector("summary").textContent === "$0.00");
 hostMessage({ type: "status", status: { ...baseStatus, costUsd: 1.236 } });
 check("session fee rounds to two decimals", sessionUsage.querySelector("summary").textContent === "$1.24");
@@ -762,6 +768,12 @@ check("session details state scope and cumulative usage", sessionUsage.textConte
 sessionUsage.open = true;
 hostMessage({ type: "status", status: { ...baseStatus, costUsd: 0 } });
 check("zero cost remains visible", !sessionUsage.hidden && sessionUsage.querySelector("summary").textContent.includes("$0.00"));
+hostMessage({ type: "status", status: { ...baseStatus, composerToolbar: ["context", "id", "cost", "btn"] } });
+const configuredRail = document.querySelector(".composer-rail");
+const configuredItems = [...configuredRail.children].map((item) => item.className);
+check("composer toolbar config controls visible items and their order",
+	configuredItems.join("|") === "icon-btn|composer-meta context-meter|composer-meta session-id|composer-meta stats-label|send-btn stop|send-control",
+	configuredItems.join("|"));
 hostMessage({ type: "status", status: { ...baseStatus, costUsd: undefined, usageTotal: undefined } });
 check("missing usage hides session stats", sessionUsage.hidden);
 hostMessage({ type: "status", status: { ...baseStatus, contextPercent: null, contextTokens: null } });
@@ -1572,6 +1584,7 @@ const slashItems = () => {
 	return [...document.querySelectorAll(".ac-item")].map((item) => item.textContent.trim());
 };
 const listed = slashItems();
+check("slash menu lists /login", listed.some((item) => item.startsWith("/login")));
 check("slash menu lists UI commands before the agent's catalog",
 	listed[0]?.startsWith("/model") && listed.some((item) => item.startsWith("/effort")) && listed.some((item) => item.startsWith("/stash")) && listed.some((item) => item.startsWith("/new")),
 	JSON.stringify(listed));
@@ -1678,6 +1691,19 @@ textarea.value = "/new extra args";
 posted.length = 0;
 textarea.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
 check("/new ignores extra args and still starts a session", posted.some((m) => m.type === "newSession") && !posted.some((m) => m.type === "prompt"), JSON.stringify(posted.map((m) => m.type)));
+
+// /login is local, both when typed and selected from autocomplete.
+textarea.value = "/login";
+posted.length = 0;
+textarea.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+check("/login posts only a local login action", posted.filter((m) => m.type === "login").length === 1 && !posted.some((m) => m.type === "prompt"));
+check("/login preserves the source draft", textarea.value === "keep for next thread", JSON.stringify(textarea.value));
+textarea.value = "/log";
+textarea.selectionStart = textarea.selectionEnd = 4;
+textarea.dispatchEvent(new window.Event("input", { bubbles: true }));
+posted.length = 0;
+document.querySelector(".ac-item")?.dispatchEvent(new window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+check("/login autocomplete opens login without prompting", posted.filter((m) => m.type === "login").length === 1 && !posted.some((m) => m.type === "prompt"));
 
 // --- paste image on a text-only model shows a composer hint ---
 hostMessage({ type: "status", status: { ...baseStatus, modelProvider: "chutes", modelId: "glm", modelLabel: "chutes/glm" } });
@@ -1840,11 +1866,29 @@ check(
 	!!restored && restored !== cancelItem && !restored.classList.contains("confirming") && !!restored.querySelector(".history-action"),
 );
 
-// --- history: archive is a distinct, non-destructive action (CLI stop/deactivate) ---
+// --- history: archive only classifies idle/inactive sessions; it never stops a run ---
+for (const [status, running, allowed] of [
+	["running", false, false], [undefined, false, false], ["unknown", false, false],
+	["idle", true, false], ["inactive", true, false], [undefined, true, false],
+	["idle", false, true], ["inactive", false, true],
+]) {
+	hostMessage({ type: "history", sessions: [{
+		id: "archive-status", path: "/tmp/archive-status.jsonl", cwd: "/ws",
+		timestamp: new Date().toISOString(), name: "archive status", inWorkspace: true, status, running,
+	}] });
+	const button = [...document.querySelectorAll(".history-action")].find((b) => b.title.startsWith("Archive"));
+	check(`archive eligibility (${status}, running=${running})`, button?.disabled === !allowed);
+	if (!allowed) check("disabled archive explains why", button.title.includes(running || status === "running" ? "running" : "unknown"));
+	posted.length = 0;
+	button.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+	check("archive eligibility also guards dispatched clicks", posted.some((m) => m.type === "archiveSession") === allowed);
+	check("archive never stops or deletes a session", !posted.some((m) => ["stopSession", "deleteSession"].includes(m.type)));
+}
+
 hostMessage({ type: "status", status: { ...baseStatus, sessionId: "current-archive" } });
 hostMessage({
 	type: "history",
-	sessions: [{ id: "current-archive", path: "/tmp/current-archive.jsonl", cwd: "/ws", timestamp: new Date().toISOString(), name: "current archive", inWorkspace: true }],
+	sessions: [{ id: "current-archive", path: "/tmp/current-archive.jsonl", cwd: "/ws", timestamp: new Date().toISOString(), name: "current archive", inWorkspace: true, status: "idle" }],
 });
 const currentArchiveRow = [...document.querySelectorAll(".history-item")].find((i) => i.textContent.includes("current archive"));
 check("current row offers archive but not delete", !!currentArchiveRow &&
@@ -1854,7 +1898,7 @@ hostMessage({ type: "status", status: baseStatus });
 hostMessage({
 	type: "history",
 	sessions: [
-		{ id: "arch-1", path: "/tmp/arch.jsonl", cwd: "/ws", timestamp: new Date().toISOString(), name: "finished experiment", inWorkspace: true,
+		{ id: "arch-1", path: "/tmp/arch.jsonl", cwd: "/ws", timestamp: new Date().toISOString(), name: "finished experiment", inWorkspace: true, status: "inactive",
 			children: [{ id: "arch-child", name: "expanded worker", status: "running" }] },
 	],
 });
@@ -1865,7 +1909,10 @@ posted.length = 0;
 archBtn.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
 check("archive posts on the first click", posted.some((m) => m.type === "archiveSession" && m.sessionId === "arch-1"), JSON.stringify(posted));
 check("archive does not arm a confirm", !archRow.classList.contains("confirming"));
-check("archive does not post deleteSession", !posted.some((m) => m.type === "deleteSession"));
+check("archive does not stop or delete", !posted.some((m) => ["stopSession", "deleteSession"].includes(m.type)));
+check("archive immediately moves the row without a host refresh",
+	document.querySelector(".history-group-summary")?.textContent === "Archive (1)" &&
+	!!document.querySelector('[title="Move out of Archive"]'));
 hostMessage({
 	type: "history",
 	sessions: [
@@ -1889,6 +1936,8 @@ unarchiveBtn.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
 check("move-out posts without opening the session",
 	posted.some((m) => m.type === "unarchiveSession" && m.sessionId === "arch-1") && !posted.some((m) => m.type === "switchSession"),
 	JSON.stringify(posted));
+check("move-out immediately restores the active classification",
+	[...document.querySelectorAll(".history-group-summary")].map((n) => n.textContent).join("|") === "Active (2)");
 check("history actions stay in the title row without covering its name",
 	!!archivedRow.querySelector(".history-item-top > .history-actions") &&
 	fs.readFileSync(new URL("../media/main.css", import.meta.url), "utf8").includes(".history-actions {\n\tflex-shrink: 0;"));
@@ -1952,17 +2001,20 @@ textarea.dispatchEvent(new window.Event("input", { bubbles: true }));
 check("the created session unlocks the composer", !textarea.disabled && textarea.placeholder === "Message Brief…", `${textarea.disabled} ${textarea.placeholder}`);
 
 // --- #5/C10: steer vs queue while a run is live, and a Stop that really aborts ---
-const behaviorPill = document.querySelector(".composer-rail .rail-pill.behavior");
+const behaviorPill = document.querySelector(".composer-rail .send-mode-btn");
+const deliveryButton = document.querySelector(".send-control .send-btn");
 const stopBtn = document.querySelector(".composer-dock .send-btn.stop");
 check("run controls stay hidden while idle", behaviorPill.style.display === "none" && stopBtn.style.display === "none",
 	`behavior=${behaviorPill.style.display} stop=${stopBtn.style.display}`);
 hostMessage({ type: "status", status: { ...baseStatus, streaming: true } });
 check("run controls appear while streaming", behaviorPill.style.display !== "none" && stopBtn.style.display !== "none",
 	`behavior=${behaviorPill.style.display} stop=${stopBtn.style.display}`);
-check("delivery starts at the configured default", behaviorPill.textContent === "steer", behaviorPill.textContent);
+check("delivery starts at the configured default", deliveryButton.textContent === "Steer", deliveryButton.textContent);
 behaviorPill.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-check("toggle flips to queue and explains the difference",
-	behaviorPill.textContent === "queue" && behaviorPill.title.includes("when the run ends"), `${behaviorPill.textContent} — ${behaviorPill.title}`);
+const queueOption = [...document.querySelectorAll(".dropdown-select")].find((item) => item.textContent.startsWith("Queue"));
+check("queue option explains delivery timing", queueOption?.textContent.includes("when the run ends"));
+queueOption.click();
+check("choosing queue updates the send action", deliveryButton.textContent === "Queue", deliveryButton.textContent);
 // The choice is only real if it rides along with the message.
 posted.length = 0;
 textarea.value = "and then run the tests";
@@ -1987,7 +2039,7 @@ check("stop is withdrawn while watching someone else's run", stopBtn.style.displ
 hostMessage({ type: "status", status: { ...baseStatus, streaming: false } });
 check("run controls retire when the run ends", behaviorPill.style.display === "none" && stopBtn.style.display === "none",
 	`behavior=${behaviorPill.style.display} stop=${stopBtn.style.display}`);
-check("delivery falls back to the configured default between runs", behaviorPill.textContent === "steer", behaviorPill.textContent);
+check("idle delivery returns to Send", deliveryButton.textContent === "Send", deliveryButton.textContent);
 
 // --- #45/#19/#53: the scroll lock and the jump-to-bottom pill ---
 // happy-dom does no layout, so every metric is 0 and the handler would always

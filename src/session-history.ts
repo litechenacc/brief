@@ -147,8 +147,11 @@ markHistoryUnarchived(this: SessionController, sessionPath = this.viewedSessionP
 },
 
 async unarchiveSession(this: SessionController, sessionPath: string, sessionId: string): Promise<void> {
-	const session = await this.resolveHistorySession(sessionPath, sessionId);
-	if (session) this.markHistoryUnarchived(session.path);
+	const target = this.historyPathKey(sessionPath);
+	const row = (this.actionHistory ?? this.lastHistory)?.find(
+		(row) => row.id === sessionId && this.historyPathKey(row.path) === target,
+	);
+	if (row) this.markHistoryUnarchived(row.path);
 },
 
 /** Painting cached rows must never create completion/read transitions. */
@@ -231,6 +234,7 @@ updateHistoryRuntime(this: SessionController, sessionPath: string, status: Recen
 		this.historyReadAt.set(key, this.historyCompletedAt.get(key) ?? 0);
 	}
 	this.historyRuntime.set(key, { status, statusLabel, revision });
+	if (status === "running") this.markHistoryUnarchived(sessionPath);
 },
 
 rowsFromCatalog(this: SessionController, catalog: SessionSummaryRef[], revision = ++this.historyRuntimeClock.revision): RecentSession[] {

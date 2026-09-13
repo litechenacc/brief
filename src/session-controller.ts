@@ -40,6 +40,7 @@ import type { AttachRef, ResolvedHistorySession, WebviewSink } from "./session-t
 import type {
 	AgentEvent,
 	AgentMessage,
+	ComposerToolbarItem,
 	HostToWebview,
 	ImageAttachment,
 	ModelRef,
@@ -56,7 +57,7 @@ import { DebugFileLog } from "./debug-log.js";
 import { buildMarkdownExport } from "./markdown-export.js";
 import { listRecentSessions, normalizeFsPath } from "./recent-sessions.js";
 import { deriveSessionLabel, firstUserPrompt } from "./session-label.js";
-import { archiveSessionFile, deleteSession, isSessionActive, renameSessionOffline } from "./session-actions.js";
+import { deleteSession, isSessionActive, renameSessionOffline } from "./session-actions.js";
 import { ComposerAttachments } from "./composer-attachments.js";
 import type { ComposerAttachment } from "./protocol.js";
 import { RpcClient } from "./rpc-client.js";
@@ -278,7 +279,8 @@ export class SessionController implements vscode.Disposable {
 					event.affectsConfiguration("brief.liveTranscript") ||
 					event.affectsConfiguration("brief.streamToolOutput") ||
 					event.affectsConfiguration("brief.showUsageDetails") ||
-					event.affectsConfiguration("brief.showThoughtProcess")
+					event.affectsConfiguration("brief.showThoughtProcess") ||
+					event.affectsConfiguration("brief.composerToolbar")
 				) {
 					this.pushStatusLight();
 				}
@@ -300,6 +302,14 @@ export class SessionController implements vscode.Disposable {
 
 	streamToolOutput(): boolean {
 		return vscode.workspace.getConfiguration("brief").get<boolean>("streamToolOutput", false) === true;
+	}
+
+	composerToolbar(): ComposerToolbarItem[] {
+		const configured = vscode.workspace.getConfiguration("brief").get<unknown>("composerToolbar", ["model", "effort", "spacer", "id", "cost", "context", "btn"]);
+		const allowed = new Set<ComposerToolbarItem>(["model", "effort", "spacer", "id", "cost", "context", "btn"]);
+		return Array.isArray(configured)
+			? configured.filter((item): item is ComposerToolbarItem => typeof item === "string" && allowed.has(item as ComposerToolbarItem))
+			: ["model", "effort", "spacer", "id", "cost", "context", "btn"];
 	}
 
 	get workspaceRoot(): string {
@@ -1815,78 +1825,17 @@ export class SessionController implements vscode.Disposable {
 		}
 	}
 
-	/**
-	 * Archive: the CLI's non-destructive retire (agents-view-mode.ts binds it to
-	 * the delete key on a LIVE row and calls it "stop/deactivate"). Kill the agent
-	 * if it is resident, then append {status:"archived"} to the jsonl. The
-	 * transcript stays on disk and stays resumable by path; the session just
-	 * leaves the roster. The kill has to land first — a resident session would
-	 * rewrite the file from its own entry list and drop our entry.
-	 */
+	/** Archive only changes Brief's history classification, never the runtime. */
 	async archiveSession(sessionPath: string, sessionId: string): Promise<void> {
-		if (this.guardObservedReadOnly("archiving a session")) return;
-		const isCurrent = (!this.attached && sessionId === this.state?.sessionId) || sessionId === this.attached?.sessionId;
 		const target = normalizeFsPath(sessionPath);
-		if (isCurrent) {
-			const next = (this.lastHistory ?? []).filter((row) => !row.archived && normalizeFsPath(row.path) !== target)
-				.sort((a, b) => historyActivityMs(b) - historyActivityMs(a))[0];
-			if (next) await this.switchSession(next.path, next.id);
-			else await this.newSession();
-			const viewedPath = this.viewedSessionPath();
-			if (!viewedPath || normalizeFsPath(viewedPath) === target) {
-				this.broadcast({ type: "notice", level: "warning", text: "Could not leave the current session, so it was not archived." });
-				return;
-			}
-		}
-		const known = (this.actionHistory ?? this.lastHistory)?.some(
+		const row = (this.actionHistory ?? this.lastHistory)?.find(
 			(row) => row.id === sessionId && normalizeFsPath(row.path) === target,
-		) ?? false;
-		if (known) this.markHistoryArchived(sessionPath);
-		const rollback = (): void => {
-			if (!known) return;
-			this.historyArchived.delete(this.historyPathKey(sessionPath));
-			this.persistHistoryUiState();
-			this.overlayCachedHistory();
+		);
+		if (!row || row.running || (row.status !== "idle" && row.status !== "inactive")) {
 			this.paintHistory();
-		};
-		const session = await this.resolveHistorySession(sessionPath, sessionId);
-		if (!session) {
-			rollback();
 			return;
 		}
-		sessionPath = session.path;
-		sessionId = session.id;
-		const fileId = session.fileId;
-		try {
-			const sidecar = await this.ensureSidecar();
-			const resident = (await this.listSessions(sidecar)).find(
-				(s) => (s.sessionFile ? normalizeFsPath(s.sessionFile) === normalizeFsPath(sessionPath) : false) && s.activeSessionId,
-			);
-			if (resident?.activeSessionId) {
-				await sidecar.request({ type: "kill", activeSessionId: resident.activeSessionId }, 30_000);
-				const stillResident = (await this.listSessions(sidecar)).some(
-					(row) => row.activeSessionId === resident.activeSessionId,
-				);
-				if (stillResident) throw new Error("session is still stopping; try Archive again once it is inactive");
-			}
-		} catch (err) {
-			// If the daemon is unavailable, a live lease is evidence enough that a
-			// file append could be overwritten by its owner. Refuse rather than claim
-			// an archive that the daemon can immediately undo.
-			if (await isSessionActive(sessionPath)) {
-				rollback();
-				this.broadcast({ type: "notice", level: "error", text: `Could not archive the live session: ${err instanceof Error ? err.message : String(err)}` });
-				return;
-			}
-		}
-		const result = await archiveSessionFile(sessionPath, fileId);
-		if (result.ok) {
-			this.savedCatalog = null;
-			this.scheduleHistoryRefresh();
-		} else {
-			rollback();
-			this.broadcast({ type: "notice", level: "error", text: `Could not archive session: ${result.error ?? "unknown error"}` });
-		}
+		this.markHistoryArchived(row.path);
 	}
 
 	async pickModelQuickPick(): Promise<void> {
@@ -2234,11 +2183,12 @@ export class SessionController implements vscode.Disposable {
 	}
 
 	buildStatus(statsText = this.lastStatsText): StatusSnapshot {
+		const composerToolbar = this.composerToolbar();
 		if (this.isCreatingSession()) {
 			const st = (this.rentedState ?? this.state) as RpcSessionState | null;
 			const model = st?.model ?? null;
 			const label = model ? `${model.provider}/${model.id}` : "Agent";
-			return {
+			return { composerToolbar,
 				connected: this.reachable || Boolean(this.attached) || Boolean(this.sidecar?.connected),
 				streaming: false,
 				compacting: false,
@@ -2263,7 +2213,7 @@ export class SessionController implements vscode.Disposable {
 		}
 		if (this.observingId) {
 			const observed = this.observedSession;
-			return {
+			return { composerToolbar,
 				connected: true,
 				streaming: false,
 				compacting: false,
@@ -2290,7 +2240,7 @@ export class SessionController implements vscode.Disposable {
 			const attempt = this.attachAttempt!;
 			const state = this.rentedState;
 			const model = state?.model ?? null;
-			return {
+			return { composerToolbar,
 				connected: false,
 				streaming: false,
 				compacting: false,
@@ -2326,7 +2276,7 @@ export class SessionController implements vscode.Disposable {
 			// would report idle: no running label, no Stop, no queue/steer toggle.
 			const streaming = this.streaming || (st?.isStreaming ?? false);
 			const compacting = this.compacting || (st?.isCompacting ?? false);
-			return {
+			return { composerToolbar,
 				connected: true,
 				streaming,
 				awaitingInput: this.awaitingInput && !streaming && !compacting,
