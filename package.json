@@ -2,7 +2,7 @@
   "name": "brief",
   "displayName": "Brief",
   "description": "An independent Prime Agent frontend for VS Code, with persistent sessions, parallel editor tabs, and sidebar chat.",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "publisher": "litechenacc",
   "license": "MIT",
   "icon": "media/icon.png",

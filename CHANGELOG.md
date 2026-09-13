@@ -8,6 +8,8 @@ All notable changes to this extension are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0]
+
 - Preserve drafts stashed during startup when the first session identity arrives, including attachments and later session switching.
 
 - Isolate fresh chat startup from the shared view queue so a slow daemon or snapshot does not block another editor tab. Bound initial loading to 120 seconds, ignore late results, and log startup phases without conversation content.
@@ -394,7 +396,7 @@ The entries below predate Brief's release documentation and retain their origina
 - Test layers: webview DOM harness, export harness, activation harness, smoke, host e2e, headless
   screenshot matrix, and a persistent live-shell driver for real VS Code verification.
 
-[Unreleased]: https://github.com/litechenacc/brief/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/litechenacc/brief/compare/v0.4.0...HEAD
 [0.3.2]: https://github.com/litechenacc/brief/releases/tag/v0.3.2
 [0.3.1]: https://github.com/litechenacc/brief/releases/tag/v0.3.1
 [1.0.33]: https://github.com/sirouk/prime-agent-vscode/compare/v1.0.32...v1.0.33
@@ -432,3 +434,4 @@ The entries below predate Brief's release documentation and retain their origina
 [1.0.1]: https://github.com/sirouk/prime-agent-vscode/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/sirouk/prime-agent-vscode/releases/tag/v1.0.0
 [0.3.3]: https://github.com/litechenacc/brief/releases/tag/v0.3.3
+[0.4.0]: https://github.com/litechenacc/brief/releases/tag/v0.4.0
