@@ -57,7 +57,7 @@ These changes improve interface feedback and rendering—not model generation sp
 Requirements:
 
 - VS Code **1.90 or newer**, with a trusted, local-filesystem workspace.
-- A working [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent) installation and configured provider access.
+- A working [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent) installation. Provider access can be configured with `/login` in Brief.
 
 Install Prime Agent first:
 
@@ -70,6 +70,8 @@ Complete its setup and confirm that `prime-agent` works. Then install Brief thro
 1. Open [GitHub Releases](https://github.com/litechenacc/brief/releases) and download the release's `.vsix` asset (`brief-<version>.vsix`). Do not download the source-code archive for installation.
 2. In VS Code, open **Extensions**, select **… → Install from VSIX…**, and choose the downloaded file. You can also run **Extensions: Install from VSIX...** from the Command Palette.
 3. Reload VS Code if prompted, open a trusted workspace, and run **Brief: New Session**.
+
+Enter `/login` in Brief to select a provider and complete OAuth or enter an API key through VS Code. Providers come from the installed Prime Agent SDK; browser authorization still opens externally. Prime manages credential storage, shared with `prime-agent` on the same host and configuration directory. With Remote SSH, the SDK runs on the remote extension host. MCP Connections and special setup flows are identified as unsupported rather than sent as chat prompts.
 
 To update, download the newer release's VSIX and repeat the installation. If VS Code cannot find the runtime, set `brief.command` to the absolute path of `prime-agent`.
 

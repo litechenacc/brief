@@ -1,5 +1,7 @@
 /** Sessions own controllers; editor panels and the native sidebar are replaceable views. */
 import { randomBytes } from "node:crypto";
+import { homedir } from "node:os";
+import { loginPrimeAgent } from "./prime-auth.js";
 import { completedMessageTime } from "./session-completion.js";
 import * as vscode from "vscode";
 import type { ChatReadReceipt, ChatViewState, HostToWebview, RecentSession, WebviewToHost } from "./protocol.js";
@@ -67,6 +69,7 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 	private operations: Promise<unknown> = Promise.resolve();
 	private movingView: ChatView | undefined;
 	private disposed = false;
+	private readonly loginAbort = new AbortController();
 	private historyRows: RecentSession[] = [];
 
 	private historyMessage(): HostToWebview {
@@ -349,13 +352,21 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 			// Login must work even when the agent cannot start without credentials.
 			if (message.type === "login") {
 				if (view.closed || view.transferring || view.tab?.closed) return;
-				try {
-					const terminal = vscode.window.createTerminal("Prime Agent Login");
-					terminal.show();
-					terminal.sendText("prime-agent login", true);
-				} catch (error) {
-					void vscode.window.showErrorMessage(`Could not open Prime Agent login: ${String(error)}`);
-				}
+				const tab = view.tab;
+				void (async () => {
+					try {
+						const saved = await loginPrimeAgent({
+							command: vscode.workspace.getConfiguration("brief").get<string>("command", "prime-agent"),
+							cwd: tab?.controller.workspaceRoot || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || homedir(),
+							helperPath: vscode.Uri.joinPath(this.context.extensionUri, "dist", "prime-auth-helper.mjs").fsPath,
+							signal: this.loginAbort.signal,
+						});
+						// Prime reloads shared credentials when listing available models.
+						if (saved && !this.disposed && tab && !tab.closed) await tab.controller.listModels();
+					} catch {
+						if (!this.disposed) void vscode.window.showErrorMessage("Could not complete Prime Agent login. Please retry.");
+					}
+				})();
 				return;
 			}
 			if (message.type === "ready") view.markReady();
@@ -588,6 +599,7 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 
 	dispose(): void {
 		this.disposed = true;
+		this.loginAbort.abort();
 		this.windowFocus.dispose();
 		this.historyAttachment?.dispose();
 		this.historyController?.dispose();

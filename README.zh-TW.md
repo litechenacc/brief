@@ -57,7 +57,7 @@ Brief 是 [sirouk/prime-agent-vscode](https://github.com/sirouk/prime-agent-vsco
 需求：
 
 - VS Code **1.90 以上**，以及受信任、使用本機檔案系統的 workspace。
-- 已安裝 [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent)，並完成 provider 存取設定。
+- 已安裝 [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent)，可透過 Brief 的 `/login` 設定 provider 存取。
 
 先安裝 Prime Agent：
 
@@ -65,11 +65,13 @@ Brief 是 [sirouk/prime-agent-vscode](https://github.com/sirouk/prime-agent-vsco
 curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | sh
 ```
 
-完成設定並確認 `prime-agent` 可執行，再透過 VS Code 安裝 Brief：
+確認 `prime-agent` 可執行，再透過 VS Code 安裝 Brief：
 
 1. 前往 [GitHub Releases](https://github.com/litechenacc/brief/releases)，下載該版本的 `.vsix` 附件（`brief-<version>.vsix`）。安裝插件不需要下載 source code 壓縮檔。
 2. 在 VS Code 開啟 **Extensions**，選擇 **… → Install from VSIX…**，再選取下載的檔案。也可從 Command Palette 執行 **Extensions: Install from VSIX...**。
 3. 若出現提示，重新載入 VS Code；開啟受信任的 workspace，再執行 **Brief: New Session**。
+
+在 Brief 輸入 `/login`，即可透過 VS Code 選擇 provider 並完成 OAuth 或輸入 API key。Provider 清單來自已安裝的 Prime Agent SDK；瀏覽器授權仍會開啟外部瀏覽器。憑證由 Prime 自己的儲存機制管理，可與同主機、同設定目錄的 `prime-agent` 共用。Remote SSH 時，SDK 在 remote extension host 所在主機執行。MCP Connections 與需要特殊設定的登入流程會標示限制，不會送成聊天 prompt。
 
 更新時，下載新版 VSIX 並重複安裝即可。若 VS Code 找不到 runtime，請將 `brief.command` 設為 `prime-agent` 的絕對路徑。
 

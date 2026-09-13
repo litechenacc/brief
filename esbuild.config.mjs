@@ -1,4 +1,5 @@
 import * as esbuild from "esbuild";
+import { copyFileSync, mkdirSync, watch as watchFile } from "node:fs";
 import { execFileSync } from "node:child_process";
 
 const production = process.argv.includes("--production");
@@ -80,7 +81,15 @@ const smokeConfig = {
 	banner: { js: 'import { createRequire } from "node:module"; const require = createRequire(import.meta.url);' },
 };
 
+// The installed SDK runs in its own Node process, not the extension host.
+function copyAuthHelper() {
+	mkdirSync("dist", { recursive: true });
+	copyFileSync("src/prime-auth-helper.mjs", "dist/prime-auth-helper.mjs");
+}
+copyAuthHelper();
+
 if (watch) {
+	watchFile("src/prime-auth-helper.mjs", copyAuthHelper);
 	const ext = await esbuild.context(extensionConfig);
 	const web = await esbuild.context(webviewConfig);
 	await Promise.all([ext.watch(), web.watch()]);

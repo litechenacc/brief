@@ -13,6 +13,8 @@ const dir = mkdtempSync(join(tmpdir(), "brief-editor-tabs-"));
 const controllers = [];
 const panels = [];
 const terminalCalls = [];
+const loginCalls = [];
+let finishLogin;
 let chatLocation = "editor";
 let sidebar;
 let pickedSession;
@@ -71,7 +73,7 @@ class Controller {
 	async switchSession(...args) { this.calls.push(["switch", ...args]); await this.switchGate; }
 	async refreshSnapshot(...args) { this.calls.push(["snapshot", ...args]); await this.refreshGate; }
 	sendCachedModels() { this.calls.push(["cachedModels"]); }
-	async listModels() { await this.modelGate; } async listCommands() {} sendFavorites() {}
+	async listModels() { this.modelRefreshes = (this.modelRefreshes ?? 0) + 1; await this.modelGate; } async listCommands() {} sendFavorites() {}
 	async listHistory() { this.calls.push(["history"]); this.sink.post({ type: "history", sessions: [] }); }
 	async resolveHistorySession(path, id) { this.calls.push(["resolve", path, id]); return this.historyGate ? await this.historyGate : path.startsWith("/known/") ? { path, id } : undefined; }
 	async prompt(payload, reply) { this.calls.push(["prompt", payload]); reply({ type: "promptAccepted", clientRequestId: payload.clientRequestId }); }
@@ -106,10 +108,11 @@ let manager;
 try {
 	const bundle = join(dir, "tabs.cjs");
 	await esbuild.build({ entryPoints: ["src/chat-view.ts"], outfile: bundle, bundle: true, platform: "node", format: "cjs", external: ["vscode"], logLevel: "silent",
-		plugins: [{ name: "controller-stub", setup(build) { build.onResolve({ filter: /session-controller\.js$/ }, () => ({ path: "test-controller", external: true })); } }] });
+		plugins: [{ name: "controller-stub", setup(build) { build.onResolve({ filter: /session-controller\.js$/ }, () => ({ path: "test-controller", external: true })); build.onResolve({ filter: /prime-auth\.js$/ }, () => ({ path: "test-auth", external: true })); } }] });
 	Module._load = function (name, ...args) {
 		if (name === "vscode") return stub;
 		if (name === "test-controller") return { SessionController: Controller };
+		if (name === "test-auth") return { loginPrimeAgent: (options) => { loginCalls.push(options); return new Promise((resolve) => { finishLogin = resolve; }); } };
 		return originalLoad.call(this, name, ...args);
 	};
 	const { ChatPanels } = require(bundle);
@@ -136,8 +139,20 @@ try {
 	const [a, b] = panels, [ca, cb] = controllers;
 	const beforeLogin = JSON.stringify(ca.calls);
 	a.send({ type: "login", command: "untrusted command" });
-	assert.deepEqual(terminalCalls, [["create", "Prime Agent Login"], ["show"], ["sendText", "prime-agent login", true]]);
-	assert.equal(JSON.stringify(ca.calls), beforeLogin, "login does not initialize or prompt the agent");
+	assert.deepEqual(terminalCalls, [], "login must not invoke the nonexistent CLI login command");
+	assert.equal(loginCalls.length, 1);
+	assert.equal(loginCalls[0].command, "prime-agent", "ignore any command from the webview");
+	assert.equal(loginCalls[0].helperPath, join(process.cwd(), "dist", "prime-auth-helper.mjs"));
+	assert.equal(loginCalls[0].agentDir, undefined, "session storage must not override the SDK credential directory");
+	finishLogin(false);
+	await tick();
+	assert.equal(JSON.stringify(ca.calls), beforeLogin, "cancelled login does not initialize or prompt the agent");
+	const beforeRefresh = ca.modelRefreshes ?? 0;
+	a.send({ type: "login" });
+	finishLogin(true);
+	await tick();
+	assert.equal(ca.modelRefreshes, beforeRefresh + 1, "successful login reloads shared credentials via the model catalog");
+	assert.equal(JSON.stringify(ca.calls), beforeLogin, "successful login must not send a prompt");
 	assert.notEqual(ca, cb);
 	assert.deepEqual(a.iconPath, { light: { fsPath: join(process.cwd(), "media/tab-light.svg") }, dark: { fsPath: join(process.cwd(), "media/tab-dark.svg") } });
 	assert.deepEqual(b.iconPath, { light: { fsPath: join(process.cwd(), "media/tab-light.svg") }, dark: { fsPath: join(process.cwd(), "media/tab-dark.svg") } });

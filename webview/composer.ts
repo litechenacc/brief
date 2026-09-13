@@ -40,7 +40,7 @@ const UI_SLASH_COMMANDS: Array<{ name: string; description: string; action: UiSl
 	{ name: "thinking", description: "Select thinking level", action: "effort" },
 	{ name: "stash", description: "Stash or restore the current prompt", action: "stash" },
 	{ name: "new", description: "Start a new session", action: "new" },
-	{ name: "login", description: "Open Prime Agent login in terminal", action: "login" },
+	{ name: "login", description: "Sign in to a model provider in VS Code", action: "login" },
 ];
 
 const UI_SLASH_BY_NAME = new Map(UI_SLASH_COMMANDS.map((command) => [command.name, command.action]));
