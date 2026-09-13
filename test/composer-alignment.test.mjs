@@ -43,5 +43,36 @@ try {
    for (const label of layout.labels) assert.equal(label.lineHeight, '16px', `${label.name} uses common text line height`);
   }
  }
- console.log('PASS composer rail: shared heights, centers and line heights in Send/Queue/Steer');
+ // Check the actual fill geometry without waiting for animation timers.
+ const meter = page.locator('.context-meter');
+ assert.equal(await meter.evaluate(el => getComputedStyle(el, '::before').transitionDuration), '0.25s');
+ await page.emulateMedia({ reducedMotion: 'reduce' });
+ for (const [percent, expected] of [[0, 0], [7, 7], [52.5, 52.5], [100, 100], [120, 100], [-5, 0], [null, 0]]) {
+  await page.evaluate(percent => c.setContext(percent, 18000, 272000, null, null), percent);
+  const fill = await meter.evaluate(el => {
+   const style = getComputedStyle(el, '::before');
+   return { width:parseFloat(style.width), total:el.clientWidth, transition:style.transitionDuration,
+    pointerEvents:style.pointerEvents, overflow:getComputedStyle(el).overflow,
+    radius:getComputedStyle(el).borderRadius, text:el.textContent, title:el.title };
+  });
+  assert.ok(Math.abs(fill.width - fill.total * expected / 100) < 1, `fill matches ${percent}%`);
+  assert.equal(fill.transition, '0s');
+  assert.equal(fill.pointerEvents, 'none');
+  assert.equal(fill.overflow, 'hidden');
+  assert.notEqual(fill.radius, '0px');
+  if (percent === 7) {
+   assert.equal(fill.text, 'Context 7% · 18K / 272K');
+   assert.equal(fill.title, 'Context 7% · 18,000 / 272,000 tokens');
+  }
+  if (percent === null) assert.match(fill.text, /Context pending/);
+ }
+ // Theme changes affect only the fill, not the existing text color.
+ const textColor = await page.locator('.context-label').evaluate(el => getComputedStyle(el).color);
+ const originalFill = await meter.evaluate(el => getComputedStyle(el, '::before').backgroundImage);
+ await page.evaluate(() => document.body.style.setProperty('--vscode-button-background', '#9867c5'));
+ assert.notEqual(await meter.evaluate(el => getComputedStyle(el, '::before').backgroundImage), originalFill);
+ assert.equal(await page.locator('.context-label').evaluate(el => getComputedStyle(el).color), textColor);
+ await page.evaluate(() => c.setContext(7, 18000, undefined, null, null));
+ await meter.waitFor({ state:'hidden' });
+ console.log('PASS composer rail alignment and theme-aware context fill, bounds, pending state and reduced motion');
 } finally { await browser.close(); }

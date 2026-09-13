@@ -602,6 +602,8 @@ export class Composer {
 		const percent = contextWindow == null ? null : this.contextPercentCurrent;
 		const effective = this.compactThreshold ?? this.compactDefaultPercent;
 		this.contextWrap.style.display = contextWindow == null ? "none" : "";
+		const fill = percent != null && Number.isFinite(percent) ? Math.min(100, Math.max(0, percent)) : 0;
+		this.contextWrap.style.setProperty("--context-fill", `${fill}%`);
 		this.contextLabel.classList.toggle("warm", percent != null && effective != null && percent >= effective);
 		const label = percent == null ? "Context pending" : `Context ${Math.round(percent)}%`;
 		const usedK = this.contextTokensCurrent == null ? "pending" : `${Math.round(this.contextTokensCurrent / 1000)}K`;

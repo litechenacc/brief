@@ -1320,6 +1320,9 @@ body.vscode-high-contrast-light .history-item.current {
 }
 
 .context-meter {
+	position: relative;
+	isolation: isolate;
+	overflow: hidden;
 	display: flex;
 	align-items: center;
 	height: 26px;
@@ -1328,7 +1331,27 @@ body.vscode-high-contrast-light .history-item.current {
 	cursor: default;
 }
 
+.context-meter::before {
+	content: "";
+	position: absolute;
+	inset: 0 auto 0 0;
+	width: var(--context-fill, 0%);
+	background: linear-gradient(to bottom,
+		color-mix(in srgb, var(--pa-accent, var(--pa-text)) 10%, transparent),
+		color-mix(in srgb, var(--pa-accent, var(--pa-text)) 18%, transparent));
+	pointer-events: none;
+	transition: width 250ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.context-meter::before {
+		transition: none;
+	}
+}
+
 .context-label {
+	position: relative;
+	z-index: 1;
 	font-size: 11px;
 	color: var(--pa-dim);
 	white-space: nowrap;
