@@ -75,7 +75,7 @@ curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | sh
 
 更新時，下載新版 VSIX 並重複安裝即可。若 VS Code 找不到 runtime，請將 `brief.command` 設為 `prime-agent` 的絕對路徑。
 
-使用 release 不需要 clone repository、安裝建置工具或執行 `just`。原始碼建置與客製化請見[開發與 fork 指南（英文）](docs/usage.md#development-and-forks)。指令、設定、附件行為與保存限制，請見[使用指南（英文）](docs/usage.md)。
+使用 release 不需要 clone repository、安裝建置工具或執行 `just`。原始碼建置與客製化請見[開發與 fork 指南（英文）](docs/usage.md#development-and-forks)。指令、設定、附件行為與保存限制，請見[使用指南（英文）](docs/usage.md)。Slash commands 的完成度與待討論設計請見 [roadmap](docs/roadmap.md)。
 
 ## 為什麼 fork？
 

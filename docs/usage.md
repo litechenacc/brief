@@ -8,7 +8,7 @@ The default location is the **editor area**. Use the Command Palette to choose t
 
 | Command | What it does |
 | --- | --- |
-| `Brief: New Session` | Creates an independent session in the default location. Also available through `+` or `/new`. |
+| `Brief: New Session` | Creates an independent session in the default location. Also available through `+`. 輸入 `/new` 或 `/clear` 則會沿用目前 session 的工作目錄、模型與 thinking level，在新 editor tab 建立空白 session，保留原對話與草稿；不接受參數。 |
 | `Brief: Open Chat in Editor Tab` | Opens chat explicitly in the editor area. |
 | `Brief: Focus Chat` | Focuses chat using the default location. |
 | `Brief: Use Editor` | Moves the current session to an editor tab and remembers the workspace preference. |
@@ -30,6 +30,18 @@ Restored editor tabs reconnect using their saved session identity. Use workspace
 To cancel the current run, use **`Brief: Stop Agent`** or the stop button in the composer.
 
 This persistence depends on the Prime Agent daemon and its host remaining available. It does not keep computation running through machine shutdown, sleep, or termination of the runtime. Saved conversations can be resumed, but uninterrupted execution is a separate guarantee.
+
+## 本地統計查詢
+
+輸入不帶參數的 `/usage`、`/context` 或 `/session`，會在對話區開啟 Brief 本地統計卡片，不呼叫模型或觸發 compact。
+
+- `/usage`：runtime 回報目前分支保留訊息的累積 tokens 與費用（USD）。壓縮後不保證包含壓縮前累計，不是完整歷史費用或供應商最終帳單。
+- `/context`：runtime 估計的目前 context 已用 tokens、容量與比例，不是累積用量；壓縮後尚無有效回覆時可能未提供估計值。
+- `/session`：目前 session 的識別、設定、執行／唯讀狀態與訊息統計。
+
+卡片是有查詢時間的快照，可重新整理、複製或關閉；相同指令更新既有卡片，不自動刷新。執行中數值可能仍在增加，缺值標示為未提供。查詢失敗會明確提示；若保留舊快照，會標示過期。
+
+查詢保留草稿與附件，執行中或唯讀觀察模式也可使用，但不會為查詢啟動 agent。輸入區停用時，使用 Usage／Context／Session 本地查詢按鈕。卡片不屬於模型對話，不納入 `/copy` 或 Markdown 匯出；切換 session 或重載 view 後不保留。第一版不提供子代理彙總、context tree 或跨 session 帳單。
 
 ## Faster feedback, quieter conversations
 

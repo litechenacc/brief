@@ -8,6 +8,30 @@ All notable changes to this extension are recorded here. The format follows
 
 ## [Unreleased]
 
+- Preserve drafts stashed during startup when the first session identity arrives, including attachments and later session switching.
+
+- Isolate fresh chat startup from the shared view queue so a slow daemon or snapshot does not block another editor tab. Bound initial loading to 120 seconds, ignore late results, and log startup phases without conversation content.
+
+- Add local `/usage`, `/context`, and `/session` statistics cards with manual refresh, copy, and close. Keep snapshots outside model history and exports, preserve drafts and attachments, and query the displayed session without triggering compaction or inference.
+
+- Add local `/fork`, `/export`, and `/copy` entries. Fork into a separate editor tab with the selected message restored as an unsent draft; keep the source session unchanged and reject attachments that cannot be restored. Export Markdown through the existing format and save dialogs with overwrite confirmation. Copy the latest completed reply body without thinking or tool output. Preserve drafts and attachments and reject unsupported arguments.
+
+- Define local `/model` and `/effort` (`/thinking`) contracts, block changes while busy or read-only, and keep displayed settings authoritative. Preserve one temporary draft and its attachments per session with `/stash` and a customizable input-focused shortcut. Add `/clear` as a no-argument alias of `/new`, opening an independent editor tab with inherited working directory, model, and thinking level without stopping the source session.
+
+- Add `/logout` with a provider picker and removal confirmation. Remove saved provider credentials, including Prime Inference storage, without stopping agents or deleting drafts; refresh models without restarting sessions.
+
+- Add local `/name` and `/rename` commands with an optional name or a session-bound rename dialog. Add `/resume` to open sidebar Session History without arguments. Preserve drafts and attachments, reuse existing session tabs, and refresh titles and history after renaming.
+
+- Open goal and autonomous action menus from bare slash commands. Add goal format guidance and clear confirmation, show continuation cost and stop-behavior hints, preserve parked drafts, and keep complete commands on the existing prompt path.
+
+- List `/compact`, `/refine`, `/goal`, and `/autonomous` in slash completion even when the runtime command catalog omits them. Keep execution on the existing prompt path and avoid duplicate entries.
+- Add a slash-command roadmap tracking current coverage and Brief-specific design questions before further implementation.
+
+- Show file mention results without waiting for folder traversal, cancel superseded searches, and prevent stale or empty suggestions from capturing completion keys.
+- Allow slash command completion after whitespace and on later lines without replacing surrounding text. Inline selections insert text only; leading commands retain their existing behavior.
+
+- Restore the full playful working-verb pool, add Brief-specific AI and deep-work phrases, replace the middle dot with an ellipsis, and use the theme accent color for the sheen in light themes.
+
 - Show active `bash()` processes and durable background tasks in a shared Running tasks strip above the composer.
 
 - Replace the broken terminal `prime-agent login` invocation with provider sign-in inside VS Code. Reuse the installed Prime Agent SDK for OAuth and API-key storage, discover providers from its registry, and refresh the current session's model list after saving credentials. Browser authorization still opens externally; MCP and special setup flows are not reproduced.
