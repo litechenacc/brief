@@ -147,6 +147,8 @@ export interface RpcSessionState {
 	messageCount?: number;
 }
 
+export interface RunningTask { id: string; label: string; startedAt: number; kind: "bash" | "background"; pid?: number; }
+
 export interface SessionChild {
 	/** bare id (uuid or sub-xxxx) for display */
 	id: string;
@@ -454,6 +456,7 @@ export type HostToWebview =
 			steerDefault?: "steer" | "followUp";
 		}
 	| { type: "favorites"; favorites: ModelRef[] }
+	| { type: "runningTasks"; tasks: RunningTask[] }
 	| { type: "sessionChildren"; children: SessionChild[]; parent?: SessionChild; siblings?: SessionChild[]; viewedActiveSessionId?: string; spawned?: Array<{ activeSessionId: string; browseRef?: string; name?: string; created?: string }> }
 	| { type: "installPrompt"; url: string; reason: string }
 	| { type: "draft"; text: string }

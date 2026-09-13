@@ -60,6 +60,8 @@ const testConfig = {
 		controller: "src/session-controller.ts",
 		"session-actions": "src/session-actions.ts",
 		"daemon-sidecar": "src/daemon-sidecar.ts",
+		"bash-processes": "src/bash-processes.ts",
+		"background-tasks": "src/background-tasks.ts",
 	},
 	bundle: true,
 	format: "cjs",

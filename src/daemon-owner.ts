@@ -38,6 +38,7 @@ export interface WorkerDescriptorRef {
 	createdAt?: string;
 	lifecycle?: string;
 	stopRequestedAt?: string;
+	orphanProcessJournalPath?: string;
 	createCommand?: {
 		sessionPath?: string;
 		config?: { agentDir?: string; executionMode?: string };

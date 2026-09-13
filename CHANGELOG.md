@@ -8,6 +8,8 @@ All notable changes to this extension are recorded here. The format follows
 
 ## [Unreleased]
 
+- Show active `bash()` processes and durable background tasks in a shared Running tasks strip above the composer.
+
 - Replace the broken terminal `prime-agent login` invocation with provider sign-in inside VS Code. Reuse the installed Prime Agent SDK for OAuth and API-key storage, discover providers from its registry, and refresh the current session's model list after saving credentials. Browser authorization still opens externally; MCP and special setup flows are not reproduced.
 
 ## [0.3.3]

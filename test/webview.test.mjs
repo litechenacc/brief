@@ -65,6 +65,16 @@ check("cached selection immediately paints and queues the host operation", early
 // while the composer accepts a draft before the first status arrives.
 const splash = document.querySelector(".boot-splash");
 check("boot does not block the chat", !splash && !document.querySelector("textarea")?.disabled && document.querySelector(".live-label")?.textContent === "connecting");
+hostMessage({ type: "runningTasks", tasks: [
+	{ id: "bash:1", kind: "bash", label: "npm test", startedAt: Date.now() - 5_000, pid: 123 },
+	{ id: "bg:1", kind: "background", label: "synthesis", startedAt: Date.now() - 65_000 },
+] });
+const runningTasksStrip = document.querySelector(".running-tasks-strip");
+check("running tasks strip opens for newly detected work", runningTasksStrip?.classList.contains("visible") && runningTasksStrip.querySelectorAll(".running-task-row").length === 2);
+check("bash and background tasks share the strip", [...runningTasksStrip.querySelectorAll(".running-task-kind")].map(node => node.textContent).join("|") === "bash|background task");
+check("running task elapsed time paints", [...runningTasksStrip.querySelectorAll(".running-task-time")].map(node => node.textContent).join("|") === "5s|1m05s");
+hostMessage({ type: "runningTasks", tasks: [] });
+check("running tasks strip disappears when work ends", !runningTasksStrip.classList.contains("visible"));
 const startupInput = document.querySelector("textarea");
 const startupSend = document.querySelector(".send-btn:not(.stop)");
 check("startup send is disabled with a static unavailable border", startupSend.disabled && startupSend.classList.contains("unavailable"));

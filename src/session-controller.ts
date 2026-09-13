@@ -61,6 +61,9 @@ import { deleteSession, isSessionActive, renameSessionOffline } from "./session-
 import { ComposerAttachments } from "./composer-attachments.js";
 import type { ComposerAttachment } from "./protocol.js";
 import { RpcClient } from "./rpc-client.js";
+import { readRunningTasks } from "./background-tasks.js";
+import { BashProcessTracker } from "./bash-processes.js";
+import type { OwnerLookup } from "./daemon-owner.js";
 
 const execFileAsync = promisify(execFile);
 const MODEL_CACHE_KEY = "brief.availableModels";
@@ -259,6 +262,10 @@ export class SessionController implements vscode.Disposable {
 	childrenContext = 0;
 	/** This panel's session target; editor panel persistence owns reload recovery. */
 	rememberedSession: { sessionId: string; sessionFile: string } | null = null;
+	runningTasksTimer: NodeJS.Timeout | null = null;
+	runningTasksRefreshing = false;
+	lastRunningTasksPayload = "";
+	readonly bashProcesses = new BashProcessTracker();
 
 	constructor(
 		readonly context: vscode.ExtensionContext,
@@ -348,7 +355,14 @@ export class SessionController implements vscode.Disposable {
 		// webview is destroyed on every hide, so without this the operator's next
 		// visit to history starts from an empty list and flashes "Loading…".
 		if (this.lastHistory) sink.post({ type: "history", sessions: this.lastHistory });
-		return new vscode.Disposable(() => this.sinks.delete(sink));
+		this.scheduleRunningTasks();
+		return new vscode.Disposable(() => {
+			this.sinks.delete(sink);
+			if (this.sinks.size === 0 && this.runningTasksTimer) {
+				clearTimeout(this.runningTasksTimer);
+				this.runningTasksTimer = null;
+			}
+		});
 	}
 
 	broadcast(message: HostToWebview): void {
@@ -580,6 +594,7 @@ export class SessionController implements vscode.Disposable {
 	}
 
 	dispose(): void {
+		if (this.runningTasksTimer) clearTimeout(this.runningTasksTimer);
 		if (this.disposed) return;
 		this.disposed = true;
 		this.historyPeers.delete(this);
@@ -610,7 +625,49 @@ export class SessionController implements vscode.Disposable {
 	// Event routing
 	// ------------------------------------------------------------------
 
+	private runningTaskLookup(): OwnerLookup | null {
+		const sessionFile = this.viewedSessionPath();
+		const activeSessionId = this.attached?.activeSessionId ?? this.observedSession?.activeSessionId;
+		if (!sessionFile && !activeSessionId) return null;
+		return { ...(sessionFile ? { sessionFile } : {}), ...(activeSessionId ? { activeSessionId } : {}) };
+	}
+
+	private scheduleRunningTasks(delay = 0): void {
+		if (this.disposed || this.sinks.size === 0) return;
+		if (this.runningTasksTimer) clearTimeout(this.runningTasksTimer);
+		this.runningTasksTimer = setTimeout(() => {
+			this.runningTasksTimer = null;
+			void this.refreshRunningTasks();
+		}, delay);
+	}
+
+	async refreshRunningTasks(): Promise<void> {
+		if (this.disposed || this.runningTasksRefreshing || this.sinks.size === 0) return;
+		const epoch = this.viewEpoch;
+		const lookup = this.runningTaskLookup();
+		this.runningTasksRefreshing = true;
+		let count = 0;
+		try {
+			const background = await readRunningTasks(lookup?.sessionFile);
+			const bash = lookup ? await this.bashProcesses.refresh(lookup, new Set(background.flatMap(task => task.pid === undefined ? [] : [task.pid]))) : [];
+			if (this.disposed || epoch !== this.viewEpoch || this.sinks.size === 0) return;
+			const tasks = [...background, ...bash].sort((a, b) => a.startedAt - b.startedAt);
+			count = tasks.length;
+			const payload = JSON.stringify(tasks);
+			if (payload !== this.lastRunningTasksPayload) {
+				this.lastRunningTasksPayload = payload;
+				this.broadcast({ type: "runningTasks", tasks });
+			}
+		} catch (error) {
+			this.debugLog.append(`running-tasks: refresh failed: ${error instanceof Error ? error.message : String(error)}`);
+		} finally {
+			this.runningTasksRefreshing = false;
+			if (!this.disposed && epoch === this.viewEpoch && this.sinks.size > 0) this.scheduleRunningTasks(count > 0 || this.effectiveStreaming() ? 1_000 : 5_000);
+		}
+	}
+
 	onAgentEvent(event: AgentEvent): void {
+		this.scheduleRunningTasks();
 		// Subagent strip: keep counts honest mid-run. scheduleChildrenRefresh
 		// coalesces these — a daemon `list all` re-reads every session file on
 		// disk, so one per tool call is a real cost on a long turn.
@@ -815,6 +872,9 @@ export class SessionController implements vscode.Disposable {
 		this.resetChildrenBaseline();
 		this.resetViewedSessionState();
 		this.clearRunFlags();
+		this.bashProcesses.reset();
+		this.lastRunningTasksPayload = "[]";
+		this.broadcast({ type: "runningTasks", tasks: [] });
 		this.broadcast({ type: "sessionChildren", children: [] });
 		this.broadcast({
 			type: "snapshot",
@@ -844,6 +904,10 @@ export class SessionController implements vscode.Disposable {
 
 	beginNavigation(): number {
 		const epoch = ++this.viewEpoch;
+		this.bashProcesses.reset();
+		this.lastRunningTasksPayload = "[]";
+		this.broadcast({ type: "runningTasks", tasks: [] });
+		this.scheduleRunningTasks();
 		// A socket-drop reconnect belongs to the view that dropped. Once the user
 		// chooses another view, it must never resurrect the old one underneath it.
 		this.attachAttempt = null;
@@ -934,6 +998,9 @@ export class SessionController implements vscode.Disposable {
 		this.state = null;
 		this.rentedState = null;
 		this.clearRunFlags();
+		this.bashProcesses.reset();
+		this.lastRunningTasksPayload = "[]";
+		this.broadcast({ type: "runningTasks", tasks: [] });
 		this.broadcast({ type: "sessionChildren", children: [] });
 		this.broadcast({
 			type: "snapshot",

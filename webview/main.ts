@@ -7,6 +7,7 @@ import { Composer } from "./composer.js";
 import { brandMark, el, icon } from "./dom.js";
 import { HistoryView } from "./history.js";
 import { SubagentsStrip } from "./subagents.js";
+import { RunningTasksStrip } from "./running-tasks.js";
 import { Transcript } from "./transcript.js";
 import type {
 	ChatReadReceipt,
@@ -261,6 +262,8 @@ const subagents = new SubagentsStrip({
 	},
 });
 const subagentsStrip = subagents.root;
+const runningTasks = new RunningTasksStrip();
+const runningTasksStrip = runningTasks.root;
 
 // Install prompt banner: one persistent, dismissible card when prime-agent can't run.
 const installBanner = el("div", "install-banner");
@@ -315,7 +318,7 @@ function renderInstallBanner(url: string, reason: string): void {
 	installBanner.appendChild(card);
 	installBanner.classList.add("visible");
 }
-app.append(installBanner, observeBanner, noticesDock, chatView, historyView.root, subagentsStrip, composer.root);
+app.append(installBanner, observeBanner, noticesDock, chatView, historyView.root, runningTasksStrip, subagentsStrip, composer.root);
 historyView.root.style.display = "none";
 
 function showView(view: "chat" | "history"): void {
@@ -327,6 +330,7 @@ function showView(view: "chat" | "history"): void {
 	// on content, so without this they hang over the history list with no
 	// composer under them. "" hands display back to their own .visible class.
 	subagentsStrip.style.display = view === "chat" ? "" : "none";
+	runningTasksStrip.style.display = view === "chat" ? "" : "none";
 	if (view === "history") historyView.showLoading();
 	else focusRenderedChat();
 }
@@ -704,6 +708,9 @@ function dispatchHostMessage(message: HostToWebview): void {
 			// The host sends the agent default alongside the override; reading it off
 			// the last status instead lost it entirely before the first snapshot.
 			composer.setCompactThreshold(message.percent, message.defaultPercent ?? currentStatus?.compactDefaultPercent ?? null);
+			break;
+		case "runningTasks":
+			runningTasks.apply(message.tasks);
 			break;
 		case "sessionChildren":
 			subagents.applyRoster(message);

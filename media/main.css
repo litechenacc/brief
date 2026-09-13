@@ -3081,3 +3081,67 @@ pre.term {
 .attachment-card .chip-remove { flex-shrink: 0; }
 .attachment-open img { width: 32px; height: 32px; object-fit: cover; border-radius: 3px; }
 .attachment-open:focus-visible, .attachment-card .chip-remove:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
+
+/* ---------- running tasks ---------- */
+.running-tasks-strip {
+	display: none;
+	flex-direction: column;
+	font-size: 10.5px;
+	border-top: 1px solid var(--pa-border-faint);
+	background: color-mix(in srgb, transparent 60%, var(--pa-raised) 40%);
+	max-height: 180px;
+	overflow-y: auto;
+}
+
+.running-tasks-strip.visible { display: flex; }
+
+.running-tasks-header {
+	width: 100%;
+	padding: 4px 10px;
+	text-align: left;
+	color: var(--pa-dim);
+	font-size: 10px;
+}
+
+.running-tasks-header:hover { color: var(--pa-accent); }
+
+.running-task-row {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	padding: 3px 12px 5px;
+	font-size: 10.5px;
+	min-width: 0;
+}
+
+.running-task-dot {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	flex: none;
+	background: var(--pa-accent);
+	box-shadow: 0 0 4px var(--pa-accent-glow);
+	animation: session-pulse 1.4s ease-in-out infinite alternate;
+}
+
+.running-task-kind,
+.running-task-time {
+	color: var(--pa-dim);
+	white-space: nowrap;
+}
+
+.running-task-label {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	flex: 1;
+}
+
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .running-task-dot {
+	box-shadow: none;
+	outline: 1px solid var(--vscode-contrastBorder, currentColor);
+}
+
+body.vscode-reduce-motion .running-task-dot {
+	animation: none;
+}
