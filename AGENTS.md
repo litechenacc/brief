@@ -1,1 +1,1 @@
-目前repo 與prd 無關，那是下一階段工作; 目前專注在既有code的功能
+CHANGELOG.md 永遠用英文寫

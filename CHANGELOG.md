@@ -8,11 +8,11 @@ All notable changes to this extension are recorded here. The format follows
 
 ## [Unreleased]
 
-- 工作中指示器改用目前模型供應商的圖示，並讓圖示、狀態文字與計時共用掃光動畫；改善淺色主題的辨識度，並遵循 VS Code 的減少動態效果設定與高對比模式。
-- 對話大綱改為貼齊右側的半透明抽屜，縮小收合時的列高，減少畫面占用。
-- 修正短對話或捲動邊界附近的大綱選取狀態：點選後維持所選回合，送出新訊息時則選取最新回合。
-- 使用者訊息的複製與分支按鈕改為局部模糊背景的浮層，不再預留右側空間或影響文字換行，並保留滑鼠與鍵盤操作。
-- 發布流程不再自動執行測試或 typecheck，也不再要求 Playwright 或執行中的 Prime Agent；仍會建置並驗證 VSIX 套件，開發檢查需於發布前另行執行。
+- Use the current model provider's icon for the working indicator, with a shared shimmer animation across the icon, status text, and timer. Improve visibility in light themes and respect VS Code's reduced-motion setting and high-contrast mode.
+- Move the conversation outline into a translucent drawer aligned with the right edge, with shorter collapsed rows to reduce its footprint.
+- Fix outline selection in short conversations and near scroll boundaries: keep the selected turn after a click and select the latest turn when a new message is sent.
+- Show user-message copy and fork buttons as overlays with a locally blurred background, without reserving space on the right or changing text wrapping. Preserve mouse and keyboard access.
+- Stop running tests and typechecks automatically during releases, and remove the requirement for Playwright or a running Prime Agent. Releases still build and validate the VSIX package; development checks must be run separately before publishing.
 
 ## [0.3.2]
 
@@ -41,7 +41,7 @@ The entries below predate Brief's release documentation and retain their origina
 - **Split the host and chat webview by responsibility.** Session history, daemon attach, compact, workspace helpers, webview message parsing, and the subagent strip each live in their own file. Chat, RPC, daemon attach, history, and subagents stay.
 - **Trim leftover Processes/Changes types and overlapping host/webview tests.** Chat, RPC, daemon attach, history, and subagents stay. Export is Markdown only.
 - **Drop the Processes panel, Changes panel, and the background-jobs agent extension.** Chat, RPC, daemon attach, history, and subagents stay. Export is Markdown only. Tests that only existed to pin those extra lanes are gone.
-- **Chinese and other IME composition is visible in the composer, and Enter no longer sends mid-composition.** Mentions are drawn on a mirror behind a transparent textarea, which also hid the browser's composing underline — so a candidate like `輸入` looked committed. The composing range is now underlined on that mirror, IME keys are left to the IME, and the Enter that confirms a candidate is not treated as Send.
+- **Chinese and other IME composition is visible in the composer, and Enter no longer sends mid-composition.** Mentions are drawn on a mirror behind a transparent textarea, which also hid the browser's composing underline — so a Chinese input candidate looked committed. The composing range is now underlined on that mirror, IME keys are left to the IME, and the Enter that confirms a candidate is not treated as Send.
 
 - **Chat colors now follow the VS Code Color Theme.** Surfaces, accent, links, diffs, and terminal blocks were a Prime green/neutral palette mixed from the sidebar, so a colored or High Contrast theme looked like a second app. `--pa-*` is now an alias of `--vscode-*` tokens, with High Contrast using contrast borders instead of translucent mixes.
 
