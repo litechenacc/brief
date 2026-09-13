@@ -52,6 +52,9 @@ import type {
 	RpcSlashCommand,
 	SessionChild,
 	StatusSnapshot,
+	StatisticsKind,
+	StatisticsSnapshot,
+	RpcSessionStats,
 } from "./protocol.js";
 import { DebugFileLog } from "./debug-log.js";
 import { buildMarkdownExport } from "./markdown-export.js";
@@ -74,10 +77,12 @@ const MODEL_CACHE_KEY = "brief.availableModels";
  * folders, which is exactly what one shared cap did.
  */
 export interface SessionController {
+ forkFile(sessionFile: string, entryId?: string, revision?: string): Promise<{ revision: string; messages: Array<{ entryId: string; visible: boolean }>; sessionFile: string; sessionId: string; text: string }>;
+
 	getActiveSelection(): { path: string; startLine: number; endLine: number; text: string; languageId: string } | null;
 	getActiveFilePath(): string | null;
 	searchFiles(query: string, requestId: number, reply?: (message: import("./protocol.js").HostToWebview) => void): Promise<void>;
-	searchDirs(query: string, max: number): Promise<string[]>;
+	searchDirs(query: string, max: number, token?: import("vscode").CancellationToken): Promise<string[]>;
 	pickImages(requestId: number, reply?: (message: import("./protocol.js").HostToWebview) => void): Promise<void>;
 	openFile(relPath: string, startLine?: number, endLine?: number): Promise<void>;
 	resolveWorkspaceUri(relPath: string): Promise<import("vscode").Uri | null>;
@@ -411,6 +416,7 @@ export class SessionController implements vscode.Disposable {
 			.catch((err) => {
 				this.output.appendLine(`[prime-agent] failed to start: ${String(err)}`);
 				this.broadcast({ type: "notice", level: "error", text: `Failed to start Brief: ${String(err)}` });
+				throw err;
 			})
 			.finally(() => {
 				this.startingPromise = null;
@@ -521,9 +527,15 @@ export class SessionController implements vscode.Disposable {
 		}
 		const epoch = this.viewEpoch;
 		const generation = this.startGeneration;
+		const startupId = randomUUID();
+		const started = Date.now();
+		const log = (phase: string) => this.output.appendLine(`[startup] ${new Date().toISOString()} id=${startupId} phase=${phase} elapsedMs=${Date.now() - started}`);
+		log("connect");
 		const sidecar = await this.connectDaemon();
+		log("connected");
 		if (this.disposed || this.attached || epoch !== this.viewEpoch || generation !== this.startGeneration) return;
 		const target = await sidecar.createResident({ cwd: this.workspaceRoot });
+		log("created");
 		if (this.disposed || epoch !== this.viewEpoch || generation !== this.startGeneration) return;
 		const activeSessionId = target.activeSessionId;
 		if (!activeSessionId) throw new Error("daemon returned no activeSessionId");
@@ -531,6 +543,7 @@ export class SessionController implements vscode.Disposable {
 			throw new Error(this.lastDaemonAttachError ?? "could not attach to daemon session");
 		}
 		this.reachable = true;
+		log("attached");
 	}
 
 	async restart(): Promise<void> {
@@ -1249,6 +1262,43 @@ export class SessionController implements vscode.Disposable {
 		}
 	}
 
+	/** Prepare an independent blank worker without navigating or stopping the source. */
+	async initializeBlankFrom(source: SessionController): Promise<void> {
+		if (source.guardObservedReadOnly("starting a new session")) throw new Error("The source session is read-only or restoring.");
+		const epoch = source.viewEpoch;
+		const attached = source.attached;
+		const state = attached ? source.rentedState : source.state;
+		const model = state?.model;
+		const thinkingLevel = state?.thinkingLevel;
+		const sidecar = await this.connectDaemon();
+		let cwd = source.workspaceRoot;
+		if (attached) {
+			const sessions = await source.listSessions(sidecar);
+			const session = sessions.find((entry) => entry.activeSessionId === attached.activeSessionId);
+			if (!session?.cwd) throw new Error("Could not determine the source session working directory.");
+			cwd = session.cwd;
+		}
+		if (source.disposed || source.viewEpoch !== epoch || source.attached !== attached) throw new Error("The source session changed.");
+		if (!cwd) throw new Error("Open a workspace folder before starting Brief.");
+		const created = await sidecar.createResident({ cwd,
+			...(model ? { provider: model.provider, model: model.id } : {}),
+			...(thinkingLevel ? { thinking: thinkingLevel } : {}),
+		});
+		const activeSessionId = created.activeSessionId!;
+		try {
+			if (this.disposed || source.disposed) throw new Error("Chat is closed.");
+			if (!(await this.attachViaDaemon(activeSessionId, created.sessionFile ?? "", this.viewEpoch))) {
+				throw new Error(this.lastDaemonAttachError ?? "Could not attach to the new session.");
+			}
+		} catch (error) {
+			// Only the new, unused worker is stopped. The source is never detached.
+			await sidecar.request({ type: "kill", activeSessionId }, 30_000).catch((cleanupError) => {
+				this.output.appendLine(`Could not stop unused new session ${activeSessionId}: ${String(cleanupError)}`);
+			});
+			throw error;
+		}
+	}
+
 	async newSession(): Promise<void> {
 		if (this.creatingSessionEpoch === this.viewEpoch) return;
 		if (this.guardObservedReadOnly("starting a new session")) return;
@@ -1338,6 +1388,18 @@ export class SessionController implements vscode.Disposable {
 		return this.sessionChromeLabel(named) || undefined;
 	}
 
+	async promptRenameSession(isStillSelected: () => boolean): Promise<void> {
+		if (this.guardObservedReadOnly("renaming a session")) return;
+		const epoch = this.viewEpoch;
+		const attached = this.attached;
+		const name = await vscode.window.showInputBox({
+			title: "Rename session", value: this.currentSessionName() ?? "",
+			prompt: "Name this session", placeHolder: "Session name", ignoreFocusOut: true,
+		});
+		if (name === undefined || this.disposed || epoch !== this.viewEpoch || attached !== this.attached || !isStillSelected()) return;
+		await this.renameSession(name);
+	}
+
 	async renameSession(name: string): Promise<void> {
 		if (this.guardObservedReadOnly("renaming a session")) return;
 		const trimmed = name.trim();
@@ -1357,6 +1419,8 @@ export class SessionController implements vscode.Disposable {
 				if (this.rentedState) this.rentedState.sessionName = trimmed;
 				this.pushStatus();
 				this.broadcast({ type: "notice", level: "info", text: `Session renamed to "${trimmed}".` });
+				this.savedCatalog = null;
+				void this.listHistory();
 			} catch (err) {
 				if (this.isCurrentAttachment(attached)) this.broadcast({ type: "notice", level: "error", text: `Rename failed: ${err instanceof Error ? err.message : String(err)}` });
 			}
@@ -1373,6 +1437,8 @@ export class SessionController implements vscode.Disposable {
 				if (this.state) this.state.sessionName = trimmed;
 				this.pushStatusLight();
 				this.broadcast({ type: "notice", level: "info", text: `Session renamed to "${trimmed}".` });
+				this.savedCatalog = null;
+				void this.listHistory();
 			} else {
 				this.broadcast({ type: "notice", level: "error", text: `Rename failed: ${response.error ?? "unknown error"}` });
 			}
@@ -1435,64 +1501,55 @@ export class SessionController implements vscode.Disposable {
 		}
 	}
 
-	async forkFromUser(ordinal: number): Promise<void> {
+	async forkFromUser(ordinal?: number, isStillSelected: () => boolean = () => true): Promise<{ sessionFile: string; sessionId: string; text: string } | undefined> {
 		if (this.guardObservedReadOnly("forking")) return;
-		// Fork what is on screen. Against the RPC subprocess this would fork our
-		// idle background session and still report "Forked the session".
-		if (this.effectiveStreaming()) {
-			this.broadcast({ type: "notice", level: "error", text: "Wait for the current run to finish before forking." });
-			return;
-		}
-		const attached = this.attached;
-		if (attached) {
-			const id = attached.activeSessionId;
-			try {
-				const sidecar = await this.ensureSidecar();
-				if (!this.isCurrentAttachment(attached)) return;
-				const data = await sidecar.request<{ messages?: Array<{ entryId: string; text: string }> }>(
-					{ type: "get_user_messages_for_forking", activeSessionId: id },
-					30_000,
-				);
-				if (!this.isCurrentAttachment(attached)) return;
-				const target = (data.messages ?? [])[ordinal];
-				if (!target) {
-					this.broadcast({ type: "notice", level: "error", text: `No forkable message at position ${ordinal + 1} (${(data.messages ?? []).length} available).` });
-					return;
-				}
-				await sidecar.request({ type: "fork", activeSessionId: id, entryId: target.entryId }, 60_000);
-				if (!this.isCurrentAttachment(attached)) return;
-				this.broadcast({ type: "notice", level: "info", text: "Forked the session from that message." });
-				await this.refreshSnapshot();
-				void this.listHistory();
-			} catch (err) {
-				if (this.isCurrentAttachment(attached)) this.broadcast({ type: "notice", level: "error", text: `Fork failed: ${err instanceof Error ? err.message : String(err)}` });
-			}
-			return;
-		}
 		const epoch = this.viewEpoch;
-		await this.ensureStarted();
+		const attached = this.attached;
 		const client = this.client;
-		if (!client || !this.isCurrentRpcView(client, epoch)) return;
-		const list = await client.request({ type: "get_fork_messages" }, 30_000);
-		if (!this.isCurrentRpcView(client, epoch)) return;
-		if (!list.success) {
-			this.broadcast({ type: "notice", level: "error", text: `Fork failed: ${list.error ?? "unknown error"}` });
+		const current = () => isStillSelected() && !this.disposed && epoch === this.viewEpoch && this.attached === attached
+			&& !this.observingId && !this.observationRestoring && (attached ? this.isCurrentAttachment(attached) : client ? this.isCurrentRpcView(client, epoch) : this.client === null && !this.isReattaching());
+		const idle = () => !this.effectiveStreaming() && !this.compacting && !this.retrying;
+		if (!idle()) { this.showErrorNotice("Wait for the current run to finish before forking."); return; }
+		try {
+			const sessionFile = this.viewedSessionPath();
+			if (!sessionFile || (!attached && !client?.running)) throw new Error("The current session is unavailable.");
+			let messages: Array<{ entryId: string; text: string }>;
+			if (attached) {
+				const sidecar = await this.ensureSidecar();
+				if (!current()) return;
+				const result = await sidecar.request<{ messages?: Array<{ entryId: string; text: string }> }>({ type: "get_user_messages_for_forking", activeSessionId: attached.activeSessionId }, 30_000);
+				messages = result.messages ?? [];
+			} else {
+				const result = await client!.request({ type: "get_fork_messages" }, 30_000);
+				if (!result.success) throw new Error(result.error ?? "Could not read forkable messages.");
+				messages = (result.data as { messages?: Array<{ entryId: string; text: string }> })?.messages ?? [];
+			}
+			if (!current()) return;
+			if (!messages.length) { this.broadcast({ type: "notice", level: "info", text: "No forkable user messages in this session." }); return; }
+			const inspected = await this.forkFile(sessionFile);
+			if (!current()) return;
+			const byId = new Map(messages.map(message => [message.entryId, message]));
+			const choices = inspected.messages.flatMap(entry => {
+				const message = byId.get(entry.entryId);
+				return message ? [message] : [];
+			});
+			if (!choices.length) { this.broadcast({ type: "notice", level: "info", text: "No forkable user messages on the current branch." }); return; }
+			let selected: { entryId: string; text: string } | undefined;
+			if (ordinal !== undefined) {
+				const entry = inspected.messages.filter(entry => entry.visible)[ordinal];
+				selected = entry ? byId.get(entry.entryId) : undefined;
+				if (!selected) throw new Error("This message cannot be forked with its attachments intact.");
+			} else {
+				selected = (await vscode.window.showQuickPick(choices.map((message, index) => ({ label: `${index + 1}. ${excerpt(message.text, 0, 35)}`, message })), { title: "Fork session from user message", ignoreFocusOut: true }))?.message;
+			}
+			if (!selected || !current()) return;
+			if (!idle()) throw new Error("Wait for the current run to finish before forking.");
+			const fork = await this.forkFile(sessionFile, selected.entryId, inspected.revision);
+			if (!current() || !idle()) { await fs.unlink(fork.sessionFile); return; }
+			return fork;
+		} catch (error) {
+			if (current()) this.showErrorNotice(`Fork failed: ${error instanceof Error ? error.message : String(error)}`);
 			return;
-		}
-		const messages = (list.data as { messages?: Array<{ entryId: string; text: string }> })?.messages ?? [];
-		const target = messages[ordinal];
-		if (!target) {
-			this.broadcast({ type: "notice", level: "error", text: `No forkable message at position ${ordinal + 1} (${messages.length} available).` });
-			return;
-		}
-		const response = await client.request({ type: "fork", entryId: target.entryId }, 60_000);
-		if (!this.isCurrentRpcView(client, epoch)) return;
-		if (response.success) {
-			this.broadcast({ type: "notice", level: "info", text: "Forked the session from that message." });
-			await this.refreshSnapshot();
-			void this.listHistory();
-		} else {
-			this.broadcast({ type: "notice", level: "error", text: `Fork failed: ${response.error ?? "unknown error"}` });
 		}
 	}
 
@@ -1503,30 +1560,58 @@ export class SessionController implements vscode.Disposable {
 	 */
 	async messagesForExport(): Promise<{ messages: Array<Record<string, unknown>>; state: RpcSessionState | null } | null> {
 		if (this.guardObservedReadOnly("exporting or copying this conversation")) return null;
-		const attached = this.attached;
-		if (attached) {
-			try {
-				const sidecar = await this.ensureSidecar();
-				const messages = await sidecar.getMessages(attached.activeSessionId);
-				if (!this.isCurrentAttachment(attached)) return null;
-				return { messages, state: this.rentedState };
-			} catch (err) {
-				if (this.isCurrentAttachment(attached)) this.broadcast({ type: "notice", level: "error", text: `Could not load the attached session: ${err instanceof Error ? err.message : String(err)}` });
-				return null;
-			}
-		}
 		const epoch = this.viewEpoch;
+		const attached = this.attached;
+		const client = this.client;
+		const current = () => this.isCurrentExportView(epoch, attached, client);
 		try {
-			await this.ensureStarted();
-		} catch {
+			if (this.isReattaching()) throw new Error("The live session is reconnecting. Please wait for it to re-attach.");
+			if (attached) {
+				const sidecar = await this.ensureSidecar();
+				if (!current()) return null;
+				const messages = await sidecar.getMessages(attached.activeSessionId);
+				if (!current()) return null;
+				return { messages, state: this.rentedState };
+			}
+			if (!client?.running) throw new Error("The session is not connected.");
+			const response = await client.request({ type: "get_messages" }, 90_000);
+			if (!current()) return null;
+			if (!response.success) throw new Error(response.error ?? "Could not load messages");
+			const messages = (response.data as { messages?: Array<Record<string, unknown>> })?.messages;
+			if (!Array.isArray(messages)) throw new Error("The runtime returned no message list.");
+			return { messages, state: this.state };
+		} catch (err) {
+			if (!this.disposed && epoch === this.viewEpoch && this.attached === attached && this.client === client) {
+				this.showErrorNotice(`Could not load messages: ${err instanceof Error ? err.message : String(err)}`);
+			}
 			return null;
 		}
+	}
+
+	/** Copy only the latest completed assistant body, not transcript formatting. */
+	async copyLastReply(): Promise<void> {
+		const epoch = this.viewEpoch;
+		const attached = this.attached;
 		const client = this.client;
-		if (!client || !this.isCurrentRpcView(client, epoch)) return null;
-		const messagesRes = await client.request({ type: "get_messages" }, 90_000);
-		if (!this.isCurrentRpcView(client, epoch)) return null;
-		if (!messagesRes.success) return null;
-		return { messages: (messagesRes.data as { messages?: Array<Record<string, unknown>> })?.messages ?? [], state: this.state };
+		const current = () => this.isCurrentExportView(epoch, attached, client);
+		try {
+			const source = await this.messagesForExport();
+			if (!source || !current()) return;
+			// Runtime get_messages contains message_end records; streamingMessage is separate.
+			for (let i = source.messages.length - 1; i >= 0; i -= 1) {
+				const message = source.messages[i];
+				if (message.role !== "assistant" || message.stopReason === "aborted" || message.stopReason === "error") continue;
+				const text = typeof message.content === "string" ? message.content : Array.isArray(message.content)
+					? message.content.filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text).join("\n") : "";
+				if (!text.trim()) continue;
+				await vscode.env.clipboard.writeText(text);
+				if (current()) this.broadcast({ type: "notice", level: "info", text: "Last reply copied as Markdown." });
+				return;
+			}
+			this.broadcast({ type: "notice", level: "info", text: "No completed reply with text to copy." });
+		} catch (err) {
+			if (current()) this.showErrorNotice(`Copy failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
 	}
 
 	/** Copy the whole conversation as Markdown (same summarization as file export). */
@@ -1639,15 +1724,27 @@ export class SessionController implements vscode.Disposable {
 		if (this.guardObservedReadOnly("exporting this conversation")) return;
 		const epoch = this.viewEpoch;
 		const attached = this.attached;
-		const picked = await vscode.window.showQuickPick(
-			[
-				{ label: "Markdown, tool calls summarized", detail: "Compact .md for humans — one line per tool call", mode: "md-tools" },
-				{ label: "Markdown, without tool calls", detail: "Conversation only (.md)", mode: "md-clean" },
-			] as Array<{ label: string; detail: string; mode: string }>,
-			{ title: "Export chat" },
-		);
-		if (!picked || this.disposed || epoch !== this.viewEpoch || this.attached !== attached || this.observingId || this.observationRestoring) return;
-		await this.exportMarkdown(picked.mode === "md-tools");
+		const client = this.client;
+		try {
+			const picked = await vscode.window.showQuickPick(
+				[
+					{ label: "Markdown, tool calls summarized", detail: "Compact .md for humans — one line per tool call", mode: "md-tools" },
+					{ label: "Markdown, without tool calls", detail: "Conversation only (.md)", mode: "md-clean" },
+				],
+				{ title: "Export chat" },
+			);
+			if (!picked || !this.isCurrentExportView(epoch, attached, client)) return;
+			await this.exportMarkdown(picked.mode === "md-tools");
+		} catch (err) {
+			if (this.isCurrentExportView(epoch, attached, client)) this.showErrorNotice(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
+
+	/** Export/copy may read a running session, but never a hidden or replacement view. */
+	private isCurrentExportView(epoch: number, attached: AttachRef | null, client: RpcClient | null): boolean {
+		return !this.disposed && epoch === this.viewEpoch && !this.observingId && !this.observationRestoring &&
+			!this.isCreatingSession() && !this.isReattaching() && this.attached === attached &&
+			(attached ? this.isCurrentAttachment(attached) : this.client === client);
 	}
 
 	/** Export the current transcript as Markdown, generated client-side. */
@@ -1655,71 +1752,126 @@ export class SessionController implements vscode.Disposable {
 		if (this.guardObservedReadOnly("exporting this conversation")) return;
 		const epoch = this.viewEpoch;
 		const attached = this.attached;
-		const source = await this.messagesForExport();
-		if (!source) {
-			this.broadcast({ type: "notice", level: "error", text: "Could not load messages for export" });
-			return;
+		const client = this.client;
+		const current = () => this.isCurrentExportView(epoch, attached, client);
+		try {
+			const source = await this.messagesForExport();
+			if (!source || !current()) return;
+			// Freeze the document before opening any save/overwrite dialogs.
+			const md = buildMarkdownExport(source.messages, includeTools, source.state);
+			const target = vscode.Uri.file(path.join(this.workspaceRoot, `brief-session-${Date.now()}.md`));
+			const picked = await vscode.window.showSaveDialog({ defaultUri: target, filters: { Markdown: ["md"] } });
+			if (!picked || !current()) return;
+			let exists = false;
+			try {
+				await vscode.workspace.fs.stat(picked);
+				exists = true;
+			} catch (err) {
+				if ((err as { code?: string }).code !== "FileNotFound") throw err;
+			}
+			if (!current()) return;
+			if (exists) {
+				const replace = await vscode.window.showWarningMessage(`Replace ${picked.fsPath}?`, { modal: true }, "Replace");
+				if (replace !== "Replace" || !current()) return;
+			}
+			await vscode.workspace.fs.writeFile(picked, Buffer.from(md, "utf8"));
+			if (current()) void vscode.window.showInformationMessage(`Chat exported to ${picked.fsPath}`);
+		} catch (err) {
+			if (current()) this.showErrorNotice(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
 		}
-		const md = buildMarkdownExport(source.messages, includeTools, source.state);
-		const target = vscode.Uri.file(path.join(this.workspaceRoot, `brief-session-${Date.now()}.md`));
-		const picked = await vscode.window.showSaveDialog({ defaultUri: target, filters: { Markdown: ["md"] } });
-		if (!picked || this.disposed || epoch !== this.viewEpoch || this.attached !== attached || this.observingId || this.observationRestoring) return;
-		await vscode.workspace.fs.writeFile(picked, Buffer.from(md, "utf8"));
-		void vscode.window.showInformationMessage(`Chat exported to ${picked.fsPath}`);
+	}
+
+	private guardSettingsChange(action: string): boolean {
+		const state = this.attached ? this.rentedState : this.state;
+		if (this.guardObservedReadOnly(action)) {
+			this.pushStatusLight();
+			return true;
+		}
+		if (this.effectiveStreaming() || this.compacting || this.retrying || state?.isCompacting) {
+			this.broadcast({ type: "notice", level: "warning", text: `Wait for the current run to finish before ${action}.` });
+			this.pushStatusLight();
+			return true;
+		}
+		return false;
 	}
 
 	async setModel(provider: string, modelId: string): Promise<void> {
-		if (this.guardObservedReadOnly("changing the model")) return;
-		// Attached sessions are owned by the daemon, not by our RPC subprocess.
-		// Sending set_model to the subprocess would retarget a session the
-		// operator isn't looking at, while the pill claims the switch landed.
+		if (this.guardSettingsChange("changing the model")) return;
 		const attached = this.attached;
 		if (attached) {
 			try {
 				const sidecar = await this.ensureSidecar();
-				if (!this.isCurrentAttachment(attached)) return;
+				if (!this.isCurrentAttachment(attached) || this.guardSettingsChange("changing the model")) return;
 				await sidecar.request({ type: "set_model", activeSessionId: attached.activeSessionId, provider, modelId }, 30_000);
 				if (!this.isCurrentAttachment(attached)) return;
-				await this.refreshAttachedState();
+				const state = await sidecar.getState(attached.activeSessionId);
+				if (this.isCurrentAttachment(attached)) this.rentedState = state as RpcSessionState;
 			} catch (err) {
 				if (this.isCurrentAttachment(attached)) this.broadcast({ type: "notice", level: "error", text: `set_model failed: ${err instanceof Error ? err.message : String(err)}` });
+			} finally {
+				if (this.isCurrentAttachment(attached)) this.pushStatusLight();
 			}
 			return;
 		}
 		const client = this.client;
 		const epoch = this.viewEpoch;
-		if (!client?.running) return;
-		const response = await client.request({ type: "set_model", provider, modelId });
-		if (!this.isCurrentRpcView(client, epoch)) return;
-		if (response.success) {
-			await this.refreshStateAndStats();
-		} else {
-			this.broadcast({ type: "notice", level: "error", text: `set_model failed: ${response.error ?? "unknown error"}` });
+		if (!client?.running) {
+			this.broadcast({ type: "notice", level: "error", text: "The session is not connected." });
+			this.pushStatusLight();
+			return;
+		}
+		try {
+			const response = await client.request({ type: "set_model", provider, modelId });
+			if (!this.isCurrentRpcView(client, epoch)) return;
+			if (!response.success) throw new Error(response.error ?? "unknown error");
+			const state = await client.request({ type: "get_state" }, 30_000);
+			if (!this.isCurrentRpcView(client, epoch)) return;
+			if (!state.success) throw new Error(state.error ?? "Could not refresh session settings");
+			this.state = state.data as RpcSessionState;
+		} catch (err) {
+			if (this.isCurrentRpcView(client, epoch)) this.broadcast({ type: "notice", level: "error", text: `set_model failed: ${err instanceof Error ? err.message : String(err)}` });
+		} finally {
+			if (this.isCurrentRpcView(client, epoch)) this.pushStatusLight();
 		}
 	}
 
 	async setThinkingLevel(level: string): Promise<void> {
-		if (this.guardObservedReadOnly("changing the thinking level")) return;
+		if (this.guardSettingsChange("changing the thinking level")) return;
 		const attached = this.attached;
 		if (attached) {
 			try {
 				const sidecar = await this.ensureSidecar();
-				if (!this.isCurrentAttachment(attached)) return;
+				if (!this.isCurrentAttachment(attached) || this.guardSettingsChange("changing the thinking level")) return;
 				await sidecar.request({ type: "set_thinking_level", activeSessionId: attached.activeSessionId, level }, 30_000);
 				if (!this.isCurrentAttachment(attached)) return;
-				await this.refreshAttachedState();
+				const state = await sidecar.getState(attached.activeSessionId);
+				if (this.isCurrentAttachment(attached)) this.rentedState = state as RpcSessionState;
 			} catch (err) {
 				if (this.isCurrentAttachment(attached)) this.broadcast({ type: "notice", level: "error", text: `set_thinking_level failed: ${err instanceof Error ? err.message : String(err)}` });
+			} finally {
+				if (this.isCurrentAttachment(attached)) this.pushStatusLight();
 			}
 			return;
 		}
 		const client = this.client;
 		const epoch = this.viewEpoch;
-		if (!client?.running) return;
-		const response = await client.request({ type: "set_thinking_level", level });
-		if (!this.isCurrentRpcView(client, epoch)) return;
-		if (response.success) {
-			await this.refreshStateAndStats();
+		if (!client?.running) {
+			this.broadcast({ type: "notice", level: "error", text: "The session is not connected." });
+			this.pushStatusLight();
+			return;
+		}
+		try {
+			const response = await client.request({ type: "set_thinking_level", level });
+			if (!this.isCurrentRpcView(client, epoch)) return;
+			if (!response.success) throw new Error(response.error ?? "unknown error");
+			const state = await client.request({ type: "get_state" }, 30_000);
+			if (!this.isCurrentRpcView(client, epoch)) return;
+			if (!state.success) throw new Error(state.error ?? "Could not refresh session settings");
+			this.state = state.data as RpcSessionState;
+		} catch (err) {
+			if (this.isCurrentRpcView(client, epoch)) this.broadcast({ type: "notice", level: "error", text: `set_thinking_level failed: ${err instanceof Error ? err.message : String(err)}` });
+		} finally {
+			if (this.isCurrentRpcView(client, epoch)) this.pushStatusLight();
 		}
 	}
 
@@ -1733,37 +1885,41 @@ export class SessionController implements vscode.Disposable {
 		await this.context.globalState.update(MODEL_CACHE_KEY, models);
 	}
 
-	async listModels(): Promise<void> {
-		if (this.guardObservedReadOnly("listing models")) return;
+	async listModels({ startAgent = true }: { startAgent?: boolean } = {}): Promise<boolean> {
+		if (this.guardObservedReadOnly("listing models")) return false;
 		const attached = this.attached;
 		if (attached) {
 			try {
 				const sidecar = await this.ensureSidecar();
-				if (!this.isCurrentAttachment(attached)) return;
+				if (!this.isCurrentAttachment(attached)) return false;
 				const data = await sidecar.request<{ models?: RpcModel[] }>(
 					{ type: "get_available_models", activeSessionId: attached.activeSessionId },
 					60_000,
 				);
-				if (this.isCurrentAttachment(attached)) await this.publishModels(data.models ?? []);
-			} catch (err) {
-				if (this.isCurrentAttachment(attached)) {
-					this.broadcast({ type: "notice", level: "error", text: `Could not list attached-session models: ${err instanceof Error ? err.message : String(err)}` });
+				if (!this.isCurrentAttachment(attached)) return false;
+				await this.publishModels(data.models ?? []);
+				return true;
+			} catch {
+				if (startAgent && this.isCurrentAttachment(attached)) {
+					this.broadcast({ type: "notice", level: "error", text: "Could not list attached-session models." });
 				}
 			}
-			return;
+			return false;
 		}
 		const epoch = this.viewEpoch;
-		await this.ensureStarted();
+		if (startAgent) await this.ensureStarted();
 		const client = this.client;
-		if (!client || !this.isCurrentRpcView(client, epoch)) return;
+		if (!client?.running || !this.isCurrentRpcView(client, epoch)) return false;
 		const response = await client.request({ type: "get_available_models" }, 60_000);
-		if (!this.isCurrentRpcView(client, epoch)) return;
+		if (!this.isCurrentRpcView(client, epoch)) return false;
 		if (response.success) {
 			// Forwarded verbatim: the payload is the agent's whole Model object, and
 			// the webview needs the fields this cast used to hide (thinkingLevelMap).
 			const data = response.data as { models?: RpcModel[] };
 			await this.publishModels(data.models ?? []);
+			return true;
 		}
+		return false;
 	}
 
 	/**
@@ -2155,6 +2311,84 @@ export class SessionController implements vscode.Disposable {
 			// keep previous state
 		}
 		if (this.isCurrentRpcView(client, epoch)) this.pushStatus();
+	}
+
+	/** Manual, read-only query. Never use the status refresh helpers: they can compact. */
+	async queryStatistics(kind: StatisticsKind, requestId: number, reply: (message: HostToWebview) => void): Promise<void> {
+		const epoch = this.viewEpoch;
+		const client = this.client;
+		const sidecar = this.sidecar;
+		const attached = this.attached;
+		const observed = this.observingId;
+		const current = () => !this.disposed && epoch === this.viewEpoch && this.client === client &&
+			this.sidecar === sidecar && this.attached === attached && this.observingId === observed &&
+			!this.observationRestoring && !this.isCreatingSession() && !this.isReattaching() &&
+			(!attached || this.isCurrentAttachment(attached));
+		if (!current()) {
+			if (!this.disposed) reply({ type: "statistics", kind, requestId, error: "Session is changing. Try again when it is ready." });
+			return;
+		}
+		try {
+			let stats: RpcSessionStats;
+			let state = attached ? this.rentedState : observed ? null : this.state;
+			if (attached || observed) {
+				if (!sidecar?.connected) throw new Error("No available connection for this session.");
+				const target = attached?.activeSessionId ?? observed!;
+				stats = await sidecar.getSessionStats(target);
+				if (!current()) return;
+				// Legacy observation has no cached target state; never read the hidden RPC state.
+				if (observed) state = await sidecar.getState(target) as RpcSessionState;
+			} else {
+				if (!client?.running) throw new Error("No available connection for this session.");
+				const response = await client.request({ type: "get_session_stats" }, 30_000);
+				if (!response.success) throw new Error(response.error || "Runtime rejected the statistics query.");
+				stats = response.data as RpcSessionStats;
+			}
+			if (!current()) return;
+			if (!stats || typeof stats !== "object" || Array.isArray(stats)) throw new Error("Runtime did not provide statistics.");
+			const number = (value: unknown, suffix = "") => typeof value === "number" && Number.isFinite(value) ? `${value}${suffix}` : "未提供";
+			const text = (value: unknown) => typeof value === "string" && value.length > 0 ? value : "未提供";
+			const running = Boolean(state?.isStreaming || state?.isCompacting || (!observed && (this.streaming || this.compacting)));
+			const rows: StatisticsSnapshot["rows"] = [];
+			let scope: string;
+			if (kind === "usage") {
+				scope = "Runtime cumulative usage in the current branch's retained messages; compaction can remove earlier usage. May include child usage attributed by runtime; Brief does not aggregate children. USD estimate, not a final provider bill.";
+				rows.push(
+					{ label: "Input tokens", value: number(stats.tokens?.input) },
+					{ label: "Output tokens", value: number(stats.tokens?.output) },
+					{ label: "Cache read tokens", value: number(stats.tokens?.cacheRead) },
+					{ label: "Cache write tokens", value: number(stats.tokens?.cacheWrite) },
+					{ label: "Total tokens", value: number(stats.tokens?.total) },
+					{ label: "Cost (USD)", value: number(stats.cost) },
+				);
+			} else if (kind === "context") {
+				scope = "Runtime estimate of current model context, not cumulative usage. After compaction, used tokens may be unknown until the next response. No context tree or child aggregation.";
+				rows.push(
+					{ label: "Context used tokens", value: number(stats.contextUsage?.tokens) },
+					{ label: "Context window", value: number(stats.contextUsage?.contextWindow) },
+					{ label: "Context used", value: number(stats.contextUsage?.percent, "%") },
+				);
+			} else {
+				scope = "Current session state and runtime counts of the current branch's retained messages; counts can change after compaction. No child message aggregation.";
+				rows.push(
+					{ label: "Name", value: text(state?.sessionName) },
+					{ label: "ID", value: text(state?.sessionId ?? attached?.sessionId ?? observed) },
+					{ label: "Working directory", value: text(state?.cwd ?? (!attached && !observed ? this.workspaceRoot : undefined)) },
+					{ label: "Model", value: state?.model ? `${state.model.provider}/${state.model.id}` : "未提供" },
+					{ label: "Thinking level", value: text(state?.thinkingLevel) },
+					{ label: "Running", value: running ? "Yes" : state?.isStreaming === false ? "No" : "未提供" },
+					{ label: "Read-only", value: observed ? "Yes" : "No" },
+					{ label: "User messages", value: number(stats.userMessages) },
+					{ label: "Assistant messages", value: number(stats.assistantMessages) },
+					{ label: "Tool calls", value: number(stats.toolCalls) },
+					{ label: "Total messages", value: number(stats.totalMessages) },
+				);
+			}
+			reply({ type: "statistics", kind, requestId, snapshot: { queriedAt: new Date().toISOString(), scope, rows,
+				running } });
+		} catch (error) {
+			if (current()) reply({ type: "statistics", kind, requestId, error: error instanceof Error ? error.message : String(error) });
+		}
 	}
 
 	lastStatsText = "";

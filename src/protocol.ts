@@ -133,6 +133,7 @@ export interface SessionActionSnapshot {
 }
 
 export interface RpcSessionState {
+	cwd?: string;
 	sessionActions?: SessionActionSnapshot;
 	model?: RpcModel | null;
 	thinkingLevel?: string;
@@ -287,7 +288,17 @@ export interface ChatViewState {
 
 export interface ChatReadReceipt { sessionId: string; path: string; revision: number; completedAt: number; }
 
+export type StatisticsKind = "usage" | "context" | "session";
+
+export interface StatisticsSnapshot {
+	queriedAt: string;
+	scope: string;
+	rows: Array<{ label: string; value: string }>;
+	running: boolean;
+}
+
 export type WebviewToHost =
+	| { type: "queryStatistics"; kind: StatisticsKind; requestId: number }
 	| { type: "createAttachment"; sessionId: string; attachment: ComposerAttachment }
 	| { type: "openAttachment"; sessionId: string; id: string }
 	| { type: "chatRendered"; receipt: ChatReadReceipt }
@@ -296,10 +307,13 @@ export type WebviewToHost =
 	| { type: "viewStateFailed"; requestId: string; sessionId: string; error: string }
 	| { type: "ready" }
 	| { type: "viewFocused" }
+	| { type: "composerFocusChanged"; focused: boolean }
 	| { type: "prompt"; payload: PromptPayload }
 	| { type: "abort" }
 	| { type: "newSession" }
+	| { type: "newSessionFromCurrent" }
 	| { type: "login" }
+	| { type: "logout" }
 	| { type: "compact"; instructions?: string }
 	| { type: "exportChat" }
 	| { type: "restart" }
@@ -324,9 +338,13 @@ export type WebviewToHost =
 	| { type: "browseChild"; browseRef: string }
 	| { type: "backToParent" }
 	| { type: "forkFromUser"; ordinal: number }
+	| { type: "forkSession" }
 	| { type: "copyConversation" }
+	| { type: "copyLastReply" }
 	| { type: "dismissInstallPrompt" }
 	| { type: "renameSession"; name: string }
+	| { type: "promptRenameSession" }
+	| { type: "openSidebarHistory" }
 	| { type: "noticeAction"; id: string }
 	| { type: "renameHistorySession"; path: string; sessionId: string; name: string }
 	| { type: "stopSession"; path: string; sessionId: string }
@@ -441,6 +459,7 @@ export interface RecentSession {
 }
 
 export type HostToWebview =
+	| { type: "statistics"; kind: StatisticsKind; requestId: number; snapshot?: StatisticsSnapshot; error?: string }
 	| { type: "attachmentCreated"; sessionId: string; id: string; error?: string }
 	| { type: "setHistoryMode"; enabled: boolean }
 	| { type: "setViewMoving"; moving: boolean }
@@ -485,7 +504,7 @@ export type HostToWebview =
 			action?: { id: string; label: string };
 	  }
 	| { type: "uiState"; statusText?: string; title?: string }
-	| { type: "fileSearchResults"; requestId: number; files: FileSearchItem[] }
+	| { type: "fileSearchResults"; requestId: number; files: FileSearchItem[]; pending?: boolean }
 	| { type: "imagePicked"; requestId: number; images: ImageAttachment[] }
 	| { type: "insertSelection"; selection: SelectionAttachment }
 	| { type: "insertMention"; path: string }
@@ -493,4 +512,5 @@ export type HostToWebview =
 	| { type: "observedEvent"; sessionId: string; event: AgentEvent }
 	| { type: "observedClosed"; sessionId: string }
 	| { type: "editorText"; text: string }
+	| { type: "stashOrRestoreDraft" }
 	| { type: "focusComposer" };

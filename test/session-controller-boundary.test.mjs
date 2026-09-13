@@ -43,6 +43,40 @@ controller.ensureStarted = async () => {};
 controller.client = { running: true, request: async () => ({ success: true, data: { models: [{ provider: "live-provider", id: "live-model" }] } }) };
 await controller.listModels();
 check("successful model discovery replaces the cache", memory.get("brief.availableModels")?.[0]?.id === "live-model");
+// Logout reloads credentials through the existing transport without launching a worker.
+let logoutStarts = 0;
+controller.ensureStarted = async () => { logoutStarts += 1; throw new Error("unexpected startup"); };
+const logoutRequests = [];
+controller.client = { running: true, request: async (request) => { logoutRequests.push(request); return { success: true, data: { models: [] } }; } };
+check("logout RPC refresh reports success", await controller.listModels({ startAgent: false }) === true);
+check("logout RPC refresh uses only model discovery", logoutRequests.length === 1 && logoutRequests[0].type === "get_available_models");
+check("logout refresh publishes empty catalog after last credential removal", memory.get("brief.availableModels").length === 0 && posts.at(-1).type === "models");
+controller.client.request = async () => ({ success: false, error: "secret-rpc-token" });
+check("logout RPC unsuccessful response reports failure", await controller.listModels({ startAgent: false }) === false);
+controller.client.request = async () => { throw new Error("secret-transport-token"); };
+let rpcRefreshRejected = false;
+try { await controller.listModels({ startAgent: false }); } catch { rpcRefreshRejected = true; }
+check("logout RPC transport failure reaches host safe error handler", rpcRefreshRejected);
+for (const client of [null, { running: false, request: async () => { throw new Error("stopped client used"); } }]) {
+	controller.client = client;
+	check("logout unavailable or failed worker returns failure without startup", await controller.listModels({ startAgent: false }) === false && logoutStarts === 0);
+}
+const originalLogoutSidecar = controller.ensureSidecar;
+const logoutAttached = { activeSessionId: "logout-live", sessionPath: "/unused/logout.jsonl", sessionId: "logout-session" };
+controller.attached = logoutAttached;
+controller.attachedEpoch = controller.viewEpoch;
+controller.ensureSidecar = async () => ({ request: async (request) => { logoutRequests.push(request); return { models: [{ provider: "remaining", id: "available" }] }; } });
+check("logout daemon refresh reports success", await controller.listModels({ startAgent: false }) === true);
+check("logout daemon refresh addresses attached session", logoutRequests.at(-1).activeSessionId === "logout-live" && logoutRequests.at(-1).type === "get_available_models");
+check("logout daemon refresh updates catalog", posts.at(-1).models?.[0]?.id === "available");
+controller.ensureSidecar = async () => ({ request: async () => { throw new Error("secret-daemon-token"); } });
+const logoutPostsBeforeFailure = posts.length;
+check("logout daemon failure is returned separately", await controller.listModels({ startAgent: false }) === false);
+check("logout daemon failure does not leak runtime error or publish success", posts.length === logoutPostsBeforeFailure);
+check("logout never starts a worker across daemon and RPC paths", logoutStarts === 0);
+controller.attached = null;
+controller.attachedEpoch = null;
+controller.ensureSidecar = originalLogoutSidecar;
 controller.ensureStarted = cachedModelsEnsureStarted;
 controller.client = null;
 posts.length = 0;
@@ -548,7 +582,7 @@ controller.client = {
 	running: true,
 	request: async (command) => {
 		oldViewExportCommands.push(command);
-		return { success: true };
+		return { success: true, data: { messages: [] } };
 	},
 };
 vscodeStub.window.showSaveDialog = () => new Promise((resolve) => { releaseSaveDialog = resolve; });
@@ -988,6 +1022,51 @@ controller.scheduleChildrenRefresh = originalIdentityChildrenRefresh;
 	check("unarchive is UI-only", !controller.historyArchived.has(controller.historyPathKey(sessionPath)) && runtimeCalls === 0);
 	await controller.archiveSession(sessionPath, "untrusted-id");
 	check("archive rejects unknown history reference", !controller.historyArchived.has(controller.historyPathKey(sessionPath)));
+}
+
+// Rename exercises the real host methods for both transports without a live runtime.
+{
+ const c = Object.create(SessionController.prototype);
+ Object.assign(c, { disposed: false, viewEpoch: 1, attached: null, observingId: null, observationRestoring: false,
+  state: { sessionName: "Original" }, rentedState: null, cachedMessages: [], savedCatalog: { at: 1, rows: [] } });
+ const notices = [], requests = [];
+ let statuses = 0, histories = 0, resolveInput, options;
+ c.broadcast = m => notices.push(m);
+ c.pushStatus = c.pushStatusLight = () => statuses++;
+ c.listHistory = async () => { histories++; };
+ c.ensureStarted = async () => {};
+ c.client = { request: async m => { requests.push(m); return { success: true }; } };
+ c.isCurrentRpcView = (client, epoch) => client === c.client && epoch === c.viewEpoch;
+ const input = vscodeStub.window.showInputBox;
+ vscodeStub.window.showInputBox = opts => { options = opts; return new Promise(resolve => { resolveInput = resolve; }); };
+ try {
+  let pending = c.promptRenameSession(() => true);
+  check("rename input prefills issuing session name", options.value === "Original");
+  resolveInput("  Name with spaces  "); await pending;
+  check("RPC rename trims full name and refreshes title and History", requests.at(-1)?.name === "Name with spaces" && c.state.sessionName === "Name with spaces" && statuses === 1 && histories === 1 && c.savedCatalog === null);
+  for (const answer of [undefined, "   "]) {
+   pending = c.promptRenameSession(() => true); resolveInput(answer); await pending;
+  }
+  check("cancel and blank rename do nothing", requests.length === 1);
+  pending = c.promptRenameSession(() => true); c.viewEpoch++; resolveInput("Wrong session"); await pending;
+  pending = c.promptRenameSession(() => false); resolveInput("Wrong tab"); await pending;
+  check("rename cancels when session or selected tab changes", requests.length === 1);
+  c.observingId = "child";
+  await c.promptRenameSession(() => true); await c.renameSession("Forbidden");
+  check("observed session cannot be renamed", requests.length === 1 && notices.at(-1)?.level === "warning");
+  c.observingId = null;
+  c.client.request = async () => ({ success: false, error: "denied" });
+  await c.renameSession("Failed");
+  check("RPC rename failure reports error without success or refresh", notices.at(-1)?.text.includes("denied") && histories === 1 && statuses === 1);
+  c.attached = { activeSessionId: "daemon-handle" }; c.attachedEpoch = c.viewEpoch; c.rentedState = { sessionName: "Before" };
+  c.isCurrentAttachment = a => a === c.attached;
+  c.ensureSidecar = async () => ({ request: async m => { requests.push(m); } });
+  await c.renameSession("Daemon name");
+  check("daemon rename targets issuing attachment and refreshes title and History", requests.at(-1)?.activeSessionId === "daemon-handle" && c.rentedState.sessionName === "Daemon name" && statuses === 2 && histories === 2);
+  c.ensureSidecar = async () => ({ request: async () => { throw new Error("daemon denied"); } });
+  await c.renameSession("Failed");
+  check("daemon rename failure reports error without success or refresh", notices.at(-1)?.text.includes("daemon denied") && statuses === 2 && histories === 2);
+ } finally { vscodeStub.window.showInputBox = input; }
 }
 
 // The last lifecycle fixture intentionally leaves a lightweight RPC stand-in

@@ -3,15 +3,14 @@
  * steering behavior picker, context meter, and Send/Stop controls.
  *
  * Slash items from the agent catalog are inserted and sent as prompts.
- * `/model`, `/effort`, `/thinking`, `/stash`, and `/new` are local UI commands:
- * they never go to the model.
+ * Built-in session, model, authentication, and draft commands run locally. Inline slash completions remain prompt text.
  */
 
 import { Dropdown, type DropdownItem } from "./dropdown.js";
 import { fitImageDataUrl, MAX_DECODED_IMAGE_BYTES, planImageFit } from "./image-fit.js";
 import { el, icon, iconButton, svgIcon } from "./dom.js";
 import { providerIcon } from "./provider-icon.js";
-import type { ChatViewState, ComposerAttachment, ComposerToolbarItem, ImageAttachment, ModelRef, RpcModel, RpcSlashCommand, SelectionAttachment } from "../src/protocol.js";
+import type { ChatViewState, ComposerAttachment, ComposerToolbarItem, ImageAttachment, ModelRef, RpcModel, RpcSlashCommand, SelectionAttachment, StatisticsKind } from "../src/protocol.js";
 
 /** Keys that move the caret without producing an input event. */
 const CARET_KEYS = new Set(["ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"]);
@@ -32,7 +31,7 @@ function formatUsage(value: number): string {
 }
 const SUPPORTED_IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif"]);
 
-type UiSlashAction = "model" | "effort" | "stash" | "new" | "login";
+type UiSlashAction = "model" | "effort" | "stash" | "new" | "login" | "logout" | "goal" | "autonomous" | "rename" | "resume" | "fork" | "export" | "copy" | StatisticsKind;
 
 const UI_SLASH_COMMANDS: Array<{ name: string; description: string; action: UiSlashAction }> = [
 	{ name: "model", description: "Select model", action: "model" },
@@ -40,10 +39,30 @@ const UI_SLASH_COMMANDS: Array<{ name: string; description: string; action: UiSl
 	{ name: "thinking", description: "Select thinking level", action: "effort" },
 	{ name: "stash", description: "Stash or restore the current prompt", action: "stash" },
 	{ name: "new", description: "Start a new session", action: "new" },
+	{ name: "clear", description: "Start a new session (alias for /new)", action: "new" },
 	{ name: "login", description: "Sign in to a model provider in VS Code", action: "login" },
+	{ name: "logout", description: "Remove saved credentials for a model provider (no arguments)", action: "logout" },
+	{ name: "goal", description: "Set or manage a persistent goal", action: "goal" },
+	{ name: "autonomous", description: "View, enable, or disable automatic continuation", action: "autonomous" },
+	{ name: "name", description: "Set this session’s name; optional new name", action: "rename" },
+	{ name: "rename", description: "Rename this session; optional new name", action: "rename" },
+	{ name: "resume", description: "Open sidebar Session History (no arguments)", action: "resume" },
+	{ name: "fork", description: "Branch from a user message in a new editor tab (no arguments)", action: "fork" },
+	{ name: "export", description: "Export this conversation as Markdown (no arguments)", action: "export" },
+	{ name: "copy", description: "Copy the latest finished agent reply (no arguments)", action: "copy" },
+	{ name: "usage", description: "Show local session usage snapshot (no arguments)", action: "usage" },
+	{ name: "context", description: "Show local context snapshot (no arguments)", action: "context" },
+	{ name: "session", description: "Show local session details (no arguments)", action: "session" },
 ];
 
 const UI_SLASH_BY_NAME = new Map(UI_SLASH_COMMANDS.map((command) => [command.name, command.action]));
+
+// Session commands accepted by runtime prompts, but omitted from get_commands.
+// These only complete text; submitting uses the existing prompt path.
+const SESSION_SLASH_COMMANDS = [
+	{ name: "compact", description: "Compact context; optional summary instructions" },
+	{ name: "refine", description: "Refine harness prompt notes, skills, subagents, and memory" },
+];
 
 interface ComposerStash {
 	text: string;
@@ -58,7 +77,7 @@ function emptyStash(): ComposerStash {
 }
 
 function stashHasContent(stash: ComposerStash): boolean {
-	return stash.text.trim().length > 0 || stash.images.length > 0 || stash.selections.length > 0;
+	return stash.text.trim().length > 0 || stash.images.length > 0 || stash.selections.length > 0 || (stash.attachments?.length ?? 0) > 0;
 }
 
 function cloneStash(stash: ComposerStash): ComposerStash {
@@ -95,11 +114,19 @@ export interface ComposerDeps {
 	onDraftChanged: (text: string, attachmentDraft?: { text: string; attachments: ComposerAttachment[] }) => void;
 	onNewSession: () => void;
 	onLogin: () => void;
+	onLogout: () => void;
+	onRenameSession: (name?: string) => void;
+	onResume: () => void;
+	onForkSession: () => void;
+	onExportChat: () => void;
+	onCopyLastReply: () => void;
+	onQueryStatistics: (kind: StatisticsKind) => void;
 }
 
 export class Composer {
 	readonly root: HTMLElement;
 	private textarea: HTMLTextAreaElement;
+	private statisticsActions: HTMLElement;
 	private chipsEl: HTMLElement;
 	private rail: HTMLElement;
 	private attachBtn: HTMLButtonElement;
@@ -108,6 +135,7 @@ export class Composer {
 	private behaviorBtn: HTMLButtonElement;
 	private sendControl: HTMLElement;
 	private behaviorMenu: Dropdown | null = null;
+	private sessionCommandMenu: Dropdown | null = null;
 	private contextWrap: HTMLElement;
 	private contextLabel: HTMLElement;
 	private sessionIdLabel: HTMLElement;
@@ -142,6 +170,9 @@ export class Composer {
 	private selections: SelectionAttachment[] = [];
 	private commands: RpcSlashCommand[] = [];
 	private streaming = false;
+	private busy = false;
+	private sessionIdentity: string | null = null;
+	private sessionStashes = new Map<string, ComposerStash>();
 	/** Starts false: until a status says the agent answers, we cannot send a prompt. */
 	private enabled = false;
 	/** Lets a new, connecting chat collect its draft before sending is available. */
@@ -168,6 +199,7 @@ export class Composer {
 	private restoreStashAfterPicker = false;
 	private suppressPickerHide = false;
 	private acRequestId = 0;
+	private acRange: { start: number; query: string } | null = null;
 	private mentionDebounce: number | undefined;
 	private draftDebounce: number | undefined;
 	/**
@@ -264,7 +296,14 @@ export class Composer {
 		this.mirror = el("div", "composer-mirror");
 		this.textWrap.append(this.mirror, this.textarea);
 		card.append(this.textWrap, this.rail);
-		this.root.append(this.chipsEl, card);
+		this.statisticsActions = el("div", "statistics-shortcuts");
+		for (const kind of ["usage", "context", "session"] as const) {
+			const button = el("button", "", `/${kind}`);
+			button.title = `Query local ${kind} snapshot without sending a prompt`;
+			button.addEventListener("click", () => this.deps.onQueryStatistics(kind));
+			this.statisticsActions.appendChild(button);
+		}
+		this.root.append(this.statisticsActions, this.chipsEl, card);
 
 		this.autocompleteEl = el("div", "autocomplete");
 		card.appendChild(this.autocompleteEl);
@@ -351,6 +390,7 @@ export class Composer {
 		if (this.composing || this.attachments.some((a) => a.status === "pending")) throw new Error("Finish composing or attaching images before moving this chat.");
 		// Picker menus are portaled outside the inert app. Closing a slash picker
 		// also puts its parked draft back before we take the transfer snapshot.
+		this.sessionCommandMenu?.hide();
 		this.behaviorMenu?.hide();
 		this.attachMenu?.hide();
 		this.modelMenu?.hide();
@@ -372,6 +412,26 @@ export class Composer {
 		this.behavior = state.behavior;
 		this.updateBehaviorLabel();
 		this.flushDraft();
+	}
+
+	/** Ephemeral stash identity. Call after resetting an outgoing session. */
+	setSessionIdentity(id: string): void {
+		if (this.sessionIdentity === id) return;
+		// The first identity belongs to the draft already collected while connecting.
+		// Real session switches reset promptStash before adopting the next identity.
+		const stash = !this.sessionIdentity && this.promptStash ? this.promptStash : this.sessionStashes.get(id);
+		this.sessionIdentity = id;
+		this.promptStash = stash ? cloneStash(stash) : null;
+	}
+
+	setBusy(busy: boolean): void { this.busy = busy; }
+
+	private canChangeSettings(): boolean {
+		if (this.observing || this.streaming || this.busy || (!this.enabled && !this.draftAllowed)) {
+			this.showHint("Model and thinking changes are unavailable while busy or read-only.");
+			return false;
+		}
+		return true;
 	}
 
 	setCommands(commands: RpcSlashCommand[]): void {
@@ -449,6 +509,7 @@ export class Composer {
 
 	private applyInputState(): void {
 		this.textarea.disabled = this.observing || (!this.enabled && !this.draftAllowed);
+		this.statisticsActions.hidden = !this.textarea.disabled;
 		this.textarea.placeholder = this.observing
 			? "Watching a live session — read-only"
 			: this.enabled || this.draftAllowed
@@ -494,6 +555,7 @@ export class Composer {
 	}
 
 	private toggleAttachMenu(anchor: HTMLButtonElement): void {
+		this.sessionCommandMenu?.hide();
 		this.behaviorMenu?.hide();
 		if (this.attachMenu?.isOpen()) {
 			this.attachMenu.hide();
@@ -629,6 +691,7 @@ export class Composer {
 	addSelection(selection: SelectionAttachment): void {
 		this.selections.push(selection);
 		this.renderChips();
+		this.rememberNonSlashDraft();
 		this.focus();
 	}
 
@@ -930,7 +993,13 @@ export class Composer {
 	 * becoming the incoming session's draft.
 	 */
 	resetForSessionBoundary(): void {
+		if (this.sessionIdentity) {
+			if (this.promptStash) this.sessionStashes.set(this.sessionIdentity, cloneStash(this.promptStash));
+			else this.sessionStashes.delete(this.sessionIdentity);
+		}
+		this.sessionIdentity = null;
 		this.sessionGeneration++;
+		this.sessionCommandMenu?.hide();
 		this.editRange = null;
 		this.compositionUndoIndex = null;
 		this.imagePicks.clear();
@@ -989,13 +1058,16 @@ export class Composer {
 
 	onFileSearchResults(requestId: number, files: Array<{ path: string; isDir: boolean }> | string[]): void {
 		if (this.acKind !== "mention" || requestId !== this.acRequestId) return;
+		const range = this.currentMentionQuery();
+		if (!range || range.start !== this.acRange?.start || range.query !== this.acRange.query) { this.closeAutocomplete(); return; }
+		const selected = this.acItems[this.acSelected]?.insert;
 		this.acItems = files.slice(0, 12).map((f) => {
 			const item = typeof f === "string" ? { path: f, isDir: f.endsWith("/") } : f;
 			return item.isDir
 				? { label: `${item.path}/`, sub: "folder", insert: `${item.path}/`, dir: true }
 				: { label: item.path, insert: item.path };
 		});
-		this.acSelected = 0;
+		this.acSelected = Math.max(0, this.acItems.findIndex((item) => item.insert === selected));
 		this.renderAutocomplete();
 	}
 
@@ -1004,7 +1076,13 @@ export class Composer {
 	// ---------------------------------------------------------------
 
 	send(): void {
-		if (this.composing || this.attachments.some((a) => a.status !== "ready")) return;
+		if (this.composing) return;
+		const local = this.parseLeadingSlash(this.textarea.value);
+		if (local && (local.name === "usage" || local.name === "context" || local.name === "session")) {
+			this.runUiSlashAction(local.name, local.args);
+			return;
+		}
+		if (this.attachments.some((a) => a.status !== "ready")) return;
 		if (this.expandedText().length > 200_000) { this.showHint("Prompt exceeds 200,000 characters. Remove or shorten an attachment."); return; }
 		if (this.tryRunUiSlashCommand(this.textarea.value)) return;
 		// Keyboard paths (Enter) bypass the disabled button, so the gate lives here too.
@@ -1035,6 +1113,7 @@ export class Composer {
 		this.renderChips();
 		this.autoGrow();
 		this.closeAutocomplete();
+		this.lastNonSlashDraft = emptyStash();
 		this.deps.onDraftChanged("");
 	}
 
@@ -1047,6 +1126,7 @@ export class Composer {
 	}
 
 	private toggleBehavior(): void {
+		this.sessionCommandMenu?.hide();
 		if (!this.streaming || !this.canSend()) return;
 		this.attachMenu?.hide();
 		this.modelMenu?.hide();
@@ -1105,10 +1185,7 @@ export class Composer {
 	}
 
 	private thinkingLevels(): string[] {
-		// Host-derived from the model's thinkingLevelMap. When we have no list,
-		// fall back to the levels every reasoning model accepts — xhigh and max
-		// exist only where the model declares them, so we never invent those.
-		return this.availableThinkingLevels?.length ? this.availableThinkingLevels : ["off", "minimal", "low", "medium", "high"];
+		return this.availableThinkingLevels ?? [];
 	}
 
 	private pickerHideHandler(): () => void {
@@ -1121,12 +1198,17 @@ export class Composer {
 	}
 
 	private toggleThinkingMenu(initialQuery?: string): void {
+		if (!this.canChangeSettings()) return;
+		this.sessionCommandMenu?.hide();
 		this.behaviorMenu?.hide();
 		if (this.thinkingMenu?.isOpen()) {
 			this.thinkingMenu.hide();
 			return;
 		}
-		if (!this.reasoning) return;
+		if (!this.reasoning || !this.thinkingLevels().length) {
+			this.showHint(this.reasoning ? "Thinking levels are not available yet." : "Current model does not support thinking");
+			return;
+		}
 		const model = this.currentModelInfo();
 		const levels = this.thinkingLevels();
 		const items: DropdownItem[] = levels.map((level, index) => ({
@@ -1136,7 +1218,10 @@ export class Composer {
 			onSelect: () => {
 				const restore = this.restoreStashAfterPicker;
 				this.restoreStashAfterPicker = false;
-				if (!this.enabled && this.draftAllowed) this.setThinking(level, this.availableThinkingLevels);
+				if (!this.canChangeSettings() || !this.reasoning || !this.thinkingLevels().includes(level)) {
+					if (restore) this.restoreComposerStash(this.lastNonSlashDraft);
+					return;
+				}
 				this.deps.onSetThinking(level);
 				if (restore) this.restoreComposerStash(this.lastNonSlashDraft);
 			},
@@ -1180,6 +1265,8 @@ export class Composer {
 	}
 
 	private toggleModelMenu(initialQuery?: string): void {
+		if (!this.canChangeSettings()) return;
+		this.sessionCommandMenu?.hide();
 		if (this.modelMenu?.isOpen() && !initialQuery) {
 			this.modelMenu.hide();
 			return;
@@ -1203,7 +1290,10 @@ export class Composer {
 			onSelect: () => {
 				const restore = this.restoreStashAfterPicker;
 				this.restoreStashAfterPicker = false;
-				if (!this.enabled && this.draftAllowed) this.setModel(this.modelLabelFor(model), model.provider, model.id);
+				if (!this.canChangeSettings()) {
+					if (restore) this.restoreComposerStash(this.lastNonSlashDraft);
+					return;
+				}
 				this.deps.onSetModel(model.provider, model.id);
 				if (restore) this.restoreComposerStash(this.lastNonSlashDraft);
 			},
@@ -1317,7 +1407,8 @@ export class Composer {
 			event.preventDefault();
 			return;
 		}
-		if (this.acKind) {
+		if (this.acKind && event.key === "Escape") { this.closeAutocomplete(); return; }
+		if (this.acKind && this.acItems.length > 0) {
 			if (event.key === "ArrowDown") {
 				event.preventDefault();
 				this.moveAutocomplete(1);
@@ -1331,10 +1422,6 @@ export class Composer {
 			if (event.key === "Enter" || event.key === "Tab") {
 				event.preventDefault();
 				this.applyAutocomplete();
-				return;
-			}
-			if (event.key === "Escape") {
-				this.closeAutocomplete();
 				return;
 			}
 		}
@@ -1662,17 +1749,17 @@ export class Composer {
 	// Autocomplete
 	// ---------------------------------------------------------------
 
-	private currentSlashQuery(): string | null {
+	private currentSlashQuery(): { start: number; query: string } | null {
 		const caret = this.textarea.selectionStart ?? 0;
-		const value = this.textarea.value;
-		if (!value.startsWith("/")) return null;
-		const firstSpace = value.indexOf(" ");
-		if (firstSpace >= 0 && caret > firstSpace) return null;
-		return value.slice(1, caret);
+		if (caret !== this.textarea.selectionEnd) return null;
+		const match = this.textarea.value.slice(0, caret).match(/(^|\s)\/([^\s/]*)$/);
+		if (!match) return null;
+		return { start: caret - match[2].length - 1, query: match[2] };
 	}
 
 	private currentMentionQuery(): { start: number; query: string } | null {
 		const caret = this.textarea.selectionStart ?? 0;
+		if (caret !== this.textarea.selectionEnd) return null;
 		const before = this.textarea.value.slice(0, caret);
 		const match = before.match(/(^|[\s])@([\w./-]*)$/);
 		if (!match) return null;
@@ -1682,8 +1769,8 @@ export class Composer {
 
 	private updateAutocomplete(): void {
 		const slashQuery = this.currentSlashQuery();
-		if (slashQuery !== null && slashQuery.length <= 30 && !slashQuery.includes("\n")) {
-			const q = slashQuery.toLowerCase();
+		if (slashQuery !== null && slashQuery.query.length <= 30) {
+			const q = slashQuery.query.toLowerCase();
 			const local = UI_SLASH_COMMANDS
 				.filter((command) => command.name.includes(q) || command.description.toLowerCase().includes(q))
 				.map((command) => ({
@@ -1692,12 +1779,19 @@ export class Composer {
 					insert: `/${command.name} `,
 					action: command.action,
 				}));
-			const remote = this.commands
+			const remote = [...SESSION_SLASH_COMMANDS, ...this.commands.filter(
+				(command) => !SESSION_SLASH_COMMANDS.some((builtin) => builtin.name === command.name),
+			)]
 				.filter((command) => command.name.toLowerCase().includes(q) || (command.description ?? "").toLowerCase().includes(q))
 				.map((command) => ({ label: `/${command.name}`, sub: command.description, insert: `/${command.name} ` }));
-			const items = [...local, ...remote].slice(0, 12);
+			// A fully typed local command must win over descriptions mentioning it
+			// (for example /session versus "Start a new session").
+			const items = [...local, ...remote]
+				.sort((a, b) => Number(b.label === `/${q}`) - Number(a.label === `/${q}`))
+				.slice(0, 12);
 			if (items.length > 0) {
 				this.acKind = "slash";
+				this.acRange = slashQuery;
 				this.acItems = items;
 				this.acSelected = 0;
 				this.renderAutocomplete();
@@ -1706,7 +1800,12 @@ export class Composer {
 		}
 		const mention = this.currentMentionQuery();
 		if (mention) {
+			if (this.acKind === "mention" && this.acRange?.start === mention.start && this.acRange.query === mention.query) return;
 			this.acKind = "mention";
+			this.acRange = mention;
+			this.acItems = [];
+			this.acSelected = 0;
+			this.renderAutocomplete();
 			// No debounce: per-keystroke freshness, staleness is guarded by the request id.
 			// Keep request IDs monotonic. A response from the session that just left
 			// cannot collide with a new search made in the same millisecond.
@@ -1720,10 +1819,9 @@ export class Composer {
 	private renderAutocomplete(): void {
 		this.autocompleteEl.textContent = "";
 		if (!this.acKind || this.acItems.length === 0) {
-			// Disarm, don't just hide: onKeyDown gates on acKind alone, so a search
-			// that matched nothing left Enter captured by an invisible panel — the
-			// operator pressed it twice and the message never went anywhere.
-			this.closeAutocomplete();
+			// Keep the request range for incremental replies, but never capture
+			// keys without visible choices (onKeyDown also checks acItems).
+			this.autocompleteEl.classList.remove("visible");
 			return;
 		}
 		this.acItems.forEach((item, index) => {
@@ -1756,23 +1854,30 @@ export class Composer {
 		if (!item) return;
 		const caret = this.textarea.selectionStart ?? this.textarea.value.length;
 		if (this.acKind === "slash") {
+			const range = this.currentSlashQuery();
+			if (!range || range.start !== this.acRange?.start || range.query !== this.acRange.query) { this.closeAutocomplete(); return; }
 			this.closeAutocomplete();
-			if (item.action) {
-				this.runUiSlashAction(item.action, "");
+			if (range.start === 0 && item.action) {
+				if ((item.action === "goal" || item.action === "autonomous") && /[\r\n]/.test(this.textarea.value)) {
+					this.replaceTracked(range.start, caret, item.insert.trimEnd());
+					return;
+				}
+				this.runUiSlashAction(item.action, this.parseLeadingSlash(this.textarea.value)?.args ?? "");
 				return;
 			}
 			this.historyIndex = null;
-			this.textarea.value = item.insert;
-			this.textarea.selectionStart = this.textarea.selectionEnd = item.insert.length;
-			this.autoGrow();
-			this.textarea.focus();
+			// Leading commands keep their existing replacement behavior. Inline
+			// commands only complete text; they never run local UI actions.
+			const end = range.start === 0 ? this.textarea.value.length : caret;
+			const insert = end < this.textarea.value.length && /^[ \t]/.test(this.textarea.value.slice(end)) ? item.insert.trimEnd() : item.insert;
+			this.replaceTracked(range.start, end, insert);
 			return;
 		} else {
 			// Re-derive the range instead of trusting the offset the panel opened
 			// with: the caret may have moved since (click, arrows), and splicing at
 			// the stale start duplicates the line around a second mention.
 			const range = this.currentMentionQuery();
-			if (!range) {
+			if (!range || range.start !== this.acRange?.start || range.query !== this.acRange.query) {
 				this.closeAutocomplete();
 				return;
 			}
@@ -1784,10 +1889,8 @@ export class Composer {
 			// Always terminate the token: without the space, typed letters merge
 			// into the path and the highlight bleeds forward.
 			this.historyIndex = null;
-			this.textarea.value = `${before}@${path} ${tail}`;
-			const pos = before.length + path.length + 2;
-			this.textarea.selectionStart = this.textarea.selectionEnd = pos;
 			this.accepted.add(path);
+			this.replaceTracked(before.length, caret + after.length - tail.length, `@${path} `);
 		}
 		this.closeAutocomplete();
 		this.autoGrow();
@@ -1796,6 +1899,7 @@ export class Composer {
 
 	private closeAutocomplete(): void {
 		this.acKind = null;
+		this.acRange = null;
 		this.acItems = [];
 		this.autocompleteEl.textContent = "";
 		this.autocompleteEl.classList.remove("visible");
@@ -1840,6 +1944,10 @@ export class Composer {
 	}
 
 	private clearComposerForSlash(): void {
+		this.attachments = [];
+		this.trackedText = "";
+		this.undoEdits = [];
+		this.redoEdits = [];
 		this.historyIndex = null;
 		this.textarea.value = "";
 		this.images = [];
@@ -1853,8 +1961,7 @@ export class Composer {
 	}
 
 	private parseLeadingSlash(text: string): { name: string; args: string } | null {
-		if (!text.startsWith("/") || /[\n\r]/.test(text)) return null;
-		const match = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text.trimEnd());
+		const match = /^\/([^\s]+)(?:[ \t]+([^\r\n]*))?(?:[\r\n]|$)/.exec(text);
 		if (!match) return null;
 		return { name: match[1], args: (match[2] ?? "").trim() };
 	}
@@ -1864,11 +1971,82 @@ export class Composer {
 		if (!parsed) return false;
 		const action = UI_SLASH_BY_NAME.get(parsed.name);
 		if (!action) return false;
+		if ((action === "goal" || action === "autonomous") && (parsed.args || /[\r\n]/.test(text))) return false;
 		this.runUiSlashAction(action, parsed.args);
 		return true;
 	}
 
 	private runUiSlashAction(action: UiSlashAction, args: string): void {
+		if (action === "usage" || action === "context" || action === "session") {
+			this.closeAutocomplete();
+			if (args || /[\r\n]/.test(this.textarea.value)) {
+				this.showHint(`Use /${action} without arguments on a single line.`);
+				return;
+			}
+			this.restoreComposerStash(this.lastNonSlashDraft);
+			this.deps.onQueryStatistics(action);
+			return;
+		}
+		if (action === "fork" || action === "export" || action === "copy") {
+			this.closeAutocomplete();
+			if (/[\r\n]/.test(this.textarea.value)) {
+				this.showHint("Use this session command on a single line.");
+				return;
+			}
+			if (args) {
+				this.showHint(action === "export"
+					? "Use /export without arguments to choose a format and save location."
+					: `Use /${action} without arguments.`);
+				return;
+			}
+			if (this.observing || this.textarea.disabled || (action === "fork" && (this.streaming || this.busy))) {
+				this.showHint(action === "fork"
+					? "Fork is unavailable while busy or read-only."
+					: "This command is unavailable while read-only.");
+				return;
+			}
+			this.restoreComposerStash(this.lastNonSlashDraft);
+			if (action === "fork") this.deps.onForkSession();
+			else if (action === "export") this.deps.onExportChat();
+			else this.deps.onCopyLastReply();
+			return;
+		}
+		if (action === "logout") {
+			this.closeAutocomplete();
+			if (args || /[\r\n]/.test(this.textarea.value)) {
+				this.showHint("Use /logout without arguments to choose a provider.");
+				return;
+			}
+			this.restoreComposerStash(this.lastNonSlashDraft);
+			this.deps.onLogout();
+			return;
+		}
+		if (action === "rename" || action === "resume") {
+			this.closeAutocomplete();
+			if (/[\r\n]/.test(this.textarea.value)) {
+				this.showHint("Use this session command on a single line.");
+				return;
+			}
+			if (action === "resume" && args) {
+				this.showHint("Use /resume without arguments to open sidebar Session History.");
+				return;
+			}
+			this.restoreComposerStash(this.lastNonSlashDraft);
+			if (action === "rename") this.deps.onRenameSession(args || undefined);
+			else this.deps.onResume();
+			return;
+		}
+		if (this.observing) return;
+		if ((action === "stash" || action === "new") && this.textarea.disabled) return;
+		if ((action === "model" || action === "effort") && !this.canChangeSettings()) return;
+		if ((action === "stash" || action === "new") && args) {
+			this.showHint(`/${action} does not accept same-line arguments. Put draft text on the next line.`);
+			return;
+		}
+		if (action === "goal" || action === "autonomous") {
+			this.openSessionCommandMenu(action);
+			return;
+		}
 		if (action === "stash") {
 			this.handleStashCommand();
 			return;
@@ -1879,7 +2057,9 @@ export class Composer {
 			return;
 		}
 		if (action === "new") {
-			this.applyComposerSnapshot(this.lastNonSlashDraft);
+			const draft = this.snapshotComposer();
+			this.stripSnapshotPrefix(draft, this.stripLeadingSlashCommand(draft.text));
+			this.restoreComposerStash(stashHasContent(draft) ? draft : this.lastNonSlashDraft);
 			this.deps.onNewSession();
 			return;
 		}
@@ -1895,6 +2075,64 @@ export class Composer {
 		this.handleEffortCommand(args);
 	}
 
+	private openSessionCommandMenu(command: "goal" | "autonomous", confirmClear = false): void {
+		this.sessionCommandMenu?.hide();
+		this.modelMenu?.hide();
+		this.thinkingMenu?.hide();
+		this.attachMenu?.hide();
+		this.behaviorMenu?.hide();
+		this.closeAutocomplete();
+		const generation = this.sessionGeneration;
+		const current = this.snapshotComposer();
+		this.stripSnapshotPrefix(current, this.stripLeadingSlashCommand(current.text));
+		const draft = cloneStash(stashHasContent(current) ? current : this.lastNonSlashDraft);
+		this.lastNonSlashDraft = cloneStash(draft);
+		this.clearComposerForSlash();
+		const sendCommand = (args: string): void => {
+			if (generation !== this.sessionGeneration) return;
+			if (!this.canSend()) {
+				this.showHint("This session cannot send commands right now.");
+				return;
+			}
+			// Do not attach the parked draft's files to a control command.
+			this.applyComposerSnapshot({ ...emptyStash(), text: `/${command} ${args}` });
+			this.send();
+			this.restoreComposerStash(draft);
+		};
+		let items: DropdownItem[];
+		if (confirmClear) {
+			items = [
+				{ label: "Cancel", onSelect: () => {} },
+				{ label: "Clear goal", sub: "Remove the persistent goal", onSelect: () => sendCommand("clear") },
+			];
+		} else if (command === "goal") {
+			items = [
+				{ label: "Set goal…", sub: "/goal [--budget <tokens>] <objective>", onSelect: () => {
+					this.restoreComposerStash({ ...emptyStash(), text: "/goal " });
+					this.showHint("One line: /goal [--budget <tokens>] <objective>. Include the outcome, completion criteria, and scope. Budget is optional.");
+				} },
+				{ label: "View status", onSelect: () => sendCommand("status") },
+				{ label: "Pause goal", onSelect: () => sendCommand("pause") },
+				{ label: "Resume goal", onSelect: () => sendCommand("resume") },
+				{ label: "Clear goal…", sub: "Requires confirmation", onSelect: () => this.openSessionCommandMenu("goal", true) },
+			];
+		} else {
+			items = [
+				{ label: "View status", onSelect: () => sendCommand("status") },
+				{ label: "Enable automatic continuation", sub: "May use more tokens and incur additional cost", onSelect: () => sendCommand("on") },
+				{ label: "Disable automatic continuation", sub: "Does not abort the current run", onSelect: () => sendCommand("off") },
+			];
+		}
+		this.sessionCommandMenu = new Dropdown(this.textarea, {
+			header: confirmClear ? "Clear the persistent goal?" : `/${command}`,
+			placeholder: "Choose an action…",
+			onHide: () => {
+				if (generation === this.sessionGeneration) this.restoreComposerStash(draft);
+			},
+		});
+		this.sessionCommandMenu.show(items);
+	}
+
 	private stripSnapshotPrefix(snapshot: ComposerStash, text: string): void {
 		const removed = snapshot.text.length - text.length;
 		snapshot.attachments = (snapshot.attachments ?? []).filter((a) => a.start >= removed).map((a) => ({ ...a, start: a.start - removed, end: a.end - removed }));
@@ -1904,14 +2142,30 @@ export class Composer {
 	private stripLeadingSlashCommand(text: string): string {
 		if (!text.startsWith("/")) return text;
 		const remainder = text.replace(/^\/\S+(?:[ \t]+[^\n]*)?/, "");
-		return remainder.replace(/^\n/, "");
+		return remainder.replace(/^\r?\n/, "");
+	}
+
+	isFocused(): boolean { return document.activeElement === this.textarea; }
+
+	/** Keyboard shortcut: stash the actual draft, including slash-looking text. */
+	stashDraft(): void {
+		if (this.observing || this.textarea.disabled || this.composing) return;
+		this.stashSnapshot(this.snapshotComposer());
 	}
 
 	private handleStashCommand(): void {
 		const current = this.snapshotComposer();
 		const stripped = cloneStash(current);
 		if (this.parseLeadingSlash(current.text)) this.stripSnapshotPrefix(stripped, this.stripLeadingSlashCommand(current.text));
-		const draft = stashHasContent(stripped) ? stripped : this.lastNonSlashDraft;
+		const draft = stashHasContent(stripped) || this.promptStash ? stripped : this.lastNonSlashDraft;
+		this.stashSnapshot(draft);
+	}
+
+	private stashSnapshot(draft: ComposerStash): void {
+		if (draft.attachments?.some((a) => a.status === "pending")) {
+			this.showHint("Finish attaching before stashing the draft.");
+			return;
+		}
 		if (stashHasContent(draft)) {
 			if (this.promptStash && stashHasContent(this.promptStash)) {
 				this.showHint("Prompt stash already has a draft. Restore it first with /stash.");
@@ -1920,7 +2174,7 @@ export class Composer {
 			this.promptStash = cloneStash(draft);
 			this.clearComposerForSlash();
 			this.lastNonSlashDraft = emptyStash();
-			this.showHint("Stashed prompt");
+			this.showHint("Stashed prompt temporarily in this session. Closing or reloading may discard it.");
 			return;
 		}
 		if (this.promptStash && stashHasContent(this.promptStash)) {
@@ -1961,7 +2215,7 @@ export class Composer {
 		const q = query.toLowerCase();
 		const matches = this.models.filter((model) => {
 			const label = this.modelLabelFor(model).toLowerCase();
-			return model.id.toLowerCase() === q || label === q || `${model.provider}/${model.id}`.toLowerCase() === q;
+			return model.id.toLowerCase() === q || label === q || model.name?.toLowerCase() === q;
 		});
 		return matches.length === 1 ? matches[0] : undefined;
 	}
@@ -1973,6 +2227,11 @@ export class Composer {
 			return;
 		}
 		const levels = this.thinkingLevels();
+		if (!levels.length) {
+			this.showHint("Thinking levels are not available yet.");
+			this.restoreComposerStash(this.lastNonSlashDraft);
+			return;
+		}
 		const requested = args.trim().toLowerCase();
 		if (requested) {
 			if (!levels.includes(requested)) {

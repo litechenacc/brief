@@ -37,18 +37,13 @@ export function activate(context: vscode.ExtensionContext): void {
 		command("brief.toggleChatLocation", () => panels.toggleLocation()),
 		command("brief.switchSession", () => panels.switchSidebarSession()),
 		command("brief.newSession", () => panels.newSession()),
+		command("brief.stashDraft", () => panels.stashOrRestoreDraft()),
 		command("brief.abort", () => panels.run((controller) => controller.abort())),
 		command("brief.compact", () => panels.run((controller) => controller.compact())),
 		command("brief.exportChat", () => panels.run((controller) => controller.exportChat())),
 		command("brief.restart", () => panels.run((controller) => controller.restart())),
 		command("brief.history", () => panels.run((controller) => controller.showHistoryView(), true)),
-		command("brief.renameSession", () => panels.run(async (controller) => {
-			const name = await vscode.window.showInputBox({
-				title: "Rename session", value: controller.currentSessionName() ?? "",
-				prompt: "Name this session", placeHolder: "Session name", ignoreFocusOut: true,
-			});
-			if (name !== undefined && !controller.disposed) await controller.renameSession(name);
-		})),
+		command("brief.renameSession", () => panels.run((controller) => panels.promptRenameSession(controller))),
 		command("brief.addSelectionToChat", () => {
 			// Capture the source before revealing a chat editor changes focus.
 			const editor = vscode.window.activeTextEditor;

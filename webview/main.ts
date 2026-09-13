@@ -20,6 +20,8 @@ import type {
 	SelectionAttachment,
 	SessionActionSnapshot,
 	StatusSnapshot,
+	StatisticsKind,
+	StatisticsSnapshot,
 	WebviewToHost,
 } from "../src/protocol.js";
 
@@ -76,7 +78,88 @@ pendingInputs.open = true;
 const pendingInputsHeading = el("summary", "pending-inputs-heading");
 const pendingInputsList = el("div", "pending-inputs-list");
 pendingInputs.append(pendingInputsHeading, pendingInputsList);
-chatView.append(scroller, pendingInputs);
+const statisticsArea = el("section", "statistics-area");
+statisticsArea.setAttribute("aria-label", "Brief local statistics");
+statisticsArea.hidden = true;
+chatView.append(scroller, statisticsArea, pendingInputs);
+
+// Local, manual snapshots. These never enter Transcript or saved view state.
+const statisticsCards = new Map<StatisticsKind, {
+	root: HTMLElement; requestId: number; snapshot?: StatisticsSnapshot; error?: string; loading: boolean;
+}>();
+const statisticsRequestScope = Math.floor(Math.random() * 4_000_000_000);
+let nextStatisticsRequestId = 0;
+
+function clearStatistics(): void {
+	statisticsCards.clear();
+	statisticsArea.replaceChildren();
+	statisticsArea.hidden = true;
+}
+
+function queryStatistics(kind: StatisticsKind): void {
+	let card = statisticsCards.get(kind);
+	if (!card) {
+		card = { root: el("article", "statistics-card"), requestId: 0, loading: false };
+		card.root.dataset.kind = kind;
+		statisticsCards.set(kind, card);
+		statisticsArea.appendChild(card.root);
+	}
+	card.requestId = statisticsRequestScope * 1_000_000 + ++nextStatisticsRequestId;
+	card.loading = true;
+	card.error = undefined;
+	statisticsArea.hidden = false;
+	renderStatistics(kind);
+	post({ type: "queryStatistics", kind, requestId: card.requestId });
+}
+
+function renderStatistics(kind: StatisticsKind): void {
+	const card = statisticsCards.get(kind)!;
+	const snapshot = card.snapshot;
+	const title = `Brief local information · /${kind}`;
+	const heading = el("h3", "", title);
+	const actions = el("div", "statistics-actions");
+	const refresh = el("button", "", "Refresh");
+	refresh.addEventListener("click", () => queryStatistics(kind));
+	const copy = el("button", "", "Copy") as HTMLButtonElement;
+	copy.disabled = !snapshot;
+	copy.addEventListener("click", async () => {
+		if (!snapshot) return;
+		const text = [title, `Queried: ${snapshot.queriedAt}`, snapshot.scope,
+			...(card.error ? [`Old snapshot — ${card.error}`] : []),
+			...(snapshot.running ? ["Running — values may still increase."] : []),
+			...snapshot.rows.map((row) => `${row.label}: ${row.value}`)].join("\n");
+		try {
+			if (!navigator.clipboard) throw new Error("Clipboard unavailable");
+			await navigator.clipboard.writeText(text);
+			addNotice("info", "Statistics snapshot copied.");
+		} catch {
+			addNotice("warning", "Could not copy statistics snapshot.");
+		}
+	});
+	const close = el("button", "", "Close");
+	close.addEventListener("click", () => {
+		statisticsCards.delete(kind);
+		card.root.remove();
+		statisticsArea.hidden = statisticsCards.size === 0;
+	});
+	actions.append(refresh, copy, close);
+	const header = el("div", "statistics-heading");
+	header.append(heading, actions);
+	card.root.replaceChildren(header);
+	card.root.setAttribute("aria-busy", String(card.loading));
+	card.root.classList.toggle("stale", Boolean(card.error && snapshot));
+	const state = el("p", "statistics-state");
+	state.setAttribute("role", "status");
+	state.textContent = card.loading ? "Querying… Previous values remain a manual snapshot."
+		: card.error ? `${snapshot ? "Old snapshot — " : "Query failed — "}${card.error}` : "Manual snapshot · not part of the conversation";
+	card.root.appendChild(state);
+	if (!snapshot) return;
+	card.root.append(el("p", "statistics-time", `Queried: ${snapshot.queriedAt}`), el("p", "statistics-scope", snapshot.scope));
+	if (snapshot.running) card.root.appendChild(el("p", "statistics-running", "Running — values may still increase."));
+	const rows = el("dl", "statistics-rows");
+	for (const row of snapshot.rows) rows.append(el("dt", "", row.label), el("dd", "", row.value));
+	card.root.appendChild(rows);
+}
 
 /** Keep queue previews outside durable history. Preview text is not an identity. */
 function renderPendingInputs(actions?: SessionActionSnapshot): void {
@@ -146,6 +229,7 @@ const composerDeps = {
 	onStop: () => post({ type: "abort" }),
 	onSearchFiles: (query: string, requestId: number) => {
 		const hostRequestId = fileSearchRequestScope * 1_000_000 + ++nextFileSearchRequestId;
+		pendingFileSearches.clear();
 		pendingFileSearches.set(hostRequestId, requestId);
 		post({ type: "searchFiles", query, requestId: hostRequestId });
 	},
@@ -164,10 +248,33 @@ const composerDeps = {
 	onSetThinking: (level: string) => post({ type: "setThinkingLevel", level }),
 	onToggleFavorite: (provider: string, modelId: string) => post({ type: "toggleFavoriteModel", provider, modelId }),
 	onOpenFile: (path: string, startLine?: number, endLine?: number) => post({ type: "openFile", path, startLine, endLine }),
-	onNewSession: () => requestNewSession(),
+	onNewSession: () => {
+		composer.flushDraft();
+		post({ type: "newSessionFromCurrent" });
+	},
 	onLogin: () => post({ type: "login" }),
+	onLogout: () => post({ type: "logout" }),
+	onRenameSession: (name?: string) => post(name === undefined ? { type: "promptRenameSession" } : { type: "renameSession", name }),
+	onResume: () => post({ type: "openSidebarHistory" }),
+	onForkSession: () => {
+		composer.flushDraft();
+		post({ type: "forkSession" });
+	},
+	onExportChat: () => post({ type: "exportChat" }),
+	onCopyLastReply: () => post({ type: "copyLastReply" }),
+	onQueryStatistics: queryStatistics,
 };
 const composer = new Composer(composerDeps);
+function composerHasFocus(): boolean {
+	return document.hasFocus() && composer.root.style.display !== "none" && composer.isFocused();
+}
+function reportComposerFocus(): void {
+	post({ type: "composerFocusChanged", focused: composerHasFocus() });
+}
+composer.root.addEventListener("focusin", reportComposerFocus);
+composer.root.addEventListener("focusout", () => { post({ type: "composerFocusChanged", focused: false }); });
+window.addEventListener("focus", reportComposerFocus);
+window.addEventListener("blur", () => { post({ type: "composerFocusChanged", focused: false }); });
 const cachedModels = document.getElementById("cached-models");
 if (cachedModels?.textContent) composer.setModels(JSON.parse(cachedModels.textContent) as RpcModel[]);
 cachedModels?.remove();
@@ -249,7 +356,7 @@ const statusStrip = el("div", "status-strip");
 // in the composer chrome.
 statusStrip.hidden = true;
 const connDot = el("span", "conn-dot");
-const liveLabel = el("span", "live-label", "connecting");
+const liveLabel = el("span", "live-label", "Initializing…");
 statusStrip.append(connDot, liveLabel, el("span", "spacer"));
 composer.root.querySelector(".composer-card")!.appendChild(statusStrip);
 
@@ -331,7 +438,10 @@ function showView(view: "chat" | "history"): void {
 	// composer under them. "" hands display back to their own .visible class.
 	subagentsStrip.style.display = view === "chat" ? "" : "none";
 	runningTasksStrip.style.display = view === "chat" ? "" : "none";
-	if (view === "history") historyView.showLoading();
+	if (view === "history") {
+		post({ type: "composerFocusChanged", focused: false });
+		historyView.showLoading();
+	}
 	else focusRenderedChat();
 }
 
@@ -341,6 +451,7 @@ function requestNewSession(): void {
 }
 
 function startNewThread(): void {
+	clearStatistics();
 	showView("chat");
 	subagents.resetForNewThread();
 	pendingPrompts.clear();
@@ -400,9 +511,11 @@ let extensionTitle: { sessionId?: string; title: string; provisional: boolean } 
  */
 function adoptAuthoritativeSession(sessionId: string | undefined): boolean {
 	if (!sessionId || sessionId === authoritativeSessionId) return false;
+	clearStatistics();
 	// The first identity belongs to the chat already being drafted, not a switch.
 	if (!authoritativeSessionId) {
 		authoritativeSessionId = sessionId;
+		composer.setSessionIdentity(sessionId);
 		if (!composer.textIsEmpty()) composer.flushDraft();
 		return false;
 	}
@@ -412,6 +525,7 @@ function adoptAuthoritativeSession(sessionId: string | undefined): boolean {
 	pendingImageRequests.clear();
 	pendingFileSearches.clear();
 	composer.resetForSessionBoundary();
+	composer.setSessionIdentity(sessionId);
 	// resetForSessionBoundary() drops the slash catalog with the rest of the
 	// composer's per-session state, and the host only ever sends it in answer to
 	// `ready` — i.e. once per webview. Whoever discards it has to ask again, or
@@ -473,6 +587,7 @@ function applyStatus(incomingStatus: StatusSnapshot): void {
 		composer.setThinking(status.thinkingLevel, status.availableThinkingLevels ?? null);
 	}
 	composer.setStreaming(transcript.isStreaming() || status.streaming);
+	composer.setBusy(status.compacting || status.retrying || status.restoring);
 	// The strip says "offline"; the composer has to mean it, or the operator's
 	// prompt disappears into a 120s timeout with a green dot above it.
 	transcript.setLiveTranscript(status.liveTranscript === true);
@@ -611,6 +726,15 @@ function acknowledgeRenderedChat(): void {
 
 function dispatchHostMessage(message: HostToWebview): void {
 	switch (message.type) {
+		case "statistics": {
+			const card = statisticsCards.get(message.kind);
+			if (!card || card.requestId !== message.requestId || !card.loading) break;
+			card.loading = false;
+			if (message.error || !message.snapshot) card.error = message.error || "No statistics snapshot was provided.";
+			else { card.snapshot = message.snapshot; card.error = undefined; }
+			renderStatistics(message.kind);
+			break;
+		}
 		case "requestReadReceipt":
 			acknowledgeRenderedChat();
 			break;
@@ -778,7 +902,7 @@ function dispatchHostMessage(message: HostToWebview): void {
 		case "fileSearchResults":
 			const composerRequestId = pendingFileSearches.get(message.requestId);
 			if (composerRequestId === undefined) break;
-			pendingFileSearches.delete(message.requestId);
+			if (!message.pending) pendingFileSearches.delete(message.requestId);
 			composer.onFileSearchResults(composerRequestId, message.files);
 			break;
 		case "attachmentCreated":
@@ -804,6 +928,9 @@ function dispatchHostMessage(message: HostToWebview): void {
 			break;
 		case "editorText":
 			composer.setText(message.text);
+			break;
+		case "stashOrRestoreDraft":
+			if (composerHasFocus() && !historyOnly && !viewMoving && !capturedViewRequest) composer.stashDraft();
 			break;
 		case "focusComposer":
 			showView("chat");

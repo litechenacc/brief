@@ -186,6 +186,9 @@ export function parseWebviewMessage(value: unknown): WebviewToHost | undefined {
 	if (!isRecord(value) || typeof value.type !== "string") return undefined;
 
 	switch (value.type) {
+		case "queryStatistics":
+			return (value.kind === "usage" || value.kind === "context" || value.kind === "session") && isRequestId(value.requestId)
+				? { type: "queryStatistics", kind: value.kind, requestId: value.requestId } : undefined;
 		case "createAttachment": {
 			const attachment = parseAttachment(value.attachment);
 			return isIdentifier(value.sessionId) && attachment && (attachment.kind === "text" ? attachment.text !== undefined : attachment.image !== undefined)
@@ -209,11 +212,18 @@ export function parseWebviewMessage(value: unknown): WebviewToHost | undefined {
 			return isRecord(receipt) && isIdentifier(receipt.sessionId) && isPath(receipt.path) && isRequestId(receipt.revision) && isRequestId(receipt.completedAt)
 				? { type: "chatRendered", receipt: { sessionId: receipt.sessionId, path: receipt.path, revision: receipt.revision, completedAt: receipt.completedAt } } : undefined;
 		}
+		case "composerFocusChanged":
+			return typeof value.focused === "boolean" ? { type: "composerFocusChanged", focused: value.focused } : undefined;
+		case "promptRenameSession":
+		case "openSidebarHistory":
 		case "viewFocused":
 		case "ready":
 		case "abort":
 		case "newSession":
+		case "newSessionFromCurrent":
+		case "forkSession":
 		case "login":
+		case "logout":
 		case "exportChat":
 		case "restart":
 		case "requestState":
@@ -223,6 +233,7 @@ export function parseWebviewMessage(value: unknown): WebviewToHost | undefined {
 		case "stopObserving":
 		case "backToParent":
 		case "copyConversation":
+		case "copyLastReply":
 		case "dismissInstallPrompt":
 		case "attachActiveFile":
 		case "attachSelection":

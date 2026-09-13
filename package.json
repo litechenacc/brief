@@ -70,6 +70,11 @@
         "category": "Brief"
       },
       {
+        "command": "brief.stashDraft",
+        "title": "Stash / Restore Draft",
+        "category": "Brief"
+      },
+      {
         "command": "brief.abort",
         "title": "Stop Agent",
         "icon": "$(debug-stop)",
@@ -233,6 +238,12 @@
     },
     "keybindings": [
       {
+        "command": "brief.stashDraft",
+        "key": "ctrl+k ctrl+alt+s",
+        "mac": "cmd+k cmd+alt+s",
+        "when": "brief.composerFocus && !editorTextFocus"
+      },
+      {
         "command": "brief.focusChat",
         "key": "ctrl+alt+meta+p",
         "mac": "ctrl+alt+cmd+p"
@@ -373,7 +384,7 @@
     "typecheck": "tsc --noEmit",
     "package": "node esbuild.config.mjs --production && npx @vscode/vsce package --no-dependencies",
     "smoke": "node test/smoke.mjs",
-    "test": "node test/prime-auth.test.mjs && node test/agent-locator.test.mjs && node test/activate.test.mjs && node test/editor-tabs.test.mjs && node test/session-startup.test.mjs && node test/session-completion.test.mjs && node test/history-read.test.mjs && node test/runtime-lamp.test.mjs && node test/running-tasks.test.mjs && node test/chat-view-message.test.mjs && node test/composer-attachments-host.test.mjs && node test/composer-attachments.test.mjs && node test/composer-send-controls.test.mjs && node test/provider-icons.test.mjs && node test/composer-alignment.test.mjs && node test/attachment-main.test.mjs && node test/composer-attachments-browser.test.mjs && node test/session-controller-boundary.test.mjs && node test/attach-lifecycle.test.mjs && node test/session-actions.test.mjs && node test/webview.test.mjs && node test/conversation-lens.test.mjs && node test/view-state.test.mjs && node test/transcript-window.test.mjs && node test/export-md.test.mjs && node test/recent-sessions-tail.test.mjs && node test/roster-parity.test.mjs && node test/crosswire.test.mjs && node test/image-fit.test.mjs && node test/transport-regression.test.mjs && node test/owner-visibility.test.mjs && node test/hidden-details.test.mjs && node test/user-actions.test.mjs && node test/working-animation.test.mjs",
+    "test": "node test/prime-auth.test.mjs && node test/agent-locator.test.mjs && node test/activate.test.mjs && node test/editor-tabs.test.mjs && node test/session-startup.test.mjs && node test/session-completion.test.mjs && node test/session-workspace.test.mjs && node test/history-read.test.mjs && node test/runtime-lamp.test.mjs && node test/running-tasks.test.mjs && node test/chat-view-message.test.mjs && node test/composer-attachments-host.test.mjs && node test/composer-attachments.test.mjs && node test/composer-send-controls.test.mjs && node test/provider-icons.test.mjs && node test/composer-alignment.test.mjs && node test/attachment-main.test.mjs && node test/composer-attachments-browser.test.mjs && node test/session-controller-boundary.test.mjs && node test/attach-lifecycle.test.mjs && node test/session-actions.test.mjs && node test/webview.test.mjs && node test/conversation-lens.test.mjs && node test/view-state.test.mjs && node test/transcript-window.test.mjs && node test/export-md.test.mjs && node test/export-copy-commands.test.mjs && node test/fork-session.test.mjs && node test/recent-sessions-tail.test.mjs && node test/roster-parity.test.mjs && node test/crosswire.test.mjs && node test/image-fit.test.mjs && node test/transport-regression.test.mjs && node test/owner-visibility.test.mjs && node test/hidden-details.test.mjs && node test/user-actions.test.mjs && node test/working-animation.test.mjs && node test/session-settings.test.mjs && node test/composer-slash-contracts.test.mjs && node test/stash-shortcut.test.mjs && node test/stash-shortcut-host.test.mjs && node test/statistics-host.test.mjs && node test/statistics-webview.test.mjs",
     "test:live": "node esbuild.config.mjs && node test/daemon-parity.mjs --require-daemon && node test/owned-roster.mjs --require-daemon && node test/host-e2e.mjs && node test/smoke.mjs",
     "icon": "node test/render-icon.cjs",
     "pretest": "node esbuild.config.mjs",

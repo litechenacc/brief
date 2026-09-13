@@ -3142,3 +3142,42 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .running-task-dot {
 body.vscode-reduce-motion .running-task-dot {
 	animation: none;
 }
+
+/* Local statistics stay outside transcript history and saved view state. */
+.statistics-area {
+	flex: 0 1 auto;
+	max-height: 50%;
+	overflow: auto;
+	padding: 8px 16px;
+}
+.statistics-area[hidden], .statistics-shortcuts[hidden] { display: none; }
+.statistics-card {
+	border: 1px solid var(--pa-border-strong);
+	border-radius: 8px;
+	padding: 12px;
+	margin-bottom: 8px;
+	background: var(--pa-surface-2);
+	overflow-wrap: anywhere;
+}
+.statistics-heading, .statistics-actions, .statistics-shortcuts {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+.statistics-heading { justify-content: space-between; }
+.statistics-heading h3 { margin: 0; font-size: 12px; }
+.statistics-actions button, .statistics-shortcuts button {
+	border: 1px solid var(--pa-border-strong);
+	border-radius: 4px;
+	background: transparent;
+	color: inherit;
+	padding: 3px 8px;
+	cursor: pointer;
+}
+.statistics-actions button:disabled { opacity: .5; cursor: default; }
+.statistics-shortcuts { padding: 6px 0; }
+.statistics-state, .statistics-time, .statistics-scope, .statistics-running { margin: 6px 0; font-size: 11px; }
+.statistics-card.stale .statistics-state { color: var(--vscode-editorWarning-foreground); }
+.statistics-rows { display: grid; grid-template-columns: minmax(90px, 1fr) minmax(0, 2fr); gap: 4px 12px; font-size: 12px; }
+.statistics-rows dd { margin: 0; white-space: pre-wrap; }

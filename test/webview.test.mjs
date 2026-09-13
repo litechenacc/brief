@@ -59,12 +59,12 @@ earlyModelButton.click();
 const earlyModelItem = [...document.querySelectorAll(".dropdown-item")].find((item) => item.textContent.includes("cached-model"));
 check("cached model picker works before any host message", !!earlyModelItem);
 earlyModelItem?.click();
-check("cached selection immediately paints and queues the host operation", earlyModelButton.textContent.includes("cached-model") && posted.some((message) => message.type === "setModel" && message.modelId === "cached-model"));
+check("cached selection queues host operation without optimistic model state", earlyModelButton.textContent === "Choose model" && posted.some((message) => message.type === "setModel" && message.modelId === "cached-model"));
 
 // The chat opens immediately. The status strip remains the connection indicator,
 // while the composer accepts a draft before the first status arrives.
 const splash = document.querySelector(".boot-splash");
-check("boot does not block the chat", !splash && !document.querySelector("textarea")?.disabled && document.querySelector(".live-label")?.textContent === "connecting");
+check("boot does not block the chat", !splash && !document.querySelector("textarea")?.disabled && document.querySelector(".live-label")?.textContent === "Initializing…");
 hostMessage({ type: "runningTasks", tasks: [
 	{ id: "bash:1", kind: "bash", label: "npm test", startedAt: Date.now() - 5_000, pid: 123 },
 	{ id: "bg:1", kind: "background", label: "synthesis", startedAt: Date.now() - 65_000 },
@@ -84,14 +84,14 @@ startupInput.dispatchEvent(new window.Event("input", { bubbles: true }));
 for (const restoring of [false, true]) {
 	hostMessage({ type: "status", status: { connected: false, restoring, streaming: false, modelLabel: "Agent", thinkingLevel: "off" } });
 	check(`startup remains editable (restoring=${restoring})`, !startupInput.disabled && startupInput.placeholder === "Message Brief…");
-	check("connection-only status preserves the cached choice", earlyModelButton.textContent.includes("cached-model"));
+	check("connection-only status does not invent a selected model", earlyModelButton.textContent === "Choose model");
 	startupInput.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
 	startupSend.click();
 	check("startup cannot send by Enter or click", !posted.some((m) => m.type === "prompt") && startupInput.value === "draft while connecting");
 }
-// A restoring status must not overwrite the cached local choice.
+// A restoring status must not invent a confirmed model selection.
 hostMessage({ type: "status", status: { connected: false, restoring: true, streaming: false, modelLabel: "Agent", thinkingLevel: "off" } });
-check("startup status does not erase cached selection", earlyModelButton.textContent.includes("cached-model"));
+check("startup status waits for authoritative model selection", earlyModelButton.textContent === "Choose model");
 
 hostMessage({ type: "uiState", title: "early agent title", statusText: "warming up" });
 check("uiState statusText paints before the first status snapshot", document.querySelector(".live-label")?.textContent === "warming up");
@@ -448,12 +448,11 @@ document.querySelector(".composer-rail .rail-pill.brain").dispatchEvent(new wind
 const treatedLevels = [...(document.querySelector(".dropdown")?.querySelectorAll(".dropdown-item") ?? [])].map((r) => r.textContent.trim());
 check("available levels filter the picker", treatedLevels.length === 3 && treatedLevels.every((l) => ["off", "medium", "high"].some((a) => l.startsWith(a))), JSON.stringify(treatedLevels));
 document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-// unknown model (no list from the host): fall back to the levels every reasoning model
-// takes — never xhigh/max, which exist only where the model declares them.
+// Unknown runtime level support must not invent selectable thinking levels.
 hostMessage({ type: "status", status: { ...baseStatus, availableThinkingLevels: null } });
 document.querySelector(".composer-rail .rail-pill.brain").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
 const fallbackLevels = [...(document.querySelector(".dropdown")?.querySelectorAll(".dropdown-item") ?? [])].map((r) => r.textContent.trim());
-check("unknown model never offers xhigh/max", fallbackLevels.length === 5 && !fallbackLevels.some((l) => l.startsWith("xhigh") || l.startsWith("max")), JSON.stringify(fallbackLevels));
+check("unknown model offers no guessed levels", fallbackLevels.length === 0 && !document.querySelector(".dropdown"), JSON.stringify(fallbackLevels));
 document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
 
 // --- unified attach menu (vision-gated image item on a text model) ---
@@ -1580,18 +1579,44 @@ hostMessage({ type: "commands", commands: [
 	{ name: "compact", description: "Compact the context" },
 	{ name: "security-pipeline", description: "Run the security review" },
 ] });
-const slashItems = () => {
-	textarea.value = "/";
-	textarea.selectionStart = textarea.selectionEnd = 1;
+const slashItems = (query = "/") => {
+	textarea.value = query;
+	textarea.selectionStart = textarea.selectionEnd = query.length;
 	textarea.dispatchEvent(new window.Event("input", { bubbles: true }));
 	return [...document.querySelectorAll(".ac-item")].map((item) => item.textContent.trim());
 };
+hostMessage({ type: "commands", commands: [] });
+const sessionSlashNames = ["compact", "refine", "goal", "autonomous"];
+for (const name of sessionSlashNames) {
+	check(`/${name} is listed without a runtime catalog`, slashItems(`/${name}`).some((item) => item.startsWith(`/${name}`)));
+	textarea.value = `/${name}`;
+	textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+	textarea.dispatchEvent(new window.Event("input", { bubbles: true }));
+	posted.length = 0;
+	textarea.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }));
+	if (name === "goal" || name === "autonomous") {
+		check(`/${name} completion opens an action menu without sending`, !!document.querySelector(".dropdown-search") && !posted.some((m) => m.type === "prompt"));
+		document.querySelector(".dropdown-search").dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+	} else {
+		check(`/${name} completion only inserts text`, textarea.value === `/${name} ` && !posted.some((m) => m.type === "prompt"));
+	}
+	textarea.value = `/${name} status`;
+	textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+	textarea.dispatchEvent(new window.Event("input", { bubbles: true }));
+	textarea.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+	check(`/${name} preserves arguments through the prompt path`, posted.some((m) => m.type === "prompt" && m.payload?.text === `/${name} status`), JSON.stringify(posted));
+}
+hostMessage({ type: "commands", commands: [
+	{ name: "compact", description: "Compact the context" },
+	{ name: "security-pipeline", description: "Run the security review" },
+] });
 const listed = slashItems();
+check("session slash entries are not duplicated by the runtime catalog", slashItems("/compact").filter((item) => item.startsWith("/compact")).length === 1);
 check("slash menu lists /login", listed.some((item) => item.startsWith("/login")));
 check("slash menu lists UI commands before the agent's catalog",
 	listed[0]?.startsWith("/model") && listed.some((item) => item.startsWith("/effort")) && listed.some((item) => item.startsWith("/stash")) && listed.some((item) => item.startsWith("/new")),
 	JSON.stringify(listed));
-check("slash menu still lists the agent's commands", listed.some((item) => item.startsWith("/compact")) && listed.some((item) => item.includes("security-pipeline")), JSON.stringify(listed));
+check("slash menu still lists the agent's commands", slashItems("/compact").some((item) => item.startsWith("/compact")) && slashItems("/security").some((item) => item.includes("security-pipeline")), JSON.stringify(listed));
 posted.length = 0;
 hostMessage({ type: "status", status: { ...baseStatus, sessionId: "session-boundary-slash", sessionName: "slash" } });
 check("a session boundary re-requests the slash catalog it just discarded",
@@ -1602,11 +1627,235 @@ hostMessage({ type: "commands", commands: [
 	{ name: "security-pipeline", description: "Run the security review" },
 ] });
 const resumed = slashItems();
+check("all fixed session commands survive a session boundary", sessionSlashNames.every((name) => slashItems(`/${name}`).some((item) => item.startsWith(`/${name}`))));
 check("the slash menu works again in the resumed thread",
-	resumed.some((item) => item.startsWith("/compact")) && resumed.some((item) => item.startsWith("/model")),
+	slashItems("/compact").some((item) => item.startsWith("/compact")) && resumed.some((item) => item.startsWith("/model")),
 	JSON.stringify(resumed));
 textarea.value = "";
 textarea.dispatchEvent(new window.Event("input", { bubbles: true }));
+
+// Inline slash completion only edits the token before the caret.
+const fillCompletion = (text, caret = text.length) => {
+	textarea.value = text;
+	textarea.setSelectionRange(caret, caret);
+	textarea.dispatchEvent(new window.Event("input", { bubbles: true }));
+};
+const acceptCompletion = (key = "Tab") => textarea.dispatchEvent(new window.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+for (const command of ["model", "effort", "stash", "new", "login", "logout", "compact", "goal", "autonomous", "name", "rename", "resume", "fork", "export", "copy"]) {
+	const prefix = `keep /${command}`;
+	fillCompletion(`${prefix} tail`, prefix.length);
+	posted.length = 0;
+	acceptCompletion(command === "compact" ? "Tab" : "Enter");
+	check(`inline /${command} preserves text without action`, textarea.value === `${prefix} tail` && !posted.some((m) => ["prompt", "newSession", "newSessionFromCurrent", "login", "logout", "renameSession", "promptRenameSession", "openSidebarHistory", "forkSession", "exportChat", "copyLastReply"].includes(m.type)) && !document.querySelector(".dropdown"), textarea.value);
+}
+fillCompletion("first\n/comp tail", 11);
+acceptCompletion();
+check("newline slash completes at caret and keeps suffix", textarea.value === "first\n/compact tail", textarea.value);
+fillCompletion("keep /co");
+textarea.setSelectionRange(0, 0);
+acceptCompletion();
+check("stale slash caret cannot replace draft", textarea.value === "keep /co");
+for (const text of ["https://host/co", "a/co", "keep /tmp/co"]) {
+	fillCompletion(text);
+	check(`path is not slash completion: ${text}`, !document.querySelector(".autocomplete.visible"));
+}
+fillCompletion("/co", 0);
+check("caret before slash has no completion", !document.querySelector(".autocomplete.visible"));
+fillCompletion("keep /co");
+textarea.setSelectionRange(6, 8);
+textarea.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+check("selected slash text has no completion", !document.querySelector(".autocomplete.visible"));
+
+// Local session commands restore drafts and never become agent prompts.
+for (const command of ["name", "rename", "resume"]) {
+	hostMessage({ type: "commands", commands: [{ name: command, description: "runtime duplicate" }] });
+	slashItems(`/${command}`);
+	check(`/${command} has one local catalog entry`, [...document.querySelectorAll(".ac-item .ac-label")].filter((item) => item.textContent === `/${command}`).length === 1);
+	fillCompletion("session command draft");
+	fillCompletion(`/${command}`);
+	posted.length = 0;
+	acceptCompletion();
+	const type = command === "resume" ? "openSidebarHistory" : "promptRenameSession";
+	check(`/${command} completion performs its local action`, posted.filter((m) => m.type === type).length === 1 && !posted.some((m) => m.type === "prompt"));
+	check(`/${command} restores and saves the original draft`, textarea.value === "session command draft" && posted.some((m) => m.type === "draftChanged" && m.text === "session command draft"));
+	fillCompletion(`/${command} `);
+	posted.length = 0;
+	acceptCompletion("Enter");
+	check(`bare /${command} submission performs its local action`, posted.filter((m) => m.type === type).length === 1 && !posted.some((m) => m.type === "prompt"));
+}
+for (const command of ["name", "rename"]) {
+	fillCompletion("draft before naming");
+	fillCompletion(`/${command}   新的 session 名稱  `);
+	posted.length = 0;
+	acceptCompletion("Enter");
+	check(`/${command} treats the whole argument as the name`, posted.filter((m) => m.type === "renameSession" && m.name === "新的 session 名稱").length === 1 && !posted.some((m) => m.type === "prompt" || m.type === "promptRenameSession") && textarea.value === "draft before naming");
+}
+fillCompletion("draft before invalid resume");
+fillCompletion("/resume some-id");
+posted.length = 0;
+acceptCompletion("Enter");
+check("resume arguments show a hint without navigation or prompt", document.querySelector(".composer-hint")?.textContent.includes("without arguments") && !posted.some((m) => m.type === "openSidebarHistory" || m.type === "prompt") && textarea.value === "/resume some-id");
+fillCompletion("/resume ");
+acceptCompletion("Enter");
+check("correcting resume arguments preserves the parked draft", textarea.value === "draft before invalid resume");
+
+for (const command of ["name", "rename", "resume"]) {
+	fillCompletion(`/${command}\nkeep this text`);
+	posted.length = 0;
+	acceptCompletion("Enter");
+	check(`multiline /${command} is not consumed or sent`, textarea.value === `/${command}\nkeep this text` && !posted.some((m) => ["prompt", "renameSession", "promptRenameSession", "openSidebarHistory"].includes(m.type)) && document.querySelector(".composer-hint")?.textContent.includes("single line"));
+}
+
+// Fork, export, and copy are fixed local actions, never runtime prompts.
+for (const [command, type] of [["fork", "forkSession"], ["export", "exportChat"], ["copy", "copyLastReply"]]) {
+	hostMessage({ type: "commands", commands: [{ name: command, description: "runtime duplicate" }] });
+	slashItems(`/${command}`);
+	check(`/${command} has one fixed entry`, [...document.querySelectorAll(".ac-item .ac-label")].filter((item) => item.textContent === `/${command}`).length === 1);
+	for (const key of ["Tab", "Enter"]) {
+		fillCompletion("draft before local operation");
+		fillCompletion(`/${command}`);
+		posted.length = 0;
+		acceptCompletion(key);
+		check(`/${command} ${key} runs locally and restores draft`, posted.filter((m) => m.type === type).length === 1 && !posted.some((m) => m.type === "prompt") && textarea.value === "draft before local operation");
+		check(`/${command} posts no payload`, JSON.stringify(posted.find((m) => m.type === type)) === JSON.stringify({ type }));
+	}
+	fillCompletion(`/${command} `);
+	posted.length = 0;
+	acceptCompletion("Enter");
+	check(`bare /${command} submits locally`, posted.filter((m) => m.type === type).length === 1 && !posted.some((m) => m.type === "prompt"));
+	for (const suffix of [" argument", "\nkeep this text", "\rkeep this text", "\n"]) {
+		const text = `/${command}${suffix}`;
+		fillCompletion(text);
+		posted.length = 0;
+		acceptCompletion("Enter");
+		check(`/${command} rejects ${JSON.stringify(suffix)}`, textarea.value === text && !posted.some((m) => m.type === type || m.type === "prompt") && document.querySelector(".composer-hint")?.textContent.includes(suffix.includes("argument") ? "without arguments" : "single line"));
+	}
+	fillCompletion(`/${command}\nkeep this text`, command.length + 1);
+	posted.length = 0;
+	acceptCompletion();
+	check(`/${command} multiline completion is not consumed`, textarea.value === `/${command}\nkeep this text` && !posted.some((m) => m.type === type || m.type === "prompt"));
+	hostMessage({ type: "status", status: { ...baseStatus, streaming: true } });
+	fillCompletion("streaming draft");
+	fillCompletion(`/${command} `);
+	posted.length = 0;
+	acceptCompletion("Enter");
+	check(`/${command} streaming gate`, command === "fork"
+		? !posted.some((m) => m.type === type || m.type === "prompt") && textarea.value === "/fork "
+		: posted.filter((m) => m.type === type).length === 1 && textarea.value === "streaming draft" && !posted.some((m) => m.type === "prompt"));
+	hostMessage({ type: "status", status: { ...baseStatus, streaming: false, observingId: "other-1" } });
+	fillCompletion(`/${command} `);
+	posted.length = 0;
+	acceptCompletion("Enter");
+	check(`/${command} read-only gate`, !posted.some((m) => m.type === type || m.type === "prompt") && textarea.value === `/${command} `);
+	hostMessage({ type: "status", status: { ...baseStatus, streaming: false } });
+}
+
+fillCompletion("stashed before local commands");
+fillCompletion("/stash ");
+acceptCompletion("Enter");
+for (const command of ["fork", "export", "copy"]) {
+	fillCompletion(`/${command} `);
+	acceptCompletion("Enter");
+}
+fillCompletion("/stash ");
+acceptCompletion("Enter");
+check("fork/export/copy leave the source stash intact", textarea.value === "stashed before local commands");
+
+// Images and selections stay in the source composer, not in command payloads.
+hostMessage({ type: "models", models: [{ provider: "chutes", id: "kimi", reasoning: true, input: ["text", "image"] }] });
+hostMessage({ type: "status", status: { ...baseStatus, sessionId: "session-boundary-slash" } });
+fillCompletion("draft with attachments");
+const sessionCommandImage = requestImageFromPicker();
+hostMessage({ type: "imagePicked", requestId: sessionCommandImage.requestId, images: [{ data: "aGk=", mimeType: "image/png", name: "command-draft.png" }] });
+hostMessage({ type: "insertSelection", selection: { path: "src/command.ts", startLine: 1, endLine: 2, text: "const draft = 1;", languageId: "typescript" } });
+const commandDraftText = textarea.value;
+const commandChipCount = document.querySelectorAll(".composer-chips .compose-chip").length;
+for (const command of ["/name New title", "/rename ", "/resume ", "/fork ", "/export ", "/copy "]) {
+	fillCompletion(command);
+	posted.length = 0;
+	acceptCompletion("Enter");
+	check(`${command} preserves attachments and draft`, commandChipCount === 2 && document.querySelectorAll(".composer-chips .compose-chip").length === commandChipCount && textarea.value === commandDraftText && !posted.some((m) => m.type === "prompt"), JSON.stringify({ commandChipCount, chips: document.querySelectorAll(".composer-chips .compose-chip").length, commandDraftText, text: textarea.value }));
+}
+hostMessage({ type: "status", status: { ...baseStatus, sessionId: "after-local-session-commands" } });
+
+// Session command menus preserve drafts and only submit explicit actions.
+const openSessionMenu = (name) => {
+	fillCompletion("draft to preserve");
+	fillCompletion(`/${name}`);
+	posted.length = 0;
+	acceptCompletion();
+};
+const chooseSessionAction = (label) => {
+	const button = [...document.querySelectorAll(".dropdown-select")].find((b) => b.querySelector(".dropdown-text")?.textContent === label);
+	check(`session action exists: ${label}`, !!button);
+	button?.click();
+};
+openSessionMenu("goal");
+chooseSessionAction("Set goal…");
+check("goal setup inserts only the editable prefix and explains the format", textarea.value === "/goal " && document.querySelector(".composer-hint")?.textContent.includes("--budget") && !posted.some((m) => m.type === "prompt"));
+for (const [label, arg] of [["View status", "status"], ["Pause goal", "pause"], ["Resume goal", "resume"]]) {
+	openSessionMenu("goal");
+	chooseSessionAction(label);
+	check(`goal menu sends ${arg} and restores draft`, posted.filter((m) => m.type === "prompt").length === 1 && posted.some((m) => m.payload?.text === `/goal ${arg}`) && textarea.value === "draft to preserve");
+}
+openSessionMenu("goal");
+chooseSessionAction("Clear goal…");
+check("clear goal waits for confirmation", !!document.querySelector(".dropdown") && !posted.some((m) => m.type === "prompt"));
+chooseSessionAction("Cancel");
+check("cancelling clear preserves draft without sending", textarea.value === "draft to preserve" && !posted.some((m) => m.type === "prompt"));
+openSessionMenu("goal");
+chooseSessionAction("Clear goal…");
+chooseSessionAction("Clear goal");
+check("confirmed clear sends exactly once", posted.filter((m) => m.type === "prompt" && m.payload?.text === "/goal clear").length === 1);
+for (const [label, arg] of [["View status", "status"], ["Enable automatic continuation", "on"], ["Disable automatic continuation", "off"]]) {
+	openSessionMenu("autonomous");
+	chooseSessionAction(label);
+	check(`autonomous menu sends ${arg} and restores draft`, posted.filter((m) => m.type === "prompt").length === 1 && posted.some((m) => m.payload?.text === `/autonomous ${arg}`) && textarea.value === "draft to preserve");
+}
+openSessionMenu("autonomous");
+document.querySelector(".dropdown-search").dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+check("Escape closes the session menu and restores the draft", !document.querySelector(".dropdown") && textarea.value === "draft to preserve" && !posted.some((m) => m.type === "prompt"));
+fillCompletion("/goal --budget 12000 Fix login; tests pass; keep public API unchanged");
+posted.length = 0;
+acceptCompletion("Enter");
+check("complete goal command preserves budget and objective without opening a menu", !document.querySelector(".dropdown") && posted.some((m) => m.payload?.text === "/goal --budget 12000 Fix login; tests pass; keep public API unchanged"));
+fillCompletion("/autonomous ");
+posted.length = 0;
+acceptCompletion("Enter");
+check("bare autonomous submission opens its menu without sending", !!document.querySelector(".dropdown") && !posted.some((m) => m.type === "prompt"));
+document.querySelector(".dropdown-search").dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+check("session menu supports keyboard action selection", posted.some((m) => m.payload?.text === "/autonomous status"));
+openSessionMenu("autonomous");
+hostMessage({ type: "status", status: { ...baseStatus, sessionId: "after-local-session-commands", connected: false } });
+chooseSessionAction("Enable automatic continuation");
+check("session menu rechecks send availability", !posted.some((m) => m.type === "prompt") && textarea.value === "draft to preserve");
+hostMessage({ type: "status", status: { ...baseStatus, sessionId: "after-local-session-commands", connected: true } });
+openSessionMenu("goal");
+hostMessage({ type: "status", status: { ...baseStatus, sessionId: "session-command-menu-boundary" } });
+check("session boundary closes command menu without restoring the old draft", !document.querySelector(".dropdown") && textarea.value === "");
+fillCompletion("");
+
+// Fast empty replies remain eligible for the later combined result.
+fillCompletion("look @stage");
+const stageRequest = posted.filter((m) => m.type === "searchFiles").at(-1);
+hostMessage({ type: "fileSearchResults", requestId: stageRequest.requestId, files: [], pending: true });
+check("pending empty file reply hides choices", !document.querySelector(".autocomplete.visible"));
+const searchCount = posted.filter((m) => m.type === "searchFiles").length;
+textarea.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+check("unchanged mention range does not repeat search", posted.filter((m) => m.type === "searchFiles").length === searchCount);
+hostMessage({ type: "fileSearchResults", requestId: stageRequest.requestId, files: ["stage-a", "stage-b"], pending: true });
+acceptCompletion("ArrowDown");
+hostMessage({ type: "fileSearchResults", requestId: stageRequest.requestId, files: ["stage-new", "stage-a", "stage-b"] });
+check("incremental files preserve chosen path", document.querySelector(".ac-item.selected .ac-label")?.textContent === "stage-b");
+fillCompletion("look @different");
+check("new mention query clears old choices", !document.querySelector(".autocomplete.visible") && !document.querySelector(".ac-item"));
+const pendingRequest = posted.filter((m) => m.type === "searchFiles").at(-1);
+hostMessage({ type: "fileSearchResults", requestId: pendingRequest.requestId, files: [], pending: true });
+posted.length = 0;
+acceptCompletion("Enter");
+check("pending empty file reply does not swallow Enter", posted.some((m) => m.type === "prompt"));
+fillCompletion("");
+posted.length = 0;
 
 // --- /model /effort intercept the composer instead of prompting; /stash parks the draft ---
 hostMessage({
@@ -1686,14 +1935,14 @@ textarea.value = "/new";
 textarea.dispatchEvent(new window.Event("input", { bubbles: true }));
 posted.length = 0;
 textarea.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
-check("/new posts newSession instead of a prompt", posted.some((m) => m.type === "newSession") && !posted.some((m) => m.type === "prompt"), JSON.stringify(posted.map((m) => m.type)));
+check("/new posts newSessionFromCurrent instead of a prompt", posted.some((m) => m.type === "newSessionFromCurrent") && !posted.some((m) => m.type === "prompt"), JSON.stringify(posted.map((m) => m.type)));
 check("/new does not persist the slash as the outgoing draft", !posted.some((m) => m.type === "draftChanged" && m.text === "/new"), JSON.stringify(posted.filter((m) => m.type === "draftChanged")));
 check("/new preserves the source tab draft", textarea.value === "keep for next thread", JSON.stringify(textarea.value));
 
 textarea.value = "/new extra args";
 posted.length = 0;
 textarea.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
-check("/new ignores extra args and still starts a session", posted.some((m) => m.type === "newSession") && !posted.some((m) => m.type === "prompt"), JSON.stringify(posted.map((m) => m.type)));
+check("/new rejects extra args and retains input", !posted.some((m) => m.type === "newSessionFromCurrent" || m.type === "newSession" || m.type === "prompt") && textarea.value === "/new extra args", JSON.stringify(posted.map((m) => m.type)));
 
 // /login is local, both when typed and selected from autocomplete.
 textarea.value = "/login";
@@ -1707,6 +1956,35 @@ textarea.dispatchEvent(new window.Event("input", { bubbles: true }));
 posted.length = 0;
 document.querySelector(".ac-item")?.dispatchEvent(new window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
 check("/login autocomplete opens login without prompting", posted.filter((m) => m.type === "login").length === 1 && !posted.some((m) => m.type === "prompt"));
+
+// /logout is local and restores the draft without forwarding attachments.
+hostMessage({ type: "commands", commands: [{ name: "logout", description: "runtime duplicate" }] });
+check("logout has one fixed completion entry", slashItems("/logout").filter((item) => item.startsWith("/logout")).length === 1);
+textarea.value = "logout draft";
+textarea.dispatchEvent(new window.Event("input", { bubbles: true }));
+hostMessage({ type: "insertSelection", selection: { path: "logout.ts", startLine: 1, endLine: 2, text: "keep attachment" } });
+textarea.dispatchEvent(new window.Event("input", { bubbles: true }));
+const logoutChips = document.querySelectorAll(".compose-chip").length;
+fillCompletion("/logout");
+posted.length = 0;
+acceptCompletion("Enter");
+check("logout completion sends only the local action", posted.filter((m) => m.type === "logout").length === 1 && !posted.some((m) => m.type === "prompt"));
+check("logout restores draft and attachments", textarea.value === "logout draft" && logoutChips > 0 && document.querySelectorAll(".compose-chip").length === logoutChips);
+textarea.value = "/logout";
+posted.length = 0;
+acceptCompletion("Enter");
+check("typed logout sends local action and preserves draft", posted.filter((m) => m.type === "logout").length === 1 && !posted.some((m) => m.type === "prompt") && textarea.value === "logout draft");
+for (const text of ["/logout anthropic", "/logout\nall"]) {
+	fillCompletion(text);
+	posted.length = 0;
+	acceptCompletion("Escape");
+	acceptCompletion("Enter");
+	check("logout rejects arguments or extra lines: " + JSON.stringify(text), !posted.some((m) => m.type === "logout" || m.type === "prompt") && textarea.value === text && document.querySelector(".composer-hint")?.textContent.includes("without arguments"));
+}
+textarea.value = "logout draft";
+textarea.dispatchEvent(new window.Event("input", { bubbles: true }));
+// Restore the surrounding test's attachment-free composer.
+for (const button of document.querySelectorAll(".compose-chip .chip-remove")) button.click();
 
 // --- paste image on a text-only model shows a composer hint ---
 hostMessage({ type: "status", status: { ...baseStatus, modelProvider: "chutes", modelId: "glm", modelLabel: "chutes/glm" } });
@@ -1741,6 +2019,17 @@ const createdImage = posted.filter(m => m.type === "createAttachment").at(-1);
 check("image picker requests a host-owned temporary image", createdImage?.attachment.kind === "image");
 if (createdImage) hostMessage({ type: "attachmentCreated", sessionId: createdImage.sessionId, id: createdImage.attachment.id });
 check("image card rendered on vision model", document.querySelectorAll(".composer-chips .attachment-card").length === 1);
+// Completion before an owned attachment must shift its range, not detach it.
+hostMessage({ type: "commands", commands: [{ name: "compact", description: "Compact the context" }] });
+const imageMarker = textarea.value.slice("with image ".length);
+fillCompletion(`with /comp ${imageMarker}`, "with /comp".length);
+acceptCompletion();
+check("inline completion preserves the owned image marker", textarea.value === `with /compact ${imageMarker}` && document.querySelectorAll(".composer-chips .attachment-card").length === 1);
+await new Promise((resolve) => window.setTimeout(resolve, 350));
+const completionDraft = posted.filter((m) => m.type === "draftChanged" && m.attachmentDraft).at(-1)?.attachmentDraft;
+check("inline completion persists shifted attachment offsets", completionDraft?.attachments[0]?.start === "with /compact ".length && completionDraft.text.slice(completionDraft.attachments[0].start, completionDraft.attachments[0].end) === imageMarker);
+// Restore this fixture for the existing text-only send checks below.
+fillCompletion(`with image ${imageMarker}`);
 const imageDraft = textarea.value;
 hostMessage({ type: "status", status: { ...baseStatus, modelProvider: "chutes", modelId: "glm", modelLabel: "chutes/glm" } });
 posted.length = 0;
@@ -2001,6 +2290,10 @@ textarea.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbl
 check("Enter during create does not post a prompt", !posted.some((m) => m.type === "prompt"), JSON.stringify(posted.map((m) => m.type)));
 textarea.value = "new thread startup draft";
 textarea.dispatchEvent(new window.Event("input", { bubbles: true }));
+textarea.value = "/logout";
+posted.length = 0;
+textarea.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+check("logout works before a session is ready without prompting", posted.filter((m) => m.type === "logout").length === 1 && !posted.some((m) => m.type === "prompt") && textarea.value === "new thread startup draft");
 hostMessage({
 	type: "snapshot",
 	messages: [],

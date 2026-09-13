@@ -1,7 +1,9 @@
 /** Sessions own controllers; editor panels and the native sidebar are replaceable views. */
+import { unlink } from "node:fs/promises";
+import { isSessionActive } from "./session-actions.js";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
-import { loginPrimeAgent } from "./prime-auth.js";
+import { loginPrimeAgent, logoutPrimeAgent } from "./prime-auth.js";
 import { completedMessageTime } from "./session-completion.js";
 import * as vscode from "vscode";
 import type { ChatReadReceipt, ChatViewState, HostToWebview, RecentSession, WebviewToHost } from "./protocol.js";
@@ -25,6 +27,7 @@ type ChatTab = {
 	state?: ChatViewState;
 	stateSessionId?: string;
 	initialized?: Promise<void>;
+	startupError?: Error;
 	attachment: vscode.Disposable;
 	closed: boolean;
 };
@@ -50,8 +53,11 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 	static readonly viewType = "brief.chatPanel";
 	private readonly tabs = new Set<ChatTab>();
 	private focusedTab: ChatTab | undefined;
+	private composerFocusedView: ChatView | undefined;
+	private selectionEpoch = 0;
 	private get lastActive(): ChatTab | undefined { return this.focusedTab; }
 	private set lastActive(tab: ChatTab | undefined) {
+		if (this.focusedTab !== tab) this.selectionEpoch++;
 		this.focusedTab = tab;
 		this.syncHistorySelection();
 	}
@@ -102,7 +108,7 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 
 	constructor(private readonly context: vscode.ExtensionContext, private readonly output: vscode.OutputChannel) {
 		this.windowFocus = vscode.window.onDidChangeWindowState((state) => {
-			if (!state.focused) return;
+			if (!state.focused) { this.setComposerFocus(undefined); return; }
 			for (const tab of this.tabs) {
 				if (tab.view) this.requestReadReceipt(tab.view);
 			}
@@ -130,17 +136,94 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 	}
 
 	async newSession(): Promise<void> {
-		await this.enqueue(async () => { await this.move(this.create(), this.location()); });
+		const tab = await this.enqueue(async () => {
+			const tab = this.create();
+			await this.move(tab, this.location());
+			return tab;
+		});
+		// Runtime startup belongs to this tab, not the shared view-mutation queue.
+		await tab.view?.loading;
+	}
+
+	private async newComposerSession(source: ChatTab): Promise<void> {
+		await this.enqueue(async () => {
+			if (source.closed) return;
+			const controller = new SessionController(this.context, this.output);
+			let tab: ChatTab | undefined;
+			try {
+				await controller.initializeBlankFrom(source.controller);
+				if (source.closed || this.disposed) throw new Error("Chat is closed.");
+				tab = this.create(undefined, controller);
+				tab.initialized = Promise.resolve();
+				await this.move(tab, "editor");
+			} catch (error) {
+				if (tab) { tab.view?.panel?.dispose(); if (!tab.closed) this.close(tab); }
+				else controller.dispose();
+				if (!source.closed) { this.lastActive = source; if (source.view) await this.reveal(source.view); }
+				throw error;
+			}
+		});
+	}
+
+	private async newForkSession(source: ChatTab, ordinal?: number): Promise<void> {
+		const epoch = this.selectionEpoch;
+		const sourceEpoch = source.controller.viewEpoch;
+		const sourceAttachment = source.controller.attached;
+		const current = () => !this.disposed && !source.closed && epoch === this.selectionEpoch
+			&& sourceEpoch === source.controller.viewEpoch && sourceAttachment === source.controller.attached;
+		const fork = await source.controller.forkFromUser(ordinal, current);
+		if (!fork) return;
+		const cleanupFile = async () => {
+			// A failed attach can leave a resident worker. Never unlink a leased file.
+			if (await isSessionActive(fork.sessionFile)) {
+				this.output.appendLine(`Unused fork is still active; retained ${fork.sessionFile}`);
+				return;
+			}
+			await unlink(fork.sessionFile).catch(error => { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; });
+		};
+		await this.enqueue(async () => {
+			if (!current()) { await cleanupFile(); return; }
+			const controller = new SessionController(this.context, this.output);
+			let tab: ChatTab | undefined;
+			let draftKey: string | undefined;
+			try {
+				await controller.switchSession(fork.sessionFile, fork.sessionId);
+				if (!current()) throw new Error("The source session changed before the fork opened.");
+				if (!controller.attached || controller.observingId) throw new Error("Could not attach to the forked session.");
+				draftKey = controller.draftKey();
+				await this.context.globalState.update(draftKey, fork.text);
+				if (!current()) throw new Error("The source session changed before the fork opened.");
+				tab = this.create(undefined, controller);
+				tab.initialized = Promise.resolve();
+				await this.move(tab, "editor");
+			} catch (error) {
+				const unused = controller.attached ?? controller.attachAttempt;
+				if (unused) {
+					await controller.sidecar?.request({ type: "kill", activeSessionId: unused.activeSessionId }, 30_000).catch(cleanupError => {
+						this.output.appendLine(`Could not stop unused fork: ${String(cleanupError)}`);
+					});
+				}
+				if (draftKey) await Promise.resolve(this.context.globalState.update(draftKey, undefined)).catch(cleanupError => this.output.appendLine(`Could not clear unused fork draft: ${String(cleanupError)}`));
+				await cleanupFile().catch(cleanupError => this.output.appendLine(`Could not remove unused fork file: ${String(cleanupError)}`));
+				if (tab) { tab.view?.panel?.dispose(); if (!tab.closed) this.close(tab); }
+				else controller.dispose();
+				// Navigation is cancellation, not a failure; never pull focus back.
+				if (!current()) return;
+				if (!source.closed) { this.lastActive = source; if (source.view) await this.reveal(source.view); }
+				throw error;
+			}
+		});
 	}
 
 	async focus(): Promise<void> {
 		const selected = this.lastActive;
-		await this.enqueue(async () => {
+		const tab = await this.enqueue(async () => {
 			const tab = selected && !selected.closed ? selected : this.create();
 			await this.move(tab, this.location());
-			await this.initialize(tab);
-			if (tab.view && !tab.closed) await tab.view.webview.postMessage({ type: "focusComposer" });
+			return tab;
 		});
+		await this.initialize(tab);
+		if (tab.view && !tab.closed && this.lastActive === tab) await tab.view.webview.postMessage({ type: "focusComposer" });
 	}
 
 	async useLocation(location: ChatLocation): Promise<void> {
@@ -162,16 +245,44 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 		if (picked) await this.enqueue(async () => { if (!picked.tab.closed) await this.move(picked.tab, "sidebar"); });
 	}
 
+	private setComposerFocus(view: ChatView | undefined): void {
+		this.composerFocusedView = view;
+		void vscode.commands.executeCommand("setContext", "brief.composerFocus", Boolean(view));
+	}
+
+	async stashOrRestoreDraft(): Promise<void> {
+		const view = this.composerFocusedView;
+		if (!view || this.disposed || view.closed || view.transferring || !view.tab || view.tab.closed ||
+			view.tab.view !== view || !vscode.window.state.focused ||
+			!(view.panel ? view.panel.visible && view.panel.active : view.sidebar?.visible)) return;
+		await view.webview.postMessage({ type: "stashOrRestoreDraft" });
+	}
+
 	async run(action: (controller: SessionController) => Promise<void> | void, reveal = false): Promise<void> {
 		const selected = this.lastActive;
 		const target = await this.enqueue(async () => {
 			const target = selected && !selected.closed ? selected : this.create();
 			if (!target.view) await this.move(target, this.location());
 			else if (reveal) await this.reveal(target.view);
-			await this.initialize(target);
 			return target;
 		});
+		await this.initialize(target);
 		if (!target.closed) await action(target.controller);
+	}
+
+	async promptRenameSession(controller: SessionController): Promise<void> {
+		const epoch = this.selectionEpoch;
+		await controller.promptRenameSession(() => !this.disposed && epoch === this.selectionEpoch);
+	}
+
+	async openSidebarHistory(): Promise<void> {
+		await this.enqueue(async () => {
+			const view = await this.sidebarView();
+			await this.wait(view.ready);
+			// A bound sidebar keeps its chat and draft underneath the existing History overlay.
+			if (view.tab) view.tab.controller.showHistoryView();
+			else await this.showSidebarHistory(view);
+		});
 	}
 
 	private async openSession(source: SessionController, sessionFile: string, sessionId: string): Promise<void> {
@@ -245,8 +356,7 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 		this.syncHistorySelection();
 	}
 
-	private create(session?: SessionReference): ChatTab {
-		const controller = new SessionController(this.context, this.output);
+	private create(session?: SessionReference, controller = new SessionController(this.context, this.output)): ChatTab {
 		const tab: ChatTab = { controller, session, title: "New Session", closed: false, attachment: { dispose() {} } };
 		if (!session) {
 			const id = `new-${getNonce()}`;
@@ -256,7 +366,7 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 		this.paintTabHistory();
 		this.lastActive = tab;
 		tab.attachment = controller.attach({ post: (message) => {
-			if (tab.closed) return;
+			if (tab.closed || tab.startupError) return;
 			if (message.type === "promptAccepted") this.markTabSubmitted(tab);
 			if (message.type === "history") { this.historyRows = message.sessions; message = this.historyMessage(); }
 			if (message.type === "snapshot" || message.type === "status") {
@@ -287,8 +397,9 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 				this.updateTitle(tab);
 				if (this.lastActive === tab) this.syncHistorySelection();
 			}
-			if (message.type === "history" && this.sidebar && !this.sidebar.tab && !this.sidebar.closed) {
-				void this.sidebar.webview.postMessage(message);
+			if (message.type === "history") {
+				this.paintTabHistory();
+				return;
 			}
 			const view = tab.view;
 			if (view && tab.session && ((message.type === "snapshot" && message.status.sessionId === tab.session.sessionId && !message.status.restoring) || (message.type === "event" && message.event.type === "agent_end"))) {
@@ -322,11 +433,49 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 	}
 
 	private async initialize(tab: ChatTab): Promise<void> {
+		if (tab.startupError) throw tab.startupError;
 		const view = tab.view;
 		if (!view) throw new Error("Session has no view.");
 		await this.wait(view.ready);
 		if (view.closed || tab.closed) throw new Error("Chat view was closed.");
 		await (tab.initialized ??= tab.session ? tab.controller.switchSession(tab.session.sessionFile, tab.session.sessionId) : tab.controller.ensureStarted());
+		if (tab.startupError) throw tab.startupError;
+	}
+
+	/** Bound a fresh tab's initial runtime and snapshot without locking view mutations. */
+	private loadFreshView(tab: ChatTab, view: ChatView): Promise<void> {
+		const id = getNonce();
+		const started = Date.now();
+		const log = (phase: string) => this.output.appendLine(`[startup] ${new Date().toISOString()} id=${id} phase=${phase} elapsedMs=${Date.now() - started}`);
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		log("bound");
+		const work = (async () => {
+			await this.initialize(tab);
+			if (tab.closed || tab.startupError || tab.view !== view || view.closed) return;
+			log("initialized");
+			await tab.controller.refreshSnapshot({ keepDraft: tab.entry?.isNew === true });
+			if (!tab.closed && !tab.startupError) log("snapshot");
+		})();
+		const deadline = new Promise<never>((_, reject) => {
+			timer = setTimeout(() => {
+				// A create request may already have succeeded remotely. Never retry it.
+				tab.startupError = new Error("Brief startup timed out after 120s. Check Session History before opening another session.");
+				tab.attachment.dispose();
+				tab.controller.dispose();
+				log("timeout");
+				if (!view.closed && tab.view === view) void view.webview.postMessage({ type: "notice", level: "error", text: tab.startupError.message });
+				reject(tab.startupError);
+			}, 120_000);
+		});
+		const loading = Promise.race([work, deadline]).finally(() => clearTimeout(timer));
+		void loading.then(async () => {
+			if (tab.closed || tab.startupError || tab.view !== view || view.closed) return;
+			await Promise.all([tab.controller.listModels(), tab.controller.listCommands()]);
+			tab.controller.sendFavorites();
+		}).catch((error) => {
+			if (!tab.closed && !tab.startupError) tab.controller.showErrorNotice(`Operation failed: ${String(error)}`);
+		});
+		return loading;
 	}
 
 	private makeView(panel?: vscode.WebviewPanel, sidebar?: vscode.WebviewView): ChatView {
@@ -342,6 +491,15 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 		const receiver = webview.onDidReceiveMessage((raw: unknown) => {
 			const message = parseWebviewMessage(raw);
 			if (!message) { view.tab?.controller.showErrorNotice("Ignored an invalid webview message."); return; }
+			if (message.type === "composerFocusChanged") {
+				if (message.focused && !view.closed && !view.transferring && view.tab && !view.tab.closed &&
+					view.tab.view === view && vscode.window.state.focused &&
+					(view.panel ? view.panel.visible && view.panel.active : view.sidebar?.visible)) {
+					this.lastActive = view.tab;
+					this.setComposerFocus(view);
+				} else if (this.composerFocusedView === view) this.setComposerFocus(undefined);
+				return;
+			}
 			if (message.type === "viewStateCaptured" || message.type === "viewStateRestored" || message.type === "viewStateFailed") {
 				const pending = view.pending.get(message.requestId);
 				if (pending && pending.sessionId === message.sessionId) {
@@ -367,6 +525,49 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 						if (!this.disposed) void vscode.window.showErrorMessage("Could not complete Prime Agent login. Please retry.");
 					}
 				})();
+				return;
+			}
+			if (message.type === "logout") {
+				if (view.closed || view.transferring || view.tab?.closed) return;
+				void (async () => {
+					let removed: boolean;
+					try {
+						removed = await logoutPrimeAgent({
+							command: vscode.workspace.getConfiguration("brief").get<string>("command", "prime-agent"),
+							cwd: view.tab?.controller.workspaceRoot || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || homedir(),
+							helperPath: vscode.Uri.joinPath(this.context.extensionUri, "dist", "prime-auth-helper.mjs").fsPath,
+							signal: this.loginAbort.signal,
+						});
+					} catch {
+						if (!this.disposed) void vscode.window.showErrorMessage("Could not remove the saved Prime Agent credential. Please retry.");
+						return;
+					}
+					if (!removed || this.disposed || view.closed || view.transferring) return;
+					// Use this view's current tab, not the tab selected when the picker opened.
+					const tab = view.tab;
+					if (!tab || tab.closed) return;
+					try {
+						if (await tab.controller.listModels({ startAgent: false })) return;
+					} catch { /* Never display runtime errors that may contain credentials. */ }
+					if (!this.disposed) void vscode.window.showErrorMessage("The saved credential was removed, but the model list could not be refreshed. No agent was started or restarted.");
+				})();
+				return;
+			}
+			if (message.type === "openSidebarHistory") {
+				if (!view.closed && !view.transferring) void this.openSidebarHistory().catch((error) => {
+					(view.tab?.controller ?? this.history()).showErrorNotice(`Could not open Session History: ${String(error)}`);
+				});
+				return;
+			}
+			// Read-only queries must not initialize a tab or start a worker.
+			if (message.type === "queryStatistics") {
+				if (view.closed || view.transferring || view.tab?.closed) return;
+				const target = view.tab;
+				const reply = (response: HostToWebview) => {
+					if (!view.closed && !view.transferring && view.tab === target) void view.webview.postMessage(response);
+				};
+				if (!target) reply({ type: "statistics", kind: message.kind, requestId: message.requestId, error: "No available session connection." });
+				else void handleMessage(message, target.controller, reply);
 				return;
 			}
 			if (message.type === "ready") view.markReady();
@@ -411,9 +612,12 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 				return;
 			}
 			void (async () => {
+				if (message.type === "newSession") { await this.newSession(); return; }
 				await this.initialize(tab);
 				if (view.closed || tab.closed || tab.view !== view) return;
-				if (message.type === "newSession") { await this.newSession(); return; }
+				if (message.type === "promptRenameSession") { await this.promptRenameSession(tab.controller); return; }
+				if (message.type === "newSessionFromCurrent") { await this.newComposerSession(tab); return; }
+				if (message.type === "forkSession" || message.type === "forkFromUser") { await this.newForkSession(tab, message.type === "forkFromUser" ? message.ordinal : undefined); return; }
 				if (message.type === "switchSession") { await this.openSession(tab.controller, message.path, message.sessionId); return; }
 				await handleMessage(message, tab.controller, (reply) => {
 					if (reply.type === "promptAccepted" && tab.entry) {
@@ -430,15 +634,18 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 			});
 		});
 		const visibility = panel ? panel.onDidChangeViewState(() => {
+			if ((!panel.active || !panel.visible) && this.composerFocusedView === view) this.setComposerFocus(undefined);
 			if (panel.active && view.tab) this.lastActive = view.tab;
 			this.refreshVisible(view);
 			this.requestReadReceipt(view);
 		}) : sidebar!.onDidChangeVisibility(() => {
+			if (!sidebar!.visible && this.composerFocusedView === view) this.setComposerFocus(undefined);
 			this.refreshVisible(view);
 			this.requestReadReceipt(view);
 		});
 		view.disposeBinding = () => {
 			if (view.closed) return;
+			if (this.composerFocusedView === view) this.setComposerFocus(undefined);
 			view.closed = true; view.markReady(); receiver.dispose(); visibility.dispose();
 			for (const pending of view.pending.values()) pending.reject(new Error("Chat view was closed."));
 			view.pending.clear();
@@ -527,6 +734,10 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 				await target.webview.postMessage({ type: "setViewMoving", moving: false });
 			}
 			tab.controller.sendCachedModels();
+			if (!source && !displaced && !tab.state) {
+				target.loading = this.loadFreshView(tab, target);
+				return;
+			}
 			await this.initialize(tab);
 			await tab.controller.refreshSnapshot({ keepDraft: tab.entry?.isNew === true });
 			if (tab.state) await this.restore(target, tab, tab.state);
@@ -599,6 +810,7 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 
 	dispose(): void {
 		this.disposed = true;
+		this.setComposerFocus(undefined);
 		this.loginAbort.abort();
 		this.windowFocus.dispose();
 		this.historyAttachment?.dispose();
@@ -611,6 +823,9 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 
 async function handleMessage(message: WebviewToHost, controller: SessionController, reply: (message: HostToWebview) => void): Promise<void> {
 	switch (message.type) {
+		case "queryStatistics":
+			await controller.queryStatistics(message.kind, message.requestId, reply);
+			return;
 		case "createAttachment":
 			await controller.createAttachment(message.sessionId, message.attachment, reply);
 			return;
@@ -632,9 +847,6 @@ async function handleMessage(message: WebviewToHost, controller: SessionControll
 			return;
 		case "exportChat":
 			await controller.exportChat();
-			return;
-		case "forkFromUser":
-			await controller.forkFromUser(message.ordinal);
 			return;
 		case "browseChild":
 			await controller.browseChild(message.browseRef);
@@ -662,6 +874,9 @@ async function handleMessage(message: WebviewToHost, controller: SessionControll
 			return;
 		case "copyConversation":
 			await controller.copyConversation();
+			return;
+		case "copyLastReply":
+			await controller.copyLastReply();
 			return;
 		case "dismissInstallPrompt":
 			await controller.dismissInstallPrompt();

@@ -2,13 +2,76 @@
  * Workspace editor helpers: file search, image pick, open-at-line.
  * Assigned onto SessionController.prototype — no extra class layer.
  */
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { resolvePrimeAuthRuntime } from "./prime-auth-runtime.js";
 import { isFilePath } from "./file-link.js";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import type { FileSearchItem, HostToWebview, ImageAttachment } from "./protocol.js";
 import type { SessionController } from "./session-controller.js";
 
+
+/** Runs only SessionManager operations in the installed SDK, never an agent/model. */
+const forkScript = `
+import { pathToFileURL } from "node:url";
+import { readFileSync, unlinkSync } from "node:fs";
+import { dirname } from "node:path";
+import { createHash } from "node:crypto";
+const [sdk, source, entryId, expected] = process.argv.slice(1);
+const { SessionManager } = await import(pathToFileURL(sdk).href);
+const fingerprint = () => createHash("sha256").update(readFileSync(source)).digest("hex");
+const revision = fingerprint();
+// In-memory loading cannot repair or migrate the source file on disk.
+const manager = SessionManager.inMemory();
+manager.setSessionFile(source);
+const branch = manager.getBranch();
+const visible = new Set(manager.buildSessionContext().messages);
+const users = branch.filter(e => e.type === "message" && e.message.role === "user");
+if (!entryId) {
+ console.log(JSON.stringify({ revision, messages: users.map(e => ({ entryId: e.id, visible: visible.has(e.message) })) }));
+} else {
+ if (revision !== expected) throw new Error("The source conversation changed. Open Fork again.");
+ const selected = users.find(e => e.id === entryId);
+ if (!selected) throw new Error("The selected message is no longer on the current branch.");
+ const content = selected.message.content;
+ if (typeof content !== "string" && (!Array.isArray(content) || content.some(c => c.type !== "text" || typeof c.text !== "string"))) {
+  throw new Error("Cannot fork this message: its attachments cannot be fully restored. Nothing was changed.");
+ }
+ const text = typeof content === "string" ? content : content.map(c => c.text).join("");
+ if (text.length > 200000) throw new Error("The selected message exceeds the draft size limit.");
+ let fork;
+ try {
+  fork = SessionManager.forkFrom(source, manager.getHeader().cwd, dirname(source));
+  const parentId = fork.getEntry(entryId)?.parentId; // forkFrom re-links dropped git_state entries.
+  if (parentId) fork.branch(parentId); else fork.resetLeaf();
+  // The SDK copies the tree; persist the selected active leaf, not the old tail.
+  fork.appendCustomEntry("brief_fork", { entryId });
+  fork.flushNow(); // Also persist a first-message fork with no assistant history.
+  if (fingerprint() !== revision) throw new Error("The source conversation changed. Open Fork again.");
+  console.log(JSON.stringify({ sessionFile: fork.getSessionFile(), sessionId: fork.getSessionId(), text }));
+ } catch (error) {
+  if (fork?.getSessionFile()) unlinkSync(fork.getSessionFile());
+  throw error;
+ }
+}
+`;
+
+const fileSearches = new WeakMap<SessionController, vscode.CancellationTokenSource>();
+
 export const workspaceMethods = {
+async forkFile(this: SessionController, sessionFile: string, entryId?: string, revision?: string): Promise<{ revision: string; messages: Array<{ entryId: string; visible: boolean }>; sessionFile: string; sessionId: string; text: string }> {
+ const runtime = await resolvePrimeAuthRuntime({ command: vscode.workspace.getConfiguration("brief").get<string>("command", "prime-agent"), cwd: this.workspaceRoot });
+ try {
+  const { stdout } = await promisify(execFile)(runtime.node, ["--input-type=module", "-e", forkScript, runtime.sdk, sessionFile, entryId ?? "", revision ?? ""], { cwd: this.workspaceRoot, env: runtime.env, timeout: 30_000, maxBuffer: 4 * 1024 * 1024 });
+  return JSON.parse(stdout.trim().split("\n").at(-1)!);
+ } catch (error) {
+  const stderr = (error as { stderr?: string }).stderr ?? "";
+  const detail = stderr.match(/Error: ([^\n]+)/)?.[1];
+  throw new Error(detail ?? "The installed Prime Agent SDK could not prepare the fork.");
+ }
+},
+
 getActiveSelection(this: SessionController): { path: string; startLine: number; endLine: number; text: string; languageId: string } | null {
 	const editor = vscode.window.activeTextEditor;
 	if (!editor) return null;
@@ -36,60 +99,80 @@ getActiveFilePath(this: SessionController): string | null {
 },
 
 async searchFiles(this: SessionController, query: string, requestId: number, reply: (message: HostToWebview) => void = (message) => this.broadcast(message)): Promise<void> {
+	fileSearches.get(this)?.cancel();
+	const source = new vscode.CancellationTokenSource();
+	fileSearches.set(this, source);
 	const epoch = this.viewEpoch;
 	const attached = this.attached;
 	const observingId = this.observingId;
+	const current = (): boolean => !source.token.isCancellationRequested && !this.disposed
+		&& epoch === this.viewEpoch && this.attached === attached && this.observingId === observingId;
 	const config = vscode.workspace.getConfiguration("brief");
 	const configuredMax = config.get<number>("maxFileSearchResults", 40);
 	const max = Math.max(1, Math.min(100, Number.isFinite(configuredMax) ? Math.floor(configuredMax) : 40));
 	const trimmed = query.trim().slice(0, 512);
-	// This is a filename filter, not a glob-expression input. Drop glob syntax
-	// before building the VS Code glob so a hostile webview cannot widen an
-	// otherwise bounded search into an unexpectedly expensive one.
+	// This is a filename filter, not a glob-expression input.
 	const literal = trimmed.replace(/[{}\[\]*?!\\]/g, "");
 	const pattern = literal ? `**/*${literal.replace(/[\s]+/g, "*")}*` : "**/*";
 	const exclude = "**/{node_modules,.git,dist,out,.turbo,.next,coverage}/**";
 	try {
-		const uris = await vscode.workspace.findFiles(pattern, exclude, max);
-		if (this.disposed || epoch !== this.viewEpoch || this.attached !== attached || this.observingId !== observingId) return;
-		const files = uris.map((uri) => this.workspaceRelativePath(uri)).filter((file): file is string => file !== null);
-		const dirs = await this.searchDirs(trimmed, Math.max(8, Math.floor(max / 4)));
-		if (this.disposed || epoch !== this.viewEpoch || this.attached !== attached || this.observingId !== observingId) return;
+		let files: FileSearchItem[] = [];
+		try {
+			const uris = await vscode.workspace.findFiles(pattern, exclude, max, source.token);
+			if (!current()) return;
+			files = uris.map((uri) => this.workspaceRelativePath(uri))
+				.filter((file): file is string => file !== null).map((path) => ({ path, isDir: false }));
+		} catch {
+			if (!current()) return;
+			// Directory completion remains useful if native file search fails.
+		}
+		files.sort((a, b) => a.path.localeCompare(b.path));
+		reply({ type: "fileSearchResults", requestId, files, pending: true });
+		let dirs: string[] = [];
+		try {
+			dirs = await this.searchDirs(trimmed, Math.max(8, Math.floor(max / 4)), source.token);
+		} catch {
+			// A folder failure must not discard already available files.
+		}
+		if (!current()) return;
 		const combined = [
 			...dirs.map((path) => ({ path, isDir: true })),
-			...files.map((path) => ({ path, isDir: false })),
+			...files,
 		].sort((a, b) => a.path.localeCompare(b.path));
-		reply({ type: "fileSearchResults", requestId, files: combined });
-	} catch {
-		if (!this.disposed && epoch === this.viewEpoch && this.attached === attached && this.observingId === observingId) {
-			reply({ type: "fileSearchResults", requestId, files: [] });
-		}
+		reply({ type: "fileSearchResults", requestId, files: combined, pending: false });
+	} finally {
+		if (fileSearches.get(this) === source) fileSearches.delete(this);
+		source.dispose();
 	}
 },
 
-async searchDirs(this: SessionController, query: string, max: number): Promise<string[]> {
+async searchDirs(this: SessionController, query: string, max: number, token?: vscode.CancellationToken): Promise<string[]> {
 	const folder = vscode.workspace.workspaceFolders?.[0];
 	if (!folder) return [];
+	const epoch = this.viewEpoch;
+	const attached = this.attached;
+	const observingId = this.observingId;
+	const stopped = (): boolean => !!token?.isCancellationRequested || this.disposed
+		|| epoch !== this.viewEpoch || this.attached !== attached || this.observingId !== observingId;
 	const out: string[] = [];
 	const prune = new Set(["node_modules", ".git", "dist", "out", ".turbo", ".next", "coverage", ".vscode-test"]);
 	const needle = query.toLowerCase();
 	const visit = async (relDir: string, uri: vscode.Uri, depth: number): Promise<void> => {
-			if (out.length >= max || depth > 5) return;
-			let entries: [string, vscode.FileType][];
-			try {
-				entries = await vscode.workspace.fs.readDirectory(uri);
-			} catch {
-				return;
-			}
-			for (const [name, type] of entries) {
-				if (type !== vscode.FileType.Directory || name.startsWith(".") || prune.has(name)) continue;
-				const rel = relDir ? `${relDir}/${name}` : name;
-				if ((needle === "" || rel.toLowerCase().includes(needle)) && out.length < max) {
-					out.push(rel);
-				}
-				await visit(rel, vscode.Uri.joinPath(uri, name), depth + 1);
-				if (out.length >= max) return;
-			}
+		if (stopped() || out.length >= max || depth > 5) return;
+		let entries: [string, vscode.FileType][];
+		try {
+			entries = await vscode.workspace.fs.readDirectory(uri);
+		} catch {
+			return;
+		}
+		for (const [name, type] of entries) {
+			if (stopped()) return;
+			if (type !== vscode.FileType.Directory || name.startsWith(".") || prune.has(name)) continue;
+			const rel = relDir ? `${relDir}/${name}` : name;
+			if ((needle === "" || rel.toLowerCase().includes(needle)) && out.length < max) out.push(rel);
+			await visit(rel, vscode.Uri.joinPath(uri, name), depth + 1);
+			if (out.length >= max) return;
+		}
 	};
 	await visit("", folder.uri, 0);
 	return out;

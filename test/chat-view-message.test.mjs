@@ -13,6 +13,12 @@ const result = await esbuild.build({
 });
 const { parseWebviewMessage } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString("base64")}`);
 
+assert.deepEqual(parseWebviewMessage({ type: "newSessionFromCurrent", extra: true }), { type: "newSessionFromCurrent" });
+assert.deepEqual(parseWebviewMessage({ type: "newSession" }), { type: "newSession" });
+for (const type of ["forkSession", "exportChat", "copyLastReply"]) {
+	assert.deepEqual(parseWebviewMessage({ type, text: "not a prompt", attachments: ["not forwarded"] }), { type });
+}
+
 const prompt = {
 	type: "prompt",
 	payload: {
@@ -47,6 +53,7 @@ assert.equal(parseWebviewMessage({ type: "prompt", payload: { ...prompt.payload,
 assert.equal(parsedPrompt.payload.sessionId, undefined, "an unstamped prompt still parses (older webview build)");
 
 assert.deepEqual(parseWebviewMessage({ type: "login", command: "untrusted" }), { type: "login" });
+assert.deepEqual(parseWebviewMessage({ type: "logout", provider: "untrusted" }), { type: "logout" });
 assert.equal(parseWebviewMessage(null), undefined);
 assert.equal(parseWebviewMessage({ type: "unknown" }), undefined);
 assert.equal(parseWebviewMessage({ type: "prompt", payload: { ...prompt.payload, images: [{ data: "not base64", mimeType: "image/png" }] } }), undefined);
@@ -109,3 +116,10 @@ assert.equal(parseWebviewMessage({ ...refPrompt, payload: { ...refPrompt.payload
 assert.equal(parseWebviewMessage({ ...refPrompt, payload: { ...refPrompt.payload, attachments: [attachment, attachment] } }), undefined);
 assert.ok(parseWebviewMessage({ type: "draftChanged", sessionId: "session", text: "original", attachmentDraft: { text: "[Text 1]", attachments: [attachment] } }));
 console.log("PASS attachment bus bounds, markers, duplicate refs, draft refs");
+
+for (const type of ["promptRenameSession", "openSidebarHistory"]) {
+ assert.deepEqual(parseWebviewMessage({ type, name: "ignored" }), { type });
+}
+assert.deepEqual(parseWebviewMessage({ type: "renameSession", name: "Name with spaces" }), { type: "renameSession", name: "Name with spaces" });
+assert.equal(parseWebviewMessage({ type: "renameSession", name: 5 }), undefined);
+assert.equal(parseWebviewMessage({ type: "renameSession", name: "x".repeat(257) }), undefined);

@@ -506,12 +506,16 @@ export class DaemonSidecar {
 	 * not replace the runtime inside an existing worker, so a running session
 	 * keeps going.
 	 */
-	async createResident(options: { cwd: string; name?: string; sessionPath?: string }): Promise<SessionSummaryRef> {
+	async createResident(options: { cwd: string; name?: string; sessionPath?: string; provider?: string; model?: string; thinking?: string }): Promise<SessionSummaryRef> {
 		const data = await this.request<SessionSummaryRef | undefined>(
 			{
 				type: "create",
 				lifecycle: "resident",
-				config: { cwd: options.cwd },
+				config: { cwd: options.cwd,
+					...(options.provider ? { provider: options.provider } : {}),
+					...(options.model ? { model: options.model } : {}),
+					...(options.thinking ? { thinking: options.thinking } : {}),
+				},
 				...(options.name ? { name: options.name } : {}),
 				...(options.sessionPath ? { sessionPath: options.sessionPath } : {}),
 			},

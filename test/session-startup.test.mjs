@@ -42,6 +42,14 @@ function controllerFor(memory, rows) {
 	return { controller, actions };
 }
 
+const uncertain = controllerFor(new Map(), []);
+let uncertainCreates = 0;
+uncertain.controller.connectDaemon = async () => ({ createResident: async () => { uncertainCreates++; throw new Error("create response lost"); } });
+let uncertainError;
+await uncertain.controller.ensureStarted().catch(error => { uncertainError = error; });
+check("uncertain create failure rejects initialization rather than continuing into snapshot startup", uncertainError?.message === "create response lost" && uncertainCreates === 1);
+uncertain.controller.dispose();
+
 const livePath = path.join(root, "remembered.jsonl");
 fs.writeFileSync(livePath, "{}\n");
 const daemonless = new SessionController(context(new Map()), output);

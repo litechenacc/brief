@@ -15,6 +15,8 @@ const panels = [];
 const terminalCalls = [];
 const loginCalls = [];
 let finishLogin;
+const logoutCalls = [], authErrors = [];
+let finishLogout, rejectLogout;
 let chatLocation = "editor";
 let sidebar;
 let pickedSession;
@@ -69,17 +71,23 @@ class Controller {
 	constructor() { this.historyCompletedAt = new Map(); this.calls = []; this.disposed = false; controllers.push(this); }
 	attach(sink) { this.sink = sink; return disposable(() => { this.detached = true; }); }
 	async ensureStarted() { this.calls.push(["start"]); await startGate; }
+	async initializeBlankFrom(source) { this.calls.push(["blankFrom", source]); if (source.failBlank) throw new Error("creation failed"); }
 	async setModel(provider, modelId) { this.calls.push(["setModel", provider, modelId]); }
-	async switchSession(...args) { this.calls.push(["switch", ...args]); await this.switchGate; }
+	async switchSession(...args) { this.calls.push(["switch", ...args]); if (args[1] === "fork") this.attached = { activeSessionId: "fork-worker" }; await this.switchGate; }
+	draftKey() { return "fork-draft"; }
+	async forkFromUser(ordinal, current) { this.calls.push(["fork", ordinal, current]); return this.forkResult; }
 	async refreshSnapshot(...args) { this.calls.push(["snapshot", ...args]); await this.refreshGate; }
 	sendCachedModels() { this.calls.push(["cachedModels"]); }
-	async listModels() { this.modelRefreshes = (this.modelRefreshes ?? 0) + 1; await this.modelGate; } async listCommands() {} sendFavorites() {}
+	async listModels(options) { this.modelOptions = options; this.modelRefreshes = (this.modelRefreshes ?? 0) + 1; await this.modelGate; if (this.modelError) throw this.modelError; return this.modelResult ?? true; } async listCommands() {} sendFavorites() {}
 	async listHistory() { this.calls.push(["history"]); this.sink.post({ type: "history", sessions: [] }); }
 	async resolveHistorySession(path, id) { this.calls.push(["resolve", path, id]); return this.historyGate ? await this.historyGate : path.startsWith("/known/") ? { path, id } : undefined; }
 	async prompt(payload, reply) { this.calls.push(["prompt", payload]); reply({ type: "promptAccepted", clientRequestId: payload.clientRequestId }); }
 	persistDraft(...args) { this.calls.push(["draft", ...args]); }
 	markHistorySessionOpened(...args) { this.calls.push(["read", ...args]); }
 	async abort() { this.calls.push(["abort"]); }
+	async renameSession(name) { this.calls.push(["rename", name]); }
+	async promptRenameSession(valid) { this.calls.push(["renamePrompt", valid]); }
+	showHistoryView() { this.calls.push(["showHistory"]); this.sink.post({ type: "showHistory" }); }
 	newSession() { throw new Error("New tab must not replace an existing session"); }
 	showErrorNotice(text) { throw new Error(text); }
 	dispose() { this.disposed = true; }
@@ -90,11 +98,12 @@ const stub = {
 	workspace: { getConfiguration: () => ({ get: (key, fallback) => key === "chatLocation" ? chatLocation : fallback,
 		update: async (key, value, target) => { configurationUpdates.push([key, value, target]); chatLocation = value; } }) },
 	commands: { executeCommand: async (command) => {
+		if (command === "setContext") return;
 		assert.equal(command, "brief.chat.focus");
 		if (!sidebar || sidebar.disposed) { sidebar = makePanel(false); manager.resolveWebviewView(sidebar); }
 	} },
 	ThemeIcon: class { constructor(id) { this.id = id; } },
-	window: { createTerminal(name) {
+	window: { showErrorMessage: async (text) => { authErrors.push(text); }, createTerminal(name) {
 		terminalCalls.push(["create", name]);
 		return { show: () => terminalCalls.push(["show"]), sendText: (...args) => terminalCalls.push(["sendText", ...args]) };
 	}, state: { focused: true }, onDidChangeWindowState: windowStateChange.subscribe, showQuickPick: async (items) => items.find((item) => item.description === pickedSession), createWebviewPanel(type, title, column, options) {
@@ -112,7 +121,7 @@ try {
 	Module._load = function (name, ...args) {
 		if (name === "vscode") return stub;
 		if (name === "test-controller") return { SessionController: Controller };
-		if (name === "test-auth") return { loginPrimeAgent: (options) => { loginCalls.push(options); return new Promise((resolve) => { finishLogin = resolve; }); } };
+		if (name === "test-auth") return { logoutPrimeAgent: (options) => { logoutCalls.push(options); return new Promise((resolve, reject) => { finishLogout = resolve; rejectLogout = reject; }); }, loginPrimeAgent: (options) => { loginCalls.push(options); return new Promise((resolve) => { finishLogin = resolve; }); } };
 		return originalLoad.call(this, name, ...args);
 	};
 	const { ChatPanels } = require(bundle);
@@ -153,6 +162,32 @@ try {
 	await tick();
 	assert.equal(ca.modelRefreshes, beforeRefresh + 1, "successful login reloads shared credentials via the model catalog");
 	assert.equal(JSON.stringify(ca.calls), beforeLogin, "successful login must not send a prompt");
+	const beforeLogoutRefresh = ca.modelRefreshes;
+	const otherRefresh = cb.modelRefreshes;
+	a.send({ type: "logout", command: "untrusted" });
+	assert.equal(logoutCalls.length, 1);
+	assert.equal(logoutCalls[0].command, "prime-agent");
+	assert.equal(logoutCalls[0].agentDir, undefined);
+	finishLogout(false); await tick();
+	assert.equal(ca.modelRefreshes, beforeLogoutRefresh, "cancelled or failed removal skips refresh");
+	a.send({ type: "logout" }); finishLogout(true); await tick();
+	assert.equal(ca.modelRefreshes, beforeLogoutRefresh + 1);
+	assert.equal(cb.modelRefreshes, otherRefresh, "logout refreshes issuing editor rather than active editor");
+	assert.deepEqual(ca.modelOptions, { startAgent: false });
+	assert.equal(JSON.stringify(ca.calls), beforeLogin, "logout does not initialize, prompt, stop, or change models");
+	ca.modelResult = false;
+	a.send({ type: "logout" }); finishLogout(true); await tick();
+	assert.match(authErrors.pop(), /credential was removed, but the model list could not be refreshed/);
+	ca.modelResult = true; ca.modelError = new Error("secret-refresh-token");
+	a.send({ type: "logout" }); finishLogout(true); await tick();
+	const refreshError = authErrors.pop();
+	assert.match(refreshError, /credential was removed/);
+	assert.ok(!refreshError.includes("secret-refresh-token"));
+	ca.modelError = undefined;
+	a.send({ type: "logout" }); rejectLogout(new Error("secret-removal-token")); await tick();
+	const removalError = authErrors.pop();
+	assert.match(removalError, /Could not remove/);
+	assert.ok(!removalError.includes("secret-removal-token"));
 	assert.notEqual(ca, cb);
 	assert.deepEqual(a.iconPath, { light: { fsPath: join(process.cwd(), "media/tab-light.svg") }, dark: { fsPath: join(process.cwd(), "media/tab-dark.svg") } });
 	assert.deepEqual(b.iconPath, { light: { fsPath: join(process.cwd(), "media/tab-light.svg") }, dark: { fsPath: join(process.cwd(), "media/tab-dark.svg") } });
@@ -267,10 +302,11 @@ try {
 	assert.deepEqual(cc.calls.find(([name]) => name === "switch"), ["switch", "/known/c.jsonl", "session-c"]);
 	assert.ok(!cb.calls.some(([name]) => name === "switch"), "history preserves source session");
 	const beforeNew = a.webview.messages.length;
-	a.send({ type: "newSession" }); await tick();
+	a.send({ type: "newSessionFromCurrent" }); await tick();
 	assert.equal(panels.length, 4); assert.ok(a.webview.messages.slice(beforeNew).every((message) => message.type === "history"), "new tab only updates history in existing chats");
 	panels[3].send({ type: "ready" }); await tick();
-	assert.ok(controllers[3].calls.some(([name]) => name === "start"));
+	assert.ok(controllers[3].calls.some(([name, source]) => name === "blankFrom" && source === ca));
+	assert.ok(!controllers[3].calls.some(([name]) => name === "start"), "prepared session must not create a second worker");
 	c.activate(); b.dispose();
 	assert.ok(cb.disposed && cb.detached); assert.ok(!ca.disposed && !cc.disposed);
 	await manager.run((ctrl) => ctrl.abort());
@@ -444,6 +480,14 @@ try {
 	const beforeCatalog = controllers.length;
 	sidebar = makePanel(false);
 	manager.resolveWebviewView(sidebar); await tick();
+	assert.equal(manager.sidebar.tab, undefined);
+	const noSessionStarts = JSON.stringify(controllers.map(c => c.calls));
+	sidebar.send({ type: "logout" });
+	const noSessionLogoutCount = logoutCalls.length;
+	assert.ok(noSessionLogoutCount > 1, "logout opens without a session");
+	finishLogout(true); await tick();
+	assert.equal(JSON.stringify(controllers.map(c => c.calls)), noSessionStarts, "sessionless logout starts no agent");
+
 	assert.equal(controllers.length, beforeCatalog + 1);
 	assert.deepEqual(controllers.at(-1).calls, [["history"]]);
 	assert.ok(sidebar.webview.messages.some(m => m.type === "setHistoryMode" && m.enabled));
@@ -501,6 +545,169 @@ try {
 	assert.equal(latestHistory().find((row) => row.id === "sent")?.status, undefined, "unknown runtime does not keep red");
 	sentPanel.dispose();
 	assert.ok(latestHistory().some((row) => row.id === "sent"), "closing submitted tab retains history entry");
+	{
+	// Slash controls route to their issuing view, not the globally active tab.
+	await manager.newSession();
+	const renamePanel = panels.at(-1), renameController = controllers.at(-1);
+	await manager.newSession();
+	const otherPanel = panels.at(-1), otherController = controllers.at(-1);
+	renamePanel.send({ type: "renameSession", name: "Name with spaces" });
+	renamePanel.send({ type: "promptRenameSession" });
+	await tick();
+	assert.ok(renameController.calls.some(([kind, name]) => kind === "rename" && name === "Name with spaces"));
+	assert.ok(!otherController.calls.some(([kind]) => kind === "rename"));
+	const valid = renameController.calls.find(([kind]) => kind === "renamePrompt")[1];
+	assert.equal(valid(), true);
+	renamePanel.activate(); otherPanel.activate();
+	assert.equal(valid(), false, "switching away and back cancels pending rename");
+	const tabCount = manager.tabs.size;
+	const issuingView = renameController === manager.lastActive?.controller ? manager.lastActive.view : [...manager.tabs].find(t => t.controller === renameController).view;
+	const startsBefore = controllers.reduce((n, c) => n + c.calls.filter(([kind]) => kind === "start" || kind === "switch").length, 0);
+	renamePanel.send({ type: "openSidebarHistory" }); await tick(); await tick();
+	assert.equal(manager.tabs.size, tabCount, "opening History creates no session");
+	assert.equal([...manager.tabs].find(t => t.controller === renameController).view, issuingView, "resume does not move editor chat");
+	assert.equal(controllers.reduce((n, c) => n + c.calls.filter(([kind]) => kind === "start" || kind === "switch").length, 0), startsBefore);
+	assert.ok(sidebar.webview.messages.some(m => m.type === "setHistoryMode" || m.type === "showHistory"));
+	await manager.useLocation("sidebar");
+	const bound = manager.sidebar.tab, boundCount = manager.tabs.size;
+	const swappedTab = [...manager.tabs].find(t => t !== bound && !t.closed);
+	const boundRefresh = bound.controller.modelRefreshes;
+	const swappedRefresh = swappedTab.controller.modelRefreshes ?? 0;
+	sidebar.send({ type: "logout" });
+	manager.sidebar.tab = swappedTab;
+	finishLogout(true); await tick();
+	assert.equal(swappedTab.controller.modelRefreshes, swappedRefresh + 1, "logout refreshes current tab after picker closes");
+	assert.equal(bound.controller.modelRefreshes, boundRefresh, "old sidebar tab is not refreshed");
+	manager.sidebar.tab = bound;
+
+	sidebar.send({ type: "openSidebarHistory" }); await tick(); await tick();
+	assert.equal(manager.sidebar.tab, bound, "sidebar resume retains its session binding");
+	assert.equal(manager.tabs.size, boundCount);
+	assert.ok(bound.controller.calls.some(([kind]) => kind === "showHistory"));
+	}
+	// Composer /new ignores sidebar preference and never moves the source view.
+	chatLocation = "sidebar";
+	await manager.newSession();
+	const sidebarSource = controllers.at(-1);
+	const sidebarView = sidebar;
+	sidebarView.send({ type: "composerFocusChanged", focused: true });
+	await manager.stashOrRestoreDraft();
+	assert.equal(sidebarView.webview.messages.at(-1).type, "stashOrRestoreDraft", "shortcut reaches focused sidebar composer");
+	sidebarView.send({ type: "composerFocusChanged", focused: false });
+	const afterShortcut = sidebarView.webview.messages.length;
+	await manager.stashOrRestoreDraft();
+	assert.equal(sidebarView.webview.messages.length, afterShortcut, "shortcut ignores unfocused composer");
+	const oldMessages = sidebarView.webview.messages.length;
+	const composerPanelCount = panels.length;
+	sidebarView.send({ type: "newSessionFromCurrent" }); await tick();
+	assert.equal(panels.length, composerPanelCount + 1);
+	assert.equal(sidebarView.disposed, false);
+	assert.ok(sidebarView.webview.messages.slice(oldMessages).every((message) => message.type === "history"), "source draft/stash must not receive reset or handoff");
+	assert.ok(controllers.at(-1).calls.some(([name, source]) => name === "blankFrom" && source === sidebarSource));
+	const errors = [];
+	sidebarSource.showErrorNotice = (text) => errors.push(text);
+	sidebarSource.failBlank = true;
+	const focusedEditor = panels.at(-1);
+	focusedEditor.send({ type: "composerFocusChanged", focused: true });
+	await manager.stashOrRestoreDraft();
+	assert.equal(focusedEditor.webview.messages.at(-1).type, "stashOrRestoreDraft", "shortcut reaches focused editor composer");
+	focusedEditor.send({ type: "composerFocusChanged", focused: false });
+	const beforeFailure = panels.length;
+	sidebarView.send({ type: "newSessionFromCurrent" }); await tick();
+	assert.equal(panels.length, beforeFailure, "failed preparation creates no editor");
+	assert.equal(controllers.at(-1).disposed, true, "failed controller is released");
+	assert.equal(sidebarSource.disposed, false);
+	assert.ok(errors.some((text) => text.includes("creation failed")));
+	const beforeHeaderNew = panels.length;
+	sidebarView.send({ type: "newSession" }); await tick();
+	assert.equal(panels.length, beforeHeaderNew, "header + still follows sidebar preference");
+	assert.ok(controllers.at(-1).calls.some(([name]) => name === "start"), "header + retains normal initialization");
+	// Fork slash and message button share a new-editor route, including sidebar source.
+	const forkSource = manager.sidebar.tab.controller;
+	const draftWrites = [];
+	manager.context.globalState.update = async (...args) => { draftWrites.push(args); };
+	forkSource.forkResult = { sessionFile: "/known/fork.jsonl", sessionId: "fork", text: "selected editable message" };
+	const forkCount = panels.length, sourceMessages = sidebar.webview.messages.length;
+	sidebar.send({ type: "forkSession" }); await tick(); await tick();
+	assert.equal(panels.length, forkCount + 1, "sidebar fork opens editor despite sidebar preference");
+	assert.equal(manager.sidebar.tab.controller, forkSource);
+	assert.ok(forkSource.calls.some(([kind, ordinal]) => kind === "fork" && ordinal === undefined));
+	assert.ok(controllers.at(-1).calls.some(([kind, file, id]) => kind === "switch" && file === "/known/fork.jsonl" && id === "fork"));
+	assert.deepEqual(draftWrites.at(-1), ["fork-draft", "selected editable message"]);
+	assert.ok(sidebar.webview.messages.slice(sourceMessages).every(m => m.type === "history"), "source draft, attachments and stash untouched");
+	assert.ok(!controllers.at(-1).calls.some(([kind]) => kind === "prompt" || kind === "start"));
+	sidebar.send({ type: "forkFromUser", ordinal: 2 }); await tick(); await tick();
+	assert.equal(panels.length, forkCount + 2);
+	assert.ok(forkSource.calls.some(([kind, ordinal]) => kind === "fork" && ordinal === 2));
+	manager.context.globalState.update = async (...args) => {
+		draftWrites.push(args);
+		if (args[1]) panels.find(panel => !panel.disposed).activate();
+	};
+	await manager.newForkSession(manager.sidebar.tab);
+	assert.equal(panels.length, forkCount + 2, "session switch during draft save cancels tab creation");
+	assert.deepEqual(draftWrites.at(-1), ["fork-draft", undefined], "cancel clears only the prepared fork draft");
+	assert.equal(forkSource.disposed, false);
+	forkSource.forkResult = undefined;
+	sidebar.send({ type: "forkSession" }); await tick();
+	assert.equal(panels.length, forkCount + 2, "cancel creates no tab");
+	// A blocked startup or snapshot cannot hold the shared view queue.
+	manager.dispose();
+	chatLocation = "editor";
+	const startupLogs = [];
+	manager = new ChatPanels({ extensionUri: { fsPath: process.cwd() }, globalState: { get: () => [] } }, { appendLine: line => startupLogs.push(line) });
+	let releaseSlow;
+	startGate = new Promise(resolve => { releaseSlow = resolve; });
+	const slowOpening = manager.newSession();
+	await tick();
+	const slowPanel = panels.at(-1), slowController = controllers.at(-1);
+	startGate = undefined;
+	let fastDone = false;
+	const fastOpening = manager.newSession().then(() => { fastDone = true; });
+	await tick();
+	assert.equal(fastDone, true, "second new tab completes while first ensureStarted is blocked");
+	assert.notEqual(panels.at(-1), slowPanel);
+	const fastTab = manager.lastActive;
+	releaseSlow(); await slowOpening; await fastOpening;
+	assert.equal(manager.lastActive, fastTab, "late startup cannot reclaim selection");
+	let releaseSnapshot;
+	startGate = new Promise(resolve => { releaseSlow = resolve; });
+	const snapshotOpening = manager.newSession();
+	await tick();
+	controllers.at(-1).refreshGate = new Promise(resolve => { releaseSnapshot = resolve; });
+	startGate = undefined; releaseSlow(); await tick();
+	fastDone = false;
+	const afterSnapshot = manager.newSession().then(() => { fastDone = true; });
+	await tick();
+	assert.equal(fastDone, true, "second new tab completes while first snapshot is blocked");
+	releaseSnapshot(); await snapshotOpening; await afterSnapshot;
+	assert.ok(startupLogs.some(line => /phase=initialized elapsedMs=\d+/.test(line)));
+	assert.ok(startupLogs.some(line => /phase=snapshot elapsedMs=\d+/.test(line)));
+
+	// Exercise the actual deadline callback without waiting two minutes.
+	const nativeTimeout = globalThis.setTimeout;
+	let expireStartup;
+	globalThis.setTimeout = (callback, delay, ...args) => {
+		if (delay === 120_000) { expireStartup = callback; return nativeTimeout(() => {}, 120_000); }
+		return nativeTimeout(callback, delay, ...args);
+	};
+	try {
+		startGate = new Promise(resolve => { releaseSlow = resolve; });
+		const timedOpening = manager.newSession();
+		const rejected = assert.rejects(timedOpening, /startup timed out/);
+		await tick();
+		const timedController = controllers.at(-1), timedPanel = panels.at(-1);
+		timedController.showErrorNotice = () => {};
+		expireStartup(); await rejected;
+		assert.equal(timedController.disposed, true);
+		assert.equal(timedPanel.disposed, false, "retain the failed view and its draft");
+		const messagesBeforeLate = timedPanel.webview.messages.length;
+		timedController.sink.post({ type: "status", status: { sessionId: "late", sessionFile: "/late", sessionLabel: "late" } });
+		releaseSlow(); startGate = undefined; await tick();
+		assert.equal(timedPanel.webview.messages.length, messagesBeforeLate, "late results cannot paint a timed-out view");
+		timedPanel.send({ type: "ready" }); await tick();
+		assert.equal(timedController.calls.filter(([kind]) => kind === "start").length, 1, "ready cannot retry an uncertain create");
+		assert.ok(!timedController.calls.some(([kind]) => kind === "snapshot"));
+	} finally { globalThis.setTimeout = nativeTimeout; startGate = undefined; }
 	console.log("PASS native editor session tabs");
 } finally {
 	manager?.dispose(); Module._load = originalLoad; rmSync(dir, { recursive: true, force: true });
