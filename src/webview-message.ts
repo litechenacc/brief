@@ -163,6 +163,13 @@ export function parseWebviewMessage(value: unknown): WebviewToHost | undefined {
 		case "viewStateFailed":
 			return isIdentifier(value.requestId) && (value.sessionId === "" || isIdentifier(value.sessionId)) && isBoundedString(value.error, 1024)
 				? { type: "viewStateFailed", requestId: value.requestId, sessionId: value.sessionId, error: value.error } : undefined;
+		case "chatFocused":
+			return isIdentifier(value.sessionId) ? { type: "chatFocused", sessionId: value.sessionId } : undefined;
+		case "chatRendered": {
+			const receipt = value.receipt;
+			return isRecord(receipt) && isIdentifier(receipt.sessionId) && isPath(receipt.path) && isRequestId(receipt.revision) && isRequestId(receipt.completedAt)
+				? { type: "chatRendered", receipt: { sessionId: receipt.sessionId, path: receipt.path, revision: receipt.revision, completedAt: receipt.completedAt } } : undefined;
+		}
 		case "viewFocused":
 		case "ready":
 		case "abort":
@@ -201,6 +208,9 @@ export function parseWebviewMessage(value: unknown): WebviewToHost | undefined {
 			return isPath(value.path) && isIdentifier(value.sessionId) && isBoundedString(value.name, MAX_NAME_CHARS, true)
 				? { type: "renameHistorySession", path: value.path, sessionId: value.sessionId, name: value.name }
 				: undefined;
+		case "markSessionUnread":
+			return isPath(value.path) && isIdentifier(value.sessionId)
+				? { type: "markSessionUnread", path: value.path, sessionId: value.sessionId } : undefined;
 		case "stopSession":
 			return isPath(value.path) && isIdentifier(value.sessionId)
 				? { type: "stopSession", path: value.path, sessionId: value.sessionId }

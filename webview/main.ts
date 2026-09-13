@@ -9,6 +9,7 @@ import { HistoryView } from "./history.js";
 import { SubagentsStrip } from "./subagents.js";
 import { Transcript } from "./transcript.js";
 import type {
+	ChatReadReceipt,
 	AgentEvent,
 	AgentMessage,
 	HostToWebview,
@@ -30,7 +31,9 @@ let historyOnly = false;
 let historySessionId: string | undefined;
 const app = document.getElementById("app") as HTMLDivElement;
 app.classList.add("chat-root");
-app.addEventListener("focusin", () => post({ type: "viewFocused" }));
+app.addEventListener("focusin", () => { post({ type: "viewFocused" }); focusRenderedChat(); });
+window.addEventListener("focus", () => focusRenderedChat());
+document.addEventListener("visibilitychange", () => focusRenderedChat());
 
 // Session actions live in the VS Code view title bar (same row as maximize).
 
@@ -151,6 +154,9 @@ const composerDeps = {
 	onNewSession: () => requestNewSession(),
 };
 const composer = new Composer(composerDeps);
+const cachedModels = document.getElementById("cached-models");
+if (cachedModels?.textContent) composer.setModels(JSON.parse(cachedModels.textContent) as RpcModel[]);
+cachedModels?.remove();
 
 const transcript = new Transcript(scroller, {
 	onOpenLink: (href) => {
@@ -187,6 +193,7 @@ const historyView = new HistoryView({
 		// Before the switch, or the last 300ms of typing lands under the INCOMING
 		// session id and overwrites the draft the operator saved there.
 		composer.flushDraft();
+		renderedReceipt = undefined;
 		showView("chat");
 		post({ type: "switchSession", path, sessionId });
 	},
@@ -310,6 +317,7 @@ function showView(view: "chat" | "history"): void {
 	// composer under them. "" hands display back to their own .visible class.
 	subagentsStrip.style.display = view === "chat" ? "" : "none";
 	if (view === "history") historyView.showLoading();
+	else focusRenderedChat();
 }
 
 function requestNewSession(): void {
@@ -450,8 +458,11 @@ function applyStatus(incomingStatus: StatusSnapshot): void {
 		status.costUsd != null ? `Reported cost: $${status.costUsd.toFixed(4)} (not an account charge)` : "Reported cost: pending",
 	].join("\n");
 
-	composer.setModel(status.modelLabel, status.modelProvider, status.modelId);
-	composer.setThinking(status.thinkingLevel, status.availableThinkingLevels ?? null);
+	// Startup has no authoritative model yet. Keep the local picker choice.
+	if (!status.restoring || status.sessionId) {
+		composer.setModel(status.modelLabel, status.modelProvider, status.modelId);
+		composer.setThinking(status.thinkingLevel, status.availableThinkingLevels ?? null);
+	}
 	composer.setStreaming(transcript.isStreaming() || status.streaming);
 	// The strip says "offline"; the composer has to mean it, or the operator's
 	// prompt disappears into a 120s timeout with a green dot above it.
@@ -496,14 +507,16 @@ function renderLiveLabel(status: StatusSnapshot): void {
 					? "running"
 					: "live"
 				: "offline";
-	const text = status.statusText || base;
-	const busy = status.connected && (status.streaming || working > 0);
+	const busy = (status.connected && (status.streaming || status.compacting || status.retrying)) ||
+		(status.historyRunning ?? (status.connected && working > 0));
+	// Attachment labels such as "opened" must not contradict the working lamp.
+	const text = busy && (!status.statusText || ["opened", "live", "idle"].includes(status.statusText))
+		? status.compacting ? "compacting…" : status.retrying ? "retrying…" : status.streaming ? "running" : "working"
+		: status.statusText || base;
 	const lanes: string[] = [];
-	if (status.connected && !status.streaming && working > 0) lanes.push(`${working} subagent${working === 1 ? "" : "s"} working`);
+	if (busy && status.connected && !status.streaming && working > 0) lanes.push(`${working} subagent${working === 1 ? "" : "s"} working`);
 	liveLabel.textContent = lanes.length > 0 ? `${text} · ${lanes.join(" · ")}` : text;
-	// This is the session's state, not its daemon attachment. A session opened
-	// here is already read; only active work needs the red working mark.
-	const lamp = status.connected && busy ? "working" : status.awaitingInput ? "complete" : "seen";
+	const lamp = busy ? "working" : status.unreadComplete ? "complete" : "seen";
 	liveLabel.className = `live-label ${lamp}`;
 	connDot.className = `conn-dot ${lamp}`;
 }
@@ -581,6 +594,25 @@ let viewMoving = false;
 let capturedViewRequest: string | undefined;
 let capturedViewSessionId: string | undefined;
 let snapshotSessionId: string | undefined;
+let renderedReceipt: ChatReadReceipt | undefined;
+
+function focusRenderedChat(): void {
+	if (authoritativeSessionId && !historyOnly && !viewMoving && !capturedViewRequest && chatView.style.display !== "none" &&
+		document.visibilityState === "visible" && document.hasFocus()) post({ type: "chatFocused", sessionId: authoritativeSessionId });
+	acknowledgeRenderedChat();
+}
+
+function acknowledgeRenderedChat(): void {
+	const receipt = renderedReceipt;
+	if (!receipt || historyOnly || viewMoving || capturedViewRequest || chatView.style.display === "none" ||
+		document.visibilityState !== "visible" || !document.hasFocus() || receipt.sessionId !== authoritativeSessionId) return;
+	// Run after the successful DOM update. Recheck focus and identity at delivery.
+	window.requestAnimationFrame(() => {
+		if (renderedReceipt === receipt && !historyOnly && !viewMoving && !capturedViewRequest &&
+			chatView.style.display !== "none" && document.visibilityState === "visible" && document.hasFocus() &&
+			receipt.sessionId === authoritativeSessionId) post({ type: "chatRendered", receipt });
+	});
+}
 
 function dispatchHostMessage(message: HostToWebview): void {
 	switch (message.type) {
@@ -628,6 +660,7 @@ function dispatchHostMessage(message: HostToWebview): void {
 			}
 			break;
 		case "snapshot":
+			renderedReceipt = undefined;
 			snapshotSessionId = message.status.sessionId;
 			adoptAuthoritativeSession(message.status.sessionId);
 			pendingPrompts.clear();
@@ -643,8 +676,11 @@ function dispatchHostMessage(message: HostToWebview): void {
 			// alone would drop a run that started before we attached.
 			applyStatus(message.status);
 			if (message.steerDefault) composer.setSteerDefault(message.steerDefault);
+			renderedReceipt = message.readReceipt;
+			acknowledgeRenderedChat();
 			break;
 		case "event":
+			if (message.event.type === "agent_end") renderedReceipt = undefined;
 			if (message.event.type === "session_action_update") renderPendingInputs(message.event.actions);
 			transcript.handleEvent(message.event);
 			if (message.event.type === "agent_start" || message.event.type === "agent_end") {
@@ -653,6 +689,7 @@ function dispatchHostMessage(message: HostToWebview): void {
 					applyStatus({ ...currentStatus, streaming: message.event.type === "agent_start" });
 				}
 			}
+			if (message.readReceipt) { renderedReceipt = message.readReceipt; acknowledgeRenderedChat(); }
 			break;
 		case "status":
 			applyStatus(message.status);

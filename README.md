@@ -56,7 +56,7 @@ This fork focuses on how chat feels during real coding work, not only on renderi
 - **Immediate feedback.** Sending a prompt shows the working indicator immediately. New Session opens the empty composer while the worker starts, with sending disabled until the new session is ready.
 - **Refined animation.** Animated working indicators, cycling activity text, and elapsed time make ongoing work visible between replies and tool calls.
 - **Less visual noise.** Unfinished thinking and tool arguments stay behind the working row by default. Live transcript rendering, tool-output streaming, thought-process blocks, and usage details are separately configurable.
-- **Responsive history.** Archiving updates the list immediately, and selecting the current session closes history without reloading the conversation.
+- **History 與燈號。** 紅燈表示仍有工作執行中，綠燈表示有未讀完成通知，灰燈表示沒有未讀通知。開啟 session 不會強制清除執行中的紅燈。只有對話成功呈現且視窗取得焦點後才確認已讀；背景分頁完成、清單刷新與連線中斷都不會自動清除未讀。`Mark unread` 可手動保留提醒，並立即同步其他分頁。
 - **Stable reading.** Transcript updates, scrolling, and view handoff are designed to keep you oriented while work continues.
 - **Native visual integration.** Chat colors follow the VS Code Color Theme, including High Contrast. Brief has its own app, activity-bar, and tab branding.
 

@@ -34,7 +34,6 @@ async switchSession(this: SessionController, sessionPath: string, sessionId: str
 	}
 	sessionPath = session.path;
 	sessionId = session.id;
-	this.markHistorySessionOpened(sessionPath);
 	if (previousAttachment && normalizeFsPath(previousAttachment.sessionPath) === normalizeFsPath(sessionPath)) {
 		this.broadcast({ type: "notice", level: "info", text: "You are already viewing that session." });
 		this.restoreAttachedView(previousAttachment, epoch);
@@ -198,6 +197,10 @@ onSidecarClosed(this: SessionController): void {
 	// A roster subscription dies with its connection; ensureSidecar must
 	// offer it again after every reconnect.
 	this.rosterSubscribedSidecar = null;
+	if (![...this.historyPeers].some((peer) => !peer.disposed && peer.sidecar?.connected)) {
+		for (const key of this.historyRuntime.keys()) this.updateHistoryRuntime(key, undefined);
+		this.paintHistory();
+	}
 	// `daemon_closing` told us WHY the socket is about to go: an update
 	// wants the re-attach ladder, a real shutdown does not.
 	const closing = this.daemonClosingReason;
@@ -1065,7 +1068,16 @@ onDaemonClosing(this: SessionController, reason: string | undefined): void {
  * handled by the same throttled re-read, and the strip/history fingerprints
  * suppress the paint when nothing visible moved.
  */
-onRosterUpdate(this: SessionController, _message: DaemonServerMessage): void {
+onRosterUpdate(this: SessionController, message: DaemonServerMessage): void {
+	// Apply pushed runtime verdicts now; reading transcripts must not delay the lamp.
+	for (const entry of message.changed ?? []) {
+		const summary = entry.summary;
+		if (!summary?.sessionFile || (summary.rlmDepth ?? 0) > 0) continue;
+		const ownStatus = entry.status ?? rosterStatus(summary);
+		const status = summary.hasRunningRlmChildren ? "running" : ownStatus;
+		this.updateHistoryRuntime(summary.sessionFile, status, entry.statusLabel ?? summary.statusLabel);
+	}
+	this.paintHistory();
 	this.scheduleHistoryRefresh();
 	this.scheduleChildrenRefresh();
 },

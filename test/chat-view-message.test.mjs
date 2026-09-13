@@ -90,3 +90,14 @@ assert.deepEqual(parseWebviewMessage({ type: "draftChanged", text: "current draf
 });
 
 console.log("PASS chat-view webview message parser");
+
+const receipt = { sessionId: "session-1", path: "/known/one.jsonl", revision: 1, completedAt: 42 };
+assert.deepEqual(parseWebviewMessage({ type: "chatRendered", receipt }), { type: "chatRendered", receipt });
+for (const invalid of [{ ...receipt, revision: -1 }, { ...receipt, sessionId: "bad/id" }, { ...receipt, path: "" }, { ...receipt, completedAt: NaN }]) {
+	assert.equal(parseWebviewMessage({ type: "chatRendered", receipt: invalid }), undefined);
+}
+assert.deepEqual(parseWebviewMessage({ type: "markSessionUnread", path: "/known/one.jsonl", sessionId: "session-1" }), { type: "markSessionUnread", path: "/known/one.jsonl", sessionId: "session-1" });
+assert.equal(parseWebviewMessage({ type: "markSessionUnread", path: "", sessionId: "session-1" }), undefined);
+
+assert.deepEqual(parseWebviewMessage({ type: "chatFocused", sessionId: "session-1" }), { type: "chatFocused", sessionId: "session-1" });
+assert.equal(parseWebviewMessage({ type: "chatFocused", sessionId: "bad/id" }), undefined);

@@ -270,12 +270,16 @@ export interface ChatViewState {
 	transcript: { olderCount: number; scrollTop: number; stickToBottom: boolean; anchorIndex: number; anchorOffset: number; expandedBlocks: number[] };
 }
 
+export interface ChatReadReceipt { sessionId: string; path: string; revision: number; completedAt: number; }
+
 export type WebviewToHost =
+	| { type: "chatRendered"; receipt: ChatReadReceipt }
 	| { type: "viewStateCaptured"; requestId: string; sessionId: string; state: ChatViewState }
 	| { type: "viewStateRestored"; requestId: string; sessionId: string }
 	| { type: "viewStateFailed"; requestId: string; sessionId: string; error: string }
 	| { type: "ready" }
 	| { type: "viewFocused" }
+	| { type: "chatFocused"; sessionId: string }
 	| { type: "prompt"; payload: PromptPayload }
 	| { type: "abort" }
 	| { type: "newSession" }
@@ -321,6 +325,9 @@ export interface StatusSnapshot {
 	streaming: boolean;
 	/** Current focused session finished and is waiting for operator input. */
 	awaitingInput?: boolean;
+	/** Shared history unread state, independent of attachment. */
+	unreadComplete?: boolean;
+	historyRunning?: boolean;
 	compacting: boolean;
 	retrying: boolean;
 	restoring: boolean;
@@ -418,6 +425,7 @@ export type HostToWebview =
 	| { type: "releaseViewState"; requestId: string; sessionId: string }
 	| {
 			type: "snapshot";
+			readReceipt?: ChatReadReceipt;
 			messages: AgentMessage[];
 			state: RpcSessionState | null;
 			status: StatusSnapshot;
@@ -428,7 +436,7 @@ export type HostToWebview =
 	| { type: "installPrompt"; url: string; reason: string }
 	| { type: "draft"; text: string }
 	| { type: "compactThreshold"; percent: number | null; defaultPercent?: number | null }
-	| { type: "event"; event: AgentEvent }
+	| { type: "event"; event: AgentEvent; readReceipt?: ChatReadReceipt }
 	| { type: "status"; status: StatusSnapshot }
 	| { type: "models"; models: RpcModel[] }
 	| { type: "commands"; commands: RpcSlashCommand[] }

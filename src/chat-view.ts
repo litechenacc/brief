@@ -1,7 +1,8 @@
 /** Sessions own controllers; editor panels and the native sidebar are replaceable views. */
 import { randomBytes } from "node:crypto";
+import { completedMessageTime } from "./session-completion.js";
 import * as vscode from "vscode";
-import type { ChatViewState, HostToWebview, WebviewToHost } from "./protocol.js";
+import type { ChatReadReceipt, ChatViewState, HostToWebview, WebviewToHost } from "./protocol.js";
 import { SessionController } from "./session-controller.js";
 import { normalizeFsPath } from "./recent-sessions.js";
 export { parseWebviewMessage } from "./webview-message.js";
@@ -33,6 +34,11 @@ type ChatView = {
 	loading?: Promise<void>;
 	closed: boolean;
 	missedMessages: boolean;
+	readReceipt?: ChatReadReceipt;
+	readRevision?: number;
+	readInvalidated?: boolean;
+	markingUnread?: boolean;
+	openingReadCutoff?: number;
 	markReady: () => void;
 	transferring: boolean;
 	disposeBinding: () => void;
@@ -131,8 +137,12 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 			const existing = [...this.tabs].find((tab) => tab.session?.sessionId === session.id ||
 				(tab.session && normalizeFsPath(tab.session.sessionFile) === normalizeFsPath(session.path)));
 			if (existing?.view) {
+				existing.view.readInvalidated = false;
+				existing.view.openingReadCutoff = existing.controller.historyCompletedAt.get(normalizeFsPath(session.path)) ?? 0;
 				this.lastActive = existing;
 				await this.reveal(existing.view);
+				await this.initialize(existing);
+				await existing.controller.refreshSnapshot({ keepDraft: true });
 				await existing.view.webview.postMessage({ type: "focusComposer" });
 			} else await this.move(existing ?? this.create({ sessionId: session.id, sessionFile: session.path }), this.location());
 		});
@@ -189,6 +199,11 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 			if (tab.closed) return;
 			if (message.type === "snapshot" || message.type === "status") {
 				const status = message.status;
+				if (tab.view && tab.session && status.sessionId && status.sessionId !== tab.session.sessionId) {
+					tab.view.readReceipt = undefined;
+					tab.view.openingReadCutoff = undefined;
+					tab.view.readInvalidated = false;
+				}
 				if (status.sessionId && status.sessionFile) tab.session = { sessionId: status.sessionId, sessionFile: status.sessionFile };
 				const label = (status.sessionLabel ?? status.sessionName)?.trim() || (status.sessionId ? `Session ${status.sessionId.slice(0, 8)}` : "New Session");
 				tab.title = label;
@@ -199,6 +214,14 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 				void this.sidebar.webview.postMessage(message);
 			}
 			const view = tab.view;
+			if (view && tab.session && !view.markingUnread && ((message.type === "snapshot" && !view.readInvalidated && message.status.sessionId === tab.session.sessionId && !message.status.restoring) || (message.type === "event" && message.event.type === "agent_end"))) {
+				const messages = message.type === "snapshot" ? message.messages : message.event.type === "agent_end" ? message.event.messages : [];
+				view.readReceipt = {
+					sessionId: tab.session.sessionId, path: tab.session.sessionFile,
+					completedAt: Math.max(completedMessageTime(messages ?? []), message.type === "snapshot" ? view.openingReadCutoff ?? 0 : 0), revision: view.readRevision = (view.readRevision ?? 0) + 1,
+				};
+				message = { ...message, readReceipt: view.readReceipt };
+			}
 			if (view && !view.closed) void view.webview.postMessage(message).then(
 				(delivered) => { if (!delivered) view.missedMessages = true; }, () => { view.missedMessages = true; });
 		} });
@@ -214,6 +237,7 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 	private bind(tab: ChatTab, view: ChatView): void {
 		tab.view = view;
 		view.tab = tab;
+		view.openingReadCutoff = tab.session ? tab.controller.historyCompletedAt.get(normalizeFsPath(tab.session.sessionFile)) ?? 0 : 0;
 		if (view.sidebar) this.sidebarSession = tab;
 		else if (this.sidebarSession === tab) this.sidebarSession = undefined;
 		this.lastActive = tab;
@@ -248,6 +272,29 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 				}
 				return;
 			}
+			if (message.type === "markSessionUnread") {
+				if (view.closed || view.transferring || view.tab?.closed) return;
+				const invalidate = (renew: boolean) => {
+					for (const tab of this.tabs) {
+						if (tab.view && tab.session && normalizeFsPath(tab.session.sessionFile) === normalizeFsPath(message.path)) {
+							tab.view.readReceipt = undefined;
+							tab.view.openingReadCutoff = undefined;
+							tab.view.readInvalidated = renew;
+							tab.view.markingUnread = !renew;
+						}
+					}
+				};
+				invalidate(false);
+				const controller = view.tab?.controller ?? this.history();
+				void (async () => {
+					try {
+						if (view.tab) await this.initialize(view.tab);
+						await controller.markHistoryUnread(message.path, message.sessionId);
+					}
+					finally { invalidate(true); }
+				})().catch((error) => controller.showErrorNotice(String(error)));
+				return;
+			}
 			if (message.type === "ready") view.markReady();
 			const tab = view.tab;
 			if (view.sidebar && !tab && !view.closed && !view.transferring) {
@@ -255,13 +302,35 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 					if (message.type === "ready") { if (!this.sidebarResolved && this.location() === "editor") await this.showSidebarHistory(view); return; }
 					if (message.type === "newSession") { await this.newSession(); return; }
 					if (message.type === "switchSession") { await this.openSession(this.history(), message.path, message.sessionId); return; }
-					if (["requestHistory", "searchHistory", "renameHistorySession", "stopSession", "archiveSession", "unarchiveSession", "deleteSession"].includes(message.type)) {
+					if (["requestHistory", "searchHistory", "renameHistorySession", "markSessionUnread", "stopSession", "archiveSession", "unarchiveSession", "deleteSession"].includes(message.type)) {
 						await handleMessage(message, this.history(), (reply) => { void view.webview.postMessage(reply); });
 					}
 				})().catch((error) => this.history().showErrorNotice(String(error)));
 				return;
 			}
 			if (!tab || view.closed || tab.closed) return;
+			if (message.type === "chatFocused") {
+				if (view.readInvalidated && !view.transferring && tab.view === view && tab.session?.sessionId === message.sessionId &&
+					vscode.window.state.focused && (view.panel ? view.panel.visible && view.panel.active : view.sidebar?.visible)) {
+					view.readInvalidated = false;
+					view.openingReadCutoff = tab.controller.historyCompletedAt.get(normalizeFsPath(tab.session.sessionFile)) ?? 0;
+					void tab.controller.refreshSnapshot({ keepDraft: true }).catch((error) => { view.readInvalidated = true; tab.controller.showErrorNotice(String(error)); });
+				}
+				return;
+			}
+			if (message.type === "chatRendered") {
+				const receipt = view.readReceipt;
+				if (!view.transferring && !view.markingUnread && tab.view === view && vscode.window.state.focused &&
+					(view.panel ? view.panel.visible && view.panel.active : view.sidebar?.visible) &&
+					receipt && receipt.revision === message.receipt.revision && receipt.sessionId === message.receipt.sessionId &&
+					receipt.path === message.receipt.path && tab.session?.sessionId === receipt.sessionId) {
+					view.readReceipt = undefined;
+					view.openingReadCutoff = undefined;
+					view.readInvalidated = false;
+					tab.controller.markHistorySessionOpened(receipt.path, receipt.completedAt);
+				}
+				return;
+			}
 			if (message.type === "viewFocused") { this.lastActive = tab; return; }
 			if (message.type === "ready") {
 				if (view.transferring) return;
@@ -307,7 +376,7 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 			disposal.dispose();
 		};
 		const disposal = (panel ?? sidebar!).onDidDispose(() => view.disposeBinding());
-		webview.html = buildHtml(webview, this.context.extensionUri);
+		webview.html = buildHtml(webview, this.context.extensionUri, this.context.globalState.get("brief.availableModels", []));
 		return view;
 	}
 
@@ -356,8 +425,10 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 			target.transferring = true;
 			await this.wait(target.ready);
 			if (target.closed || tab.closed || (source && source.closed)) throw new Error("Chat view was closed.");
-			if (!await target.webview.postMessage({ type: "setViewMoving", moving: true })) throw new Error("Could not reach chat view.");
 			displaced = target.tab;
+			// A fresh view can use cached model choices while its runtime starts.
+			// Only freeze input when transferring an existing conversation.
+			if ((source || displaced) && !await target.webview.postMessage({ type: "setViewMoving", moving: true })) throw new Error("Could not reach chat view.");
 			for (const current of [source, displaced ? target : undefined]) {
 				if (!current?.tab) continue;
 				if (current.loading) await this.wait(current.loading);
@@ -376,6 +447,7 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 			if (source) source.tab = undefined;
 			this.bind(tab, target);
 			await target.webview.postMessage({ type: "setHistoryMode", enabled: false });
+			tab.controller.sendCachedModels();
 			await this.initialize(tab);
 			await tab.controller.refreshSnapshot();
 			if (tab.state) await this.restore(target, tab, tab.state);
@@ -589,7 +661,7 @@ async function handleMessage(message: WebviewToHost, controller: SessionControll
 	}
 }
 
-function buildHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
+function buildHtml(webview: vscode.Webview, extensionUri: vscode.Uri, models: import("./protocol.js").RpcModel[]): string {
 	const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "main.js"));
 	const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "main.css"));
 	const nonce = getNonce();
@@ -604,6 +676,7 @@ function buildHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
 </head>
 <body>
 	<div id="app"></div>
+	<script id="cached-models" type="application/json" nonce="${nonce}">${JSON.stringify(models).replace(/</g, "\\u003c")}</script>
 	<script nonce="${nonce}" src="${scriptUri}?v=${WEBVIEW_REV}"></script>
 </body>
 </html>`;

@@ -16,6 +16,7 @@ let chatLocation = "editor";
 let sidebar;
 let pickedSession;
 let holdNextRestore = false;
+let startGate;
 const configurationUpdates = [];
 const handoffState = {
 	composer: { draft: { text: "carry draft", images: [{ data: "aGk=", mimeType: "image/png", name: "carry.png" }], selections: [{ path: "src/carried.ts", startLine: 1, endLine: 2, text: "carried selection", languageId: "typescript" }], accepted: [] }, stash: null,
@@ -62,9 +63,10 @@ function makePanel(editor = true) {
 	return panel;
 }
 class Controller {
-	constructor() { this.calls = []; this.disposed = false; controllers.push(this); }
+	constructor() { this.historyCompletedAt = new Map(); this.calls = []; this.disposed = false; controllers.push(this); }
 	attach(sink) { this.sink = sink; return disposable(() => { this.detached = true; }); }
-	async ensureStarted() { this.calls.push(["start"]); }
+	async ensureStarted() { this.calls.push(["start"]); await startGate; }
+	async setModel(provider, modelId) { this.calls.push(["setModel", provider, modelId]); }
 	async switchSession(...args) { this.calls.push(["switch", ...args]); await this.switchGate; }
 	async refreshSnapshot(...args) { this.calls.push(["snapshot", ...args]); await this.refreshGate; }
 	sendCachedModels() { this.calls.push(["cachedModels"]); }
@@ -73,6 +75,8 @@ class Controller {
 	async resolveHistorySession(path, id) { this.calls.push(["resolve", path, id]); return this.historyGate ? await this.historyGate : path.startsWith("/known/") ? { path, id } : undefined; }
 	async prompt(payload, reply) { this.calls.push(["prompt", payload]); reply({ type: "promptAccepted", clientRequestId: payload.clientRequestId }); }
 	persistDraft(...args) { this.calls.push(["draft", ...args]); }
+	markHistorySessionOpened(...args) { this.calls.push(["read", ...args]); }
+	async markHistoryUnread(...args) { this.calls.push(["unread", ...args]); await this.unreadGate; }
 	async abort() { this.calls.push(["abort"]); }
 	newSession() { throw new Error("New tab must not replace an existing session"); }
 	showErrorNotice(text) { throw new Error(text); }
@@ -87,7 +91,7 @@ const stub = {
 		if (!sidebar || sidebar.disposed) { sidebar = makePanel(false); manager.resolveWebviewView(sidebar); }
 	} },
 	ThemeIcon: class { constructor(id) { this.id = id; } },
-	window: { showQuickPick: async (items) => items.find((item) => item.description === pickedSession), createWebviewPanel(type, title, column, options) {
+	window: { state: { focused: true }, showQuickPick: async (items) => items.find((item) => item.description === pickedSession), createWebviewPanel(type, title, column, options) {
 		assert.equal(type, "brief.chatPanel"); assert.equal(options.retainContextWhenHidden, true);
 		const panel = makePanel(); panel.activate(); return panel;
 	} },
@@ -105,8 +109,24 @@ try {
 		return originalLoad.call(this, name, ...args);
 	};
 	const { ChatPanels } = require(bundle);
-	manager = new ChatPanels({ extensionUri: { fsPath: process.cwd() } }, { appendLine() {} });
-	await manager.newSession(); await manager.newSession();
+	manager = new ChatPanels({ extensionUri: { fsPath: process.cwd() }, globalState: { get: () => [{ provider: "cached", id: "cached-model</script>" }] } }, { appendLine() {} });
+	let finishStart;
+	startGate = new Promise((resolve) => { finishStart = resolve; });
+	const opening = manager.newSession();
+	await tick();
+	const initialCache = panels[0].webview.html.match(/<script id="cached-models"[^>]*>(.*?)<\/script>/s)?.[1];
+	assert.deepEqual(JSON.parse(initialCache), [{ provider: "cached", id: "cached-model</script>" }], "initial HTML includes safely escaped cache before ready/RPC");
+	assert.ok(controllers[0].calls.some(([name]) => name === "cachedModels"), "cache arrives while startup is pending");
+	assert.ok(controllers[0].calls.some(([name]) => name === "start"));
+	assert.ok(!panels[0].webview.messages.some((message) => message.type === "setViewMoving" && message.moving),
+		"a fresh chat must not make the cached model picker inert during startup");
+	panels[0].send({ type: "setModel", provider: "cached", modelId: "cached-model" });
+	await tick();
+	assert.ok(!controllers[0].calls.some(([name]) => name === "setModel"), "model operation waits for runtime, not the picker UI");
+	finishStart(); await opening; startGate = undefined;
+	await tick();
+	assert.deepEqual(controllers[0].calls.find(([name]) => name === "setModel"), ["setModel", "cached", "cached-model"], "cached choice reaches the new runtime after startup");
+	await manager.newSession();
 	const [a, b] = panels, [ca, cb] = controllers;
 	assert.notEqual(ca, cb);
 	assert.deepEqual(a.iconPath, { light: { fsPath: join(process.cwd(), "media/tab-light.svg") }, dark: { fsPath: join(process.cwd(), "media/tab-dark.svg") } });
@@ -114,11 +134,64 @@ try {
 	a.send({ type: "ready" }); b.send({ type: "ready" }); await tick();
 	assert.equal(ca.calls.filter(([name]) => name === "start").length, 1);
 	assert.equal(cb.calls.filter(([name]) => name === "start").length, 1);
+	assert.ok(ca.calls.some(([name]) => name === "cachedModels") && cb.calls.some(([name]) => name === "cachedModels"),
+		"new editor sessions paint cached models after their controllers bind");
 	a.send({ type: "ready" }); await tick();
 	assert.equal(ca.calls.filter(([name]) => name === "start").length, 1, "ready cannot create another session");
 	ca.sink.post({ type: "status", status: { sessionId: "session-a", sessionFile: "/known/a.jsonl", sessionLabel: "Alpha" } });
 	cb.sink.post({ type: "status", status: { sessionId: "session-b", sessionFile: "/known/b.jsonl", sessionLabel: "Beta" } });
 	assert.equal(a.title, "Alpha"); assert.equal(b.title, "Beta");
+	const publishReadSnapshot = (messages = [{ role: "assistant", stopReason: "stop", timestamp: 42 }]) => {
+		ca.sink.post({ type: "snapshot", status: { sessionId: "session-a", sessionFile: "/known/a.jsonl" }, messages, state: null });
+		return a.webview.messages.at(-1).readReceipt;
+	};
+	let receipt = publishReadSnapshot();
+	a.send({ type: "chatRendered", receipt });
+	assert.equal(ca.calls.filter(([name]) => name === "read").length, 0, "background editor cannot read");
+	a.activate(); stub.window.state.focused = false;
+	a.send({ type: "chatRendered", receipt });
+	assert.equal(ca.calls.filter(([name]) => name === "read").length, 0, "unfocused window cannot read");
+	stub.window.state.focused = true;
+	a.send({ type: "chatRendered", receipt: { ...receipt, sessionId: "session-b" } });
+	assert.equal(ca.calls.filter(([name]) => name === "read").length, 0, "wrong identity cannot read");
+	a.send({ type: "chatRendered", receipt }); a.send({ type: "chatRendered", receipt });
+	assert.deepEqual(ca.calls.filter(([name]) => name === "read"), [["read", "/known/a.jsonl", 42]], "successful display reads once");
+	receipt = publishReadSnapshot();
+	b.send({ type: "markSessionUnread", path: "/known/a.jsonl", sessionId: "session-a" });
+	a.send({ type: "chatRendered", receipt }); await tick();
+	assert.equal(ca.calls.filter(([name]) => name === "read").length, 1, "manual unread invalidates receipts in other views");
+	const snapshotsBeforeFocus = ca.calls.filter(([name]) => name === "snapshot").length;
+	ca.historyCompletedAt.set("/known/a.jsonl", 100);
+	a.send({ type: "chatFocused", sessionId: "session-a" });
+	assert.equal(ca.calls.filter(([name]) => name === "snapshot").length, snapshotsBeforeFocus + 1, "returning to manually unread native chat renews its snapshot");
+	ca.historyCompletedAt.set("/known/a.jsonl", 200);
+	const stale = receipt; receipt = publishReadSnapshot([]);
+	assert.equal(receipt.completedAt, 100, "opening cutoff covers compacted history but excludes completion discovered after focus");
+	const firstCompacted = receipt;
+	receipt = publishReadSnapshot([]);
+	assert.equal(receipt.completedAt, 100, "consecutive snapshots retain opening cutoff until an accepted acknowledgement");
+	a.send({ type: "chatRendered", receipt: firstCompacted });
+	assert.equal(ca.calls.filter(([name]) => name === "read").length, 1, "first compacted snapshot acknowledgement is stale");
+	a.send({ type: "chatRendered", receipt: stale });
+	assert.equal(ca.calls.filter(([name]) => name === "read").length, 1, "stale render cannot clear a newer completion");
+	a.send({ type: "chatRendered", receipt });
+	assert.equal(ca.calls.filter(([name]) => name === "read").length, 2);
+	let finishUnread;
+	cb.unreadGate = new Promise((resolve) => { finishUnread = resolve; });
+	b.send({ type: "markSessionUnread", path: "/known/a.jsonl", sessionId: "session-a" }); await tick();
+	assert.equal(publishReadSnapshot(), undefined, "snapshot during manual unread cannot issue a receipt");
+	a.send({ type: "chatRendered", receipt });
+	assert.equal(ca.calls.filter(([name]) => name === "read").length, 2, "snapshot during manual unread cannot clear it");
+	finishUnread(); await tick();
+	assert.equal(publishReadSnapshot(), undefined, "ordinary snapshot after manual unread cannot issue a receipt");
+	a.send({ type: "chatRendered", receipt });
+	assert.equal(ca.calls.filter(([name]) => name === "read").length, 2, "manual completion invalidates in-flight snapshot receipts");
+	a.send({ type: "chatFocused", sessionId: "session-a" });
+	receipt = publishReadSnapshot();
+	a.send({ type: "chatRendered", receipt });
+	assert.equal(ca.calls.filter(([name]) => name === "read").length, 3, "only explicit chat focus renews reading after manual unread");
+	b.activate();
+
 	const longTitle = "很長的對話標題用來確認原生分頁不再無限制變寬";
 	ca.sink.post({ type: "status", status: { sessionId: "session-a", sessionFile: "/known/a.jsonl", sessionLabel: longTitle } });
 	assert.equal(a.title, Array.from(longTitle).slice(0, 15).join("") + "…");
@@ -358,13 +431,18 @@ try {
 	assert.ok(controllers.every((controller) => controller.disposed && controller.detached));
 	// Opening the sidebar in editor mode must not allocate a chat runtime or steal focus.
 	chatLocation = "editor";
-	manager = new ChatPanels({ extensionUri: { fsPath: process.cwd() } }, { appendLine() {} });
+	manager = new ChatPanels({ extensionUri: { fsPath: process.cwd() }, globalState: { get: () => [{ provider: "cached", id: "cached-model</script>" }] } }, { appendLine() {} });
 	const beforeCatalog = controllers.length;
 	sidebar = makePanel(false);
 	manager.resolveWebviewView(sidebar); await tick();
 	assert.equal(controllers.length, beforeCatalog + 1);
 	assert.deepEqual(controllers.at(-1).calls, [["history"]]);
 	assert.ok(sidebar.webview.messages.some(m => m.type === "setHistoryMode" && m.enabled));
+	const catalogController = controllers.at(-1);
+	sidebar.send({ type: "markSessionUnread", path: "/known/old.jsonl", sessionId: "old" }); await tick();
+	assert.ok(catalogController.calls.some(([name]) => name === "unread"), "history-only sidebar dispatches manual unread");
+	sidebar.send({ type: "chatRendered", receipt: { sessionId: "old", path: "/known/old.jsonl", revision: 1, completedAt: 42 } }); await tick();
+	assert.ok(!catalogController.calls.some(([name]) => name === "read"), "history-only sidebar cannot acknowledge chat");
 	const beforeResume = panels.length;
 	sidebar.send({ type: "switchSession", path: "/known/old.jsonl", sessionId: "old" }); await tick();
 	assert.equal(panels.length, beforeResume + 1, "history opens unopened sessions in editor");

@@ -890,6 +890,7 @@ controller.scheduleChildrenRefresh = originalIdentityChildrenRefresh;
 	check("mid-turn catalog activity does not reshuffle a running row",
 		rows.find((r) => r.id === "hist-live")?.sortMs === frozen, String(rows.find((r) => r.id === "hist-live")?.sortMs));
 	catalog[0] = { ...catalog[0], rosterStatus: "idle", activeSessionId: "live-handle" };
+	controller.markHistoryWaitingForUser(live, Date.parse("2026-01-04T00:00:00Z"));
 	rows = controller.rowsFromCatalog(catalog);
 	check("finishing a turn advances the rank past older idle rows",
 		rows[0]?.id === "hist-live" && (rows[0]?.sortMs ?? 0) >= (rows[1]?.sortMs ?? 0),
@@ -942,7 +943,7 @@ controller.scheduleChildrenRefresh = originalIdentityChildrenRefresh;
 		},
 	])[0];
 	check("a running subagent classifies its history parent as running",
-		parentWithRunningChild?.status === "running" && parentWithRunningChild.running === false,
+		parentWithRunningChild?.status === "running" && parentWithRunningChild.running === true,
 		JSON.stringify(parentWithRunningChild));
 }
 

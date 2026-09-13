@@ -457,15 +457,15 @@ export class Transcript {
 		root.setAttribute("aria-label", "Conversation turns");
 		root.setAttribute("role", "navigation");
 		const rail = el("div", "lens-rail");
-		const current = el("div", "lens-current");
-		rail.appendChild(current);
 		root.appendChild(rail);
 		host.appendChild(root);
 		this.lensRoot = root;
 		root.addEventListener("mouseenter", () => {
 			window.clearTimeout(this.lensCollapseTimer);
-			root.classList.add("expanded");
-			this.paintLens();
+			if (this.lensTurns.length > 10) {
+				root.classList.add("expanded");
+				this.paintLens();
+			}
 		});
 		root.addEventListener("mouseleave", () => {
 			window.clearTimeout(this.lensCollapseTimer);
@@ -478,13 +478,10 @@ export class Transcript {
 		this.paintLens();
 	}
 
-	private lensPercent(index: number): string {
-		const total = Math.max(1, this.lensTurns.length - 1);
-		return `${(index / total) * 100}%`;
-	}
-
 	private lensPointerMove(event: MouseEvent): void {
-		if (!this.lensRoot || this.lensTurns.length < 11 || this.lensBands.length === 0) return;
+		if (!this.lensRoot || this.lensTurns.length <= 10 || this.lensBands.length === 0) return;
+		// Keep an individual button stable while the reader aims and clicks.
+		if ((event.target as HTMLElement).closest(".lens-individual")) return;
 		const rect = this.lensRoot.getBoundingClientRect();
 		if (rect.height <= 0) return;
 		const position = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
@@ -535,8 +532,9 @@ export class Transcript {
 		if (!found && this.scroller.scrollTop <= 0) current = 0;
 		this.lensCurrent = Math.max(0, Math.min(this.lensTurns.length - 1, current));
 		if (this.lensFocus < 0 || this.lensFocus >= this.lensTurns.length) this.lensFocus = this.lensCurrent;
-		const marker = this.lensRoot?.querySelector<HTMLElement>(".lens-current");
-		if (marker) marker.style.top = this.lensPercent(this.lensCurrent);
+		this.lensRoot?.querySelectorAll<HTMLElement>(".lens-marker").forEach((marker) => {
+			marker.setAttribute("aria-current", String(Number(marker.dataset.start) <= this.lensCurrent && this.lensCurrent <= Number(marker.dataset.end)));
+		});
 	}
 
 	private paintLens(): void {
@@ -545,20 +543,16 @@ export class Transcript {
 		window.clearTimeout(this.lensTooltipTimer);
 		root.querySelector(".lens-tooltip")?.remove();
 		const count = this.lensTurns.length;
-		root.hidden = count <= 10;
-		root.setAttribute("aria-hidden", String(count <= 10));
+		root.hidden = count === 0;
+		root.setAttribute("aria-hidden", String(count === 0));
 		this.lensBands = [];
-		if (count <= 10) return;
+		if (count === 0) return;
 		const rail = root.querySelector<HTMLElement>(".lens-rail");
 		if (!rail) return;
 		rail.replaceChildren();
-		const current = el("div", "lens-current");
-		current.style.top = this.lensPercent(this.lensCurrent);
-		rail.appendChild(current);
-		if (!root.classList.contains("expanded")) return;
-
-		const start = Math.max(0, Math.min(count - 7, this.lensFocus - 3));
-		const end = Math.min(count - 1, start + 6);
+		if (count <= 10) root.classList.remove("expanded");
+		const start = count <= 10 ? 0 : Math.max(0, Math.min(count - 7, this.lensFocus - 3));
+		const end = count <= 10 ? count - 1 : Math.min(count - 1, start + 6);
 		const bands: LensBand[] = [];
 		const before: LensBand[] = [];
 		// Build context outward from the focus: the nearest five are always the
@@ -580,8 +574,9 @@ export class Transcript {
 			nearest = false;
 		}
 		this.lensBands = bands;
+		root.style.height = `${bands.length * 8 + 48}px`;
 		const slots = Math.max(1, bands.length - 1);
-		bands.forEach((band, slot) => this.addLensMarker(rail, band, slot / slots));
+		bands.forEach((band, slot) => this.addLensMarker(rail, band, bands.length === 1 ? 0.5 : slot / slots));
 	}
 
 	private addLensMarker(rail: HTMLElement, band: LensBand, top: number): void {
@@ -593,6 +588,7 @@ export class Transcript {
 		marker.style.top = renderedTop;
 		marker.dataset.start = String(start);
 		marker.dataset.end = String(end);
+		marker.setAttribute("aria-current", String(start <= this.lensCurrent && this.lensCurrent <= end));
 		marker.setAttribute("aria-label", start === end ? `Turn ${start + 1}` : `Turns ${start + 1}–${end + 1}`);
 		marker.addEventListener("mouseenter", () => {
 			window.clearTimeout(this.lensTooltipTimer);
@@ -673,7 +669,6 @@ export class Transcript {
 		mark.appendChild(brandMark(52));
 		root.appendChild(mark);
 		root.appendChild(el("div", "welcome-title", "Brief"));
-		root.appendChild(el("div", "welcome-tag", "RLM agent with a persistent Python kernel,\nskills, subagents, and living sessions."));
 
 		const quick = el("div", "welcome-actions");
 		const newBtn = document.createElement("button");

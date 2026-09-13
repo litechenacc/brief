@@ -7,6 +7,7 @@ import * as path from "node:path";
 import type { RecentSession } from "./protocol.js";
 import type { SavedSessionInfo, SessionSummaryRef } from "./daemon-sidecar.js";
 import { listRecentSessions, normalizeFsPath } from "./recent-sessions.js";
+import { readSessionCompletion } from "./session-completion.js";
 import {
 	HISTORY_OTHER_LIMIT,
 	HISTORY_WORKSPACE_LIMIT,
@@ -20,15 +21,14 @@ import {
 import type { ResolvedHistorySession } from "./session-types.js";
 import type { SessionController } from "./session-controller.js";
 
-// Editor panels have separate runtimes, but edit the same workspace history.
-// Share only these overlays so a panel cannot persist an older panel's snapshot.
+// Controllers share notification state, not their runtime attachments or catalogs.
 const workspaceHistory = new WeakMap<SessionController["context"]["workspaceState"], Pick<SessionController,
-	"historySortMs" | "historyArchived" | "historyUnreadComplete" | "historyWasRunning"
+	"historySortMs" | "historyArchived" | "historyUnreadComplete" | "historyCompletedAt" | "historyReadAt" | "historyRuntime" | "historyRuntimeClock" | "historyPeers"
 >>();
 
 export const historyCatalogMethods = {
 scheduleHistoryRefresh(this: SessionController): void {
-	if (this.historyRefreshTimer) clearTimeout(this.historyRefreshTimer);
+	if (this.historyRefreshTimer) return;
 	this.historyRefreshTimer = setTimeout(() => {
 		this.historyRefreshTimer = null;
 		void this.listHistory();
@@ -47,21 +47,38 @@ restoreHistoryUiState(this: SessionController): void {
 		this.historySortMs = shared.historySortMs;
 		this.historyArchived = shared.historyArchived;
 		this.historyUnreadComplete = shared.historyUnreadComplete;
-		this.historyWasRunning = shared.historyWasRunning;
+		this.historyCompletedAt = shared.historyCompletedAt;
+		this.historyReadAt = shared.historyReadAt;
+		this.historyRuntime = shared.historyRuntime;
+		this.historyRuntimeClock = shared.historyRuntimeClock;
+		this.historyPeers = shared.historyPeers;
+		this.historyPeers.add(this);
 		return;
 	}
 	workspaceHistory.set(workspaceState, {
 		historySortMs: this.historySortMs,
 		historyArchived: this.historyArchived,
 		historyUnreadComplete: this.historyUnreadComplete,
-		historyWasRunning: this.historyWasRunning,
+		historyCompletedAt: this.historyCompletedAt,
+		historyReadAt: this.historyReadAt,
+		historyRuntime: this.historyRuntime,
+		historyRuntimeClock: this.historyRuntimeClock,
+		historyPeers: this.historyPeers,
 	});
 	const saved = this.context.workspaceState?.get<{
 		sortMs?: Record<string, number>;
 		archived?: string[];
 		unread?: string[];
+		completedAt?: Record<string, number>;
+		readAt?: Record<string, number>;
 	}>(HISTORY_UI_STATE_KEY);
 	if (!saved) return;
+	for (const [key, ms] of Object.entries(saved.completedAt ?? {})) {
+		if (Number.isFinite(ms) && ms > 0) this.historyCompletedAt.set(key, ms);
+	}
+	for (const [key, ms] of Object.entries(saved.readAt ?? {})) {
+		if (Number.isFinite(ms) && ms >= 0) this.historyReadAt.set(key, ms);
+	}
 	if (saved.sortMs) {
 		for (const [path, ms] of Object.entries(saved.sortMs)) {
 			if (typeof ms === "number" && Number.isFinite(ms)) this.historySortMs.set(path, ms);
@@ -84,6 +101,8 @@ persistHistoryUiState(this: SessionController): void {
 		sortMs: Object.fromEntries(this.historySortMs),
 		archived: [...this.historyArchived],
 		unread: [...this.historyUnreadComplete],
+		completedAt: Object.fromEntries(this.historyCompletedAt),
+		readAt: Object.fromEntries(this.historyReadAt),
 	});
 },
 
@@ -93,8 +112,13 @@ overlayCachedHistory(this: SessionController): void {
 },
 
 paintHistory(this: SessionController): void {
-	const sessions = this.actionHistory ?? this.lastHistory;
-	if (sessions) this.broadcast({ type: "history", sessions });
+	for (const peer of this.historyPeers) {
+		if (peer.disposed) continue;
+		peer.overlayCachedHistory();
+		const sessions = peer.actionHistory ?? peer.lastHistory;
+		if (sessions) peer.broadcast({ type: "history", sessions });
+		peer.pushStatusLight();
+	}
 },
 
 viewedSessionPath(this: SessionController): string | undefined {
@@ -103,47 +127,50 @@ viewedSessionPath(this: SessionController): string | undefined {
 	return undefined;
 },
 
-/**
- * A turn finished and the agent is waiting. This is the only moment the
- * history row is allowed to move — not mid-turn RPC chatter.
- */
-markHistoryWaitingForUser(this: SessionController, sessionPath = this.viewedSessionPath()): void {
-	if (!sessionPath) return;
+/** Update once per terminal message, never on a running -> missing transition. */
+recordHistoryCompletion(this: SessionController, sessionPath: string, completedAt: number): boolean {
 	const key = this.historyPathKey(sessionPath);
-	this.historySortMs.set(key, Date.now());
-	this.historyWasRunning.delete(key);
-	if (this.viewedSessionPath() !== key) this.historyUnreadComplete.add(key);
-	else this.historyUnreadComplete.delete(key);
-	this.persistHistoryUiState();
-	this.overlayCachedHistory();
+	if (!Number.isFinite(completedAt) || completedAt <= (this.historyCompletedAt.get(key) ?? 0)) return false;
+	this.historyCompletedAt.set(key, completedAt);
+	this.historySortMs.set(key, completedAt);
+	if (completedAt > (this.historyReadAt.get(key) ?? 0)) this.historyUnreadComplete.add(key);
+	return true;
 },
 
-markHistorySessionOpened(this: SessionController, sessionPath: string): void {
-	const key = this.historyPathKey(sessionPath);
-	this.historyWasRunning.delete(key);
-	if (!this.historyUnreadComplete.has(key)) return;
-	this.historyUnreadComplete.delete(key);
+markHistoryWaitingForUser(this: SessionController, sessionPath: string | undefined, completedAt: number): void {
+	const target = sessionPath ?? this.viewedSessionPath();
+	if (!target || !this.recordHistoryCompletion(target, completedAt)) return;
 	this.persistHistoryUiState();
-	this.overlayCachedHistory();
+	this.paintHistory();
+},
+
+/** Called only for the completion actually rendered in an active chat. */
+markHistorySessionOpened(this: SessionController, sessionPath: string, completedAt: number): void {
+	const key = this.historyPathKey(sessionPath);
+	this.historyReadAt.set(key, Math.max(this.historyReadAt.get(key) ?? 0, completedAt));
+	if ((this.historyCompletedAt.get(key) ?? 0) <= completedAt) this.historyUnreadComplete.delete(key);
+	this.persistHistoryUiState();
 	this.paintHistory();
 },
 
 async markHistoryUnread(this: SessionController, sessionPath: string, sessionId: string): Promise<void> {
-	if (!(await this.resolveHistorySession(sessionPath, sessionId))) return;
-	this.historyUnreadComplete.add(this.historyPathKey(sessionPath)); this.persistHistoryUiState(); this.overlayCachedHistory(); this.paintHistory();
+	const session = await this.resolveHistorySession(sessionPath, sessionId);
+	if (!session) return;
+	this.historyUnreadComplete.add(this.historyPathKey(session.path));
+	this.persistHistoryUiState();
+	this.paintHistory();
+	this.broadcast({ type: "notice", level: "info", text: "Marked unread." });
 },
 
 markHistoryArchived(this: SessionController, sessionPath: string): void {
 	this.historyArchived.add(this.historyPathKey(sessionPath));
 	this.persistHistoryUiState();
-	this.overlayCachedHistory();
 	this.paintHistory();
 },
 
 markHistoryUnarchived(this: SessionController, sessionPath = this.viewedSessionPath()): void {
 	if (!sessionPath || !this.historyArchived.delete(this.historyPathKey(sessionPath))) return;
 	this.persistHistoryUiState();
-	this.overlayCachedHistory();
 	this.paintHistory();
 },
 
@@ -152,30 +179,21 @@ async unarchiveSession(this: SessionController, sessionPath: string, sessionId: 
 	if (session) this.markHistoryUnarchived(session.path);
 },
 
-/**
- * Rank is frozen while a session is running. Catalog mtime/lastActivity
- * moves on every RPC event; using it as the list order is what made the
- * history jump around mid-turn.
- */
+/** Painting cached rows must never create completion/read transitions. */
 decorateHistoryRow(this: SessionController, row: RecentSession): RecentSession {
 	const key = this.historyPathKey(row.path);
 	const catalogMs = row.modifiedMs ?? (Number.isFinite(Date.parse(row.timestamp)) ? Date.parse(row.timestamp) : 0);
-	const prev = this.historySortMs.get(key);
-	const running = row.status === "running" || row.running === true;
-	if (running) {
-		this.historyWasRunning.add(key);
-		if (prev === undefined) this.historySortMs.set(key, catalogMs);
-	} else if (this.historyWasRunning.delete(key)) {
-		this.historySortMs.set(key, Date.now());
-		if (this.viewedSessionPath() !== key) this.historyUnreadComplete.add(key);
-		else this.historyUnreadComplete.delete(key);
-	} else if (prev === undefined) {
-		this.historySortMs.set(key, catalogMs);
-	}
-	const sortMs = this.historySortMs.get(key) ?? catalogMs;
-	const archived = this.historyArchived.has(key);
-	const unreadComplete = !running && this.historyUnreadComplete.has(key);
-	return { ...row, sortMs, archived, unreadComplete };
+	return {
+		...row,
+		...(this.historyRuntime.has(key) ? {
+			status: this.historyRuntime.get(key)?.status,
+			statusLabel: this.historyRuntime.get(key)?.statusLabel,
+			running: this.historyRuntime.get(key)?.status === "running",
+		} : {}),
+		sortMs: this.historySortMs.get(key) ?? catalogMs,
+		archived: this.historyArchived.has(key),
+		unreadComplete: this.historyUnreadComplete.has(key),
+	};
 },
 
 showHistoryView(this: SessionController): void {
@@ -232,7 +250,13 @@ async resolveHistorySession(this: SessionController, sessionPath: string, sessio
  * bucketing is what starved "This workspace" down to three rows while 79
  * sessions from other folders ate the budget.
  */
-rowsFromCatalog(this: SessionController, catalog: SessionSummaryRef[]): RecentSession[] {
+updateHistoryRuntime(this: SessionController, sessionPath: string, status: RecentSession["status"], statusLabel?: string, revision = ++this.historyRuntimeClock.revision): void {
+	const key = this.historyPathKey(sessionPath);
+	if ((this.historyRuntime.get(key)?.revision ?? 0) > revision) return;
+	this.historyRuntime.set(key, { status, statusLabel, revision });
+},
+
+rowsFromCatalog(this: SessionController, catalog: SessionSummaryRef[], revision = ++this.historyRuntimeClock.revision): RecentSession[] {
 	const root = normalizeFsPath(this.workspaceRoot);
 	const inWorkspaceRows: Array<{ row: RecentSession; source: SessionSummaryRef }> = [];
 	const otherRows: Array<{ row: RecentSession; source: SessionSummaryRef }> = [];
@@ -260,8 +284,11 @@ rowsFromCatalog(this: SessionController, catalog: SessionSummaryRef[]): RecentSe
 		const parsed = modified ? Date.parse(modified) : Number.NaN;
 		const inWorkspace = normalizeFsPath(s.cwd) === root;
 		const id = s.sessionId ?? path.basename(s.sessionFile, ".jsonl");
+		const key = this.historyPathKey(s.sessionFile);
+		if (!this.historySortMs.has(key)) this.historySortMs.set(key, Number.isFinite(parsed) ? parsed : 0);
 		const ownStatus = rosterStatus(s);
 		const status = directChildrenOf(s, id).some((child) => rosterStatus(child) === "running") ? "running" : ownStatus;
+		this.updateHistoryRuntime(key, status, status === ownStatus ? s.statusLabel : undefined, revision);
 		const row = this.decorateHistoryRow({
 			id,
 			path: s.sessionFile,
@@ -305,10 +332,33 @@ rowsFromCatalog(this: SessionController, catalog: SessionSummaryRef[]): RecentSe
 	return visible.map(({ row }) => row);
 },
 
+async refreshHistoryCompletions(this: SessionController, rows: Array<{ path: string }>): Promise<void> {
+	// Batch the notification update; a catalog scan must not repaint once per file.
+	let changed = false;
+	for (const row of rows) {
+		const completedAt = await readSessionCompletion(row.path);
+		if (this.disposed) break;
+		changed = this.recordHistoryCompletion(row.path, completedAt) || changed;
+	}
+	if (changed) {
+		this.persistHistoryUiState();
+		this.paintHistory();
+	}
+},
+
 async collectHistory(this: SessionController): Promise<RecentSession[]> {
+	const revision = ++this.historyRuntimeClock.revision;
 	try {
 		const sidecar = await this.ensureSidecar();
-		return this.rowsFromCatalog(await this.listSessions(sidecar));
+		const catalog = await this.listSessions(sidecar);
+		// Discover completions before applying frozen-rank caps. An old session
+		// that finishes elsewhere must be allowed back into the visible bucket.
+		await this.refreshHistoryCompletions(catalog
+			.filter((row) => row.sessionFile && row.cwd && (row.rlmDepth ?? 0) === 0 && row.lifecycle !== "draft")
+			.map((row) => ({ path: row.sessionFile! })));
+		const rows = this.rowsFromCatalog(catalog, revision);
+		this.paintHistory();
+		return rows.map((row) => this.decorateHistoryRow(row));
 	} catch {
 		// Daemon unreachable: the scan is less exact about names but it is the
 		// difference between a stale title and no history at all.
@@ -316,6 +366,9 @@ async collectHistory(this: SessionController): Promise<RecentSession[]> {
 			workspaceLimit: HISTORY_WORKSPACE_LIMIT,
 			otherLimit: HISTORY_OTHER_LIMIT,
 		});
+		for (const row of rows) this.updateHistoryRuntime(row.path, undefined, undefined, revision);
+		await this.refreshHistoryCompletions(rows);
+		this.paintHistory();
 		const decorated = rows.map((row) => this.decorateHistoryRow(row));
 		const activityOf = (s: RecentSession): number => s.sortMs ?? s.modifiedMs ?? 0;
 		const byActivityDesc = (a: RecentSession, b: RecentSession): number => activityOf(b) - activityOf(a);
@@ -437,7 +490,9 @@ async searchHistory(this: SessionController, query: string): Promise<void> {
 		const snippet = snippetByPath.get(normalizeFsPath(s.path));
 		return snippet ? { ...s, matchSnippet: snippet } : s;
 	});
-	const results = [...decorated, ...hits];
+	await this.refreshHistoryCompletions(hits);
+	if (this.disposed || generation !== this.historyRequestGeneration) return;
+	const results = [...decorated, ...hits.map((row) => this.decorateHistoryRow(row))];
 	this.actionHistory = results;
 	this.broadcast({ type: "history", sessions: results });
 },
@@ -450,6 +505,9 @@ forgetHistoryRow(this: SessionController, sessionPath: string): void {
 	this.historySortMs.delete(target);
 	this.historyArchived.delete(target);
 	this.historyUnreadComplete.delete(target);
+	this.historyCompletedAt.delete(target);
+	this.historyReadAt.delete(target);
+	this.historyRuntime.delete(target);
 	this.persistHistoryUiState();
 },
 

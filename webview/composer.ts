@@ -171,7 +171,7 @@ export class Composer {
 		this.modelBtn = document.createElement("button");
 		this.modelBtn.className = "rail-pill model";
 		this.modelBtn.title = "Choose model";
-		this.modelLabelEl = el("span", "pill-label");
+		this.modelLabelEl = el("span", "pill-label", "Choose model");
 		this.modelBtn.appendChild(this.modelLabelEl);
 		this.modelBtn.addEventListener("click", (event) => {
 			event.stopPropagation();
@@ -819,6 +819,7 @@ export class Composer {
 			onSelect: () => {
 				const restore = this.restoreStashAfterPicker;
 				this.restoreStashAfterPicker = false;
+				if (!this.enabled && this.draftAllowed) this.setThinking(level, this.availableThinkingLevels);
 				this.deps.onSetThinking(level);
 				if (restore) this.restoreComposerStash(this.lastNonSlashDraft);
 			},
@@ -884,6 +885,7 @@ export class Composer {
 			onSelect: () => {
 				const restore = this.restoreStashAfterPicker;
 				this.restoreStashAfterPicker = false;
+				if (!this.enabled && this.draftAllowed) this.setModel(this.modelLabelFor(model), model.provider, model.id);
 				this.deps.onSetModel(model.provider, model.id);
 				if (restore) this.restoreComposerStash(this.lastNonSlashDraft);
 			},

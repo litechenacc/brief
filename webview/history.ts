@@ -274,11 +274,8 @@ export class HistoryView {
 				relativeTime(session.modifiedMs != null ? new Date(session.modifiedMs).toISOString() : session.timestamp),
 			),
 		);
-		// Status dot on the right, the same three the CLI names. Shown for the
-		// current session too — attaching to a live run must not make the run look
-		// finished on the next visit to history. Older hosts send only `running`,
-		// so fall back to it rather than inventing a liveness we were not told.
-		const status = session.status ?? (session.running ? "running" : "inactive");
+		// Execution and unread notifications are independent, including unknown execution state.
+		const status = session.status;
 		const lamp =
 			status === "running" || session.running
 				? "working"
@@ -292,8 +289,9 @@ export class HistoryView {
 					? `Working — flagged by the daemon as ${session.statusLabel}`
 					: "Working"
 				: lamp === "complete"
-					? "Finished — waiting for you"
-					: "Opened";
+					? "Unread"
+					: "No unread notifications";
+		if (status === undefined && !session.running) mark.title += " — Execution status unavailable";
 		const dot = el("span", "running-dot");
 		if (lamp === "working") dot.style.animationDelay = `${-(Date.now() % RUNNING_PULSE_CYCLE_MS)}ms`;
 		mark.appendChild(dot);
@@ -391,17 +389,6 @@ export class HistoryView {
 			item.appendChild(children);
 		}
 		const openSession = (): void => {
-			if (isCurrent) {
-				this.deps.onBack();
-				return;
-			}
-			// Do not leave a finished-unread lamp green while the host resolves and
-			// resumes the session. The host confirms this transition in its history push.
-			const mark = item.querySelector(".running-mark.complete");
-			if (mark) {
-				mark.classList.replace("complete", "seen");
-				mark.setAttribute("title", "Opened");
-			}
 			this.deps.onResume(session.path, session.id);
 		};
 		resume.addEventListener("click", openSession);

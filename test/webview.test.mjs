@@ -8,7 +8,7 @@ import * as fs from "node:fs";
 
 const window = new Window({ url: "https://webview.local/" });
 const document = window.document;
-document.body.innerHTML = '<div id="app"></div>';
+document.body.innerHTML = '<div id="app"></div><script id="cached-models" type="application/json">[{"provider":"cached","id":"cached-model","reasoning":true}]</script>';
 document.body.className = "vscode-dark";
 
 const posted = [];
@@ -53,11 +53,21 @@ window.eval(code);
 
 check("sends ready on boot", posted.some((m) => m.type === "ready"));
 check("welcome screen visible", !!document.querySelector(".welcome"));
+const earlyModelButton = document.querySelector(".rail-pill.model");
+check("model button has a label before RPC", earlyModelButton.textContent === "Choose model");
+earlyModelButton.click();
+const earlyModelItem = [...document.querySelectorAll(".dropdown-item")].find((item) => item.textContent.includes("cached-model"));
+check("cached model picker works before any host message", !!earlyModelItem);
+earlyModelItem?.click();
+check("cached selection immediately paints and queues the host operation", earlyModelButton.textContent.includes("cached-model") && posted.some((message) => message.type === "setModel" && message.modelId === "cached-model"));
 
 // The chat opens immediately. The status strip remains the connection indicator,
 // while the composer accepts a draft before the first status arrives.
 const splash = document.querySelector(".boot-splash");
 check("boot does not block the chat", !splash && !document.querySelector("textarea")?.disabled && document.querySelector(".live-label")?.textContent === "connecting");
+hostMessage({ type: "status", status: { connected: false, restoring: true, streaming: false, modelLabel: "Agent", thinkingLevel: "off" } });
+check("startup status does not erase cached selection", earlyModelButton.textContent.includes("cached-model"));
+
 hostMessage({ type: "uiState", title: "early agent title", statusText: "warming up" });
 check("uiState statusText paints before the first status snapshot", document.querySelector(".live-label")?.textContent === "warming up");
 
@@ -548,7 +558,7 @@ hostMessage({
 	check("current row still has a resume control", currentRow?.querySelector("button.history-resume") instanceof window.HTMLButtonElement);
 	posted.length = 0;
 	currentRow.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-	check("clicking current session closes history without a switch", document.querySelector(".history-view")?.style.display === "none" && !posted.some((m) => m.type === "switchSession"), JSON.stringify(posted.map((m) => m.type)));
+	check("clicking current session requests a confirmed reopen", document.querySelector(".history-view")?.style.display === "none" && posted.some((m) => m.type === "switchSession"), JSON.stringify(posted.map((m) => m.type)));
 }
 hostMessage({
 	type: "history",
@@ -825,6 +835,8 @@ check("each state says what it means", [markOf("live worker"), markOf("quiet arc
 	.map((m) => m?.title ?? "").every((t) => t.length > 0));
 check("a host that sends no status still reads as seen, never as working",
 	markOf("legacy row")?.className.includes("seen") && !markOf("legacy row")?.className.includes("working"), markOf("legacy row")?.className);
+check("unknown execution does not claim completion", markOf("legacy row")?.title === "No unread notifications — Execution status unavailable");
+check("read history tooltip describes notifications", markOf("quiet archive")?.title === "No unread notifications");
 hostMessage({
 	type: "history",
 	sessions: [
@@ -832,10 +844,11 @@ hostMessage({
 	],
 });
 check("a finished unread row is the green complete lamp", markOf("just finished")?.className.includes("complete"), markOf("just finished")?.className);
+check("unread tooltip does not claim a finished run", markOf("just finished")?.title === "Unread");
 posted.length = 0;
 rowNamed("just finished")?.querySelector(".history-resume")?.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-check("opening a finished row clears its lamp before the host replies",
-	markOf("just finished")?.className.includes("seen") && posted.some((message) => message.type === "switchSession"), markOf("just finished")?.className);
+check("opening a finished row keeps its lamp until a successful host-confirmed render",
+	markOf("just finished")?.className.includes("complete") && posted.some((message) => message.type === "switchSession"), markOf("just finished")?.className);
 hostMessage({
 	type: "history",
 	sessions: [
@@ -1205,7 +1218,7 @@ check("a notice without an action renders no button",
 	] });
 	const label = document.querySelector(".live-label");
 	check("an idle parent reports the subagents still working for it",
-		label.textContent === "live · 1 subagent working", label.textContent);
+		label.textContent === "working · 1 subagent working", label.textContent);
 	check("...and the connection dot uses the working session lamp",
 		document.querySelector(".conn-dot").className.includes("working"),
 		document.querySelector(".conn-dot").className);
@@ -1214,7 +1227,7 @@ check("a notice without an action renders no button",
 		{ id: "w-1", activeSessionId: "dddd4444", name: "worker-one", runtimeKind: "subagent", rlmDepth: 1, status: "running", isStreaming: true, attachedClients: 0 },
 		{ id: "w-2", activeSessionId: "dddd4445", name: "worker-two", runtimeKind: "subagent", rlmDepth: 1, status: "running", isStreaming: true, attachedClients: 0 },
 	] });
-	check("the roster alone repaints the count", document.querySelector(".live-label").textContent === "live · 2 subagents working",
+	check("the roster alone repaints the count", document.querySelector(".live-label").textContent === "working · 2 subagents working",
 		document.querySelector(".live-label").textContent);
 	// The parent's own run outranks the note: "running" already says it is working.
 	hostMessage({ type: "status", status: { ...baseStatus, streaming: true } });
@@ -2099,6 +2112,54 @@ hostMessage({ type: "draft", text: "" });
 arrow("ArrowUp");
 check("a host draft push restarts recall at the newest", textarea.value === "steer now", JSON.stringify(textarea.value));
 clearBox();
+
+// Read receipts require a successfully rendered, focused chat, not history repaints.
+let readingFocused = true;
+Object.defineProperty(document, "hasFocus", { configurable: true, value: () => readingFocused });
+Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+const readFrame = () => new Promise((resolve) => window.requestAnimationFrame(resolve));
+const readReceipt = { sessionId: "read-session", path: "/tmp/read.jsonl", revision: 1, completedAt: 42 };
+const readSnapshot = { type: "snapshot", status: { ...baseStatus, sessionId: readReceipt.sessionId }, state: null,
+	messages: [{ role: "assistant", content: [{ type: "text", text: "Rendered completion" }] }], readReceipt };
+hostMessage({ type: "focusComposer" });
+posted.length = 0;
+hostMessage(readSnapshot); await readFrame();
+check("successful focused snapshot acknowledges exact identity", posted.some((m) => m.type === "chatRendered" && m.receipt.revision === 1));
+posted.length = 0;
+hostMessage({ type: "status", status: { ...baseStatus, sessionId: readReceipt.sessionId, unreadComplete: true } });
+hostMessage({ type: "history", sessions: [] }); await readFrame();
+check("status and history repaint do not acknowledge read", !posted.some((m) => m.type === "chatRendered"));
+check("header uses shared unread state", document.querySelector(".conn-dot")?.classList.contains("complete"));
+hostMessage({ type: "status", status: { ...baseStatus, connected: false, streaming: true, compacting: true, retrying: true, sessionId: readReceipt.sessionId } });
+check("offline header ignores stale local execution state", document.querySelector(".conn-dot")?.classList.contains("seen"));
+hostMessage({ type: "status", status: { ...baseStatus, connected: false, historyRunning: true, sessionId: readReceipt.sessionId } });
+check("known global execution stays red without a local attachment", document.querySelector(".conn-dot")?.classList.contains("working"));
+hostMessage({ type: "status", status: { ...baseStatus, statusText: "opened", historyRunning: true, sessionId: readReceipt.sessionId } });
+check("running lamp never labels an attached session opened", document.querySelector(".conn-dot")?.classList.contains("working") && document.querySelector(".live-label")?.textContent === "working");
+hostMessage({ type: "status", status: { ...baseStatus, statusText: "opened", historyRunning: false, sessionId: readReceipt.sessionId } });
+check("authoritative idle clears red after response ends", document.querySelector(".conn-dot")?.classList.contains("seen") && document.querySelector(".live-label")?.textContent === "opened");
+hostMessage({ type: "showHistory" });
+posted.length = 0;
+hostMessage({ ...readSnapshot, readReceipt: { ...readReceipt, revision: 2 } }); await readFrame();
+check("hidden chat does not acknowledge a snapshot", !posted.some((m) => m.type === "chatRendered"));
+window.dispatchEvent(new window.Event("focus"));
+check("focusing history actions does not request chat reading", !posted.some((m) => m.type === "chatFocused"));
+readingFocused = false;
+hostMessage({ type: "focusComposer" }); await readFrame();
+check("unfocused document does not acknowledge", !posted.some((m) => m.type === "chatRendered"));
+readingFocused = true;
+window.dispatchEvent(new window.Event("focus")); await readFrame();
+check("focusing rendered chat acknowledges pending snapshot", posted.some((m) => m.type === "chatRendered" && m.receipt.revision === 2));
+check("returning to chat requests a fresh receipt after manual unread", posted.some((m) => m.type === "chatFocused" && m.sessionId === readReceipt.sessionId));
+hostMessage({ type: "setHistoryMode", enabled: true });
+posted.length = 0;
+hostMessage({ ...readSnapshot, readReceipt: { ...readReceipt, revision: 3 } });
+window.dispatchEvent(new window.Event("focus")); await readFrame();
+check("history-only view never acknowledges chat", !posted.some((m) => m.type === "chatRendered"));
+hostMessage({ type: "setHistoryMode", enabled: false }); await readFrame();
+posted.length = 0;
+hostMessage({ type: "event", event: { type: "agent_end", messages: [] }, readReceipt: { ...readReceipt, revision: 4 } }); await readFrame();
+check("completed output is acknowledged after render", posted.some((m) => m.type === "chatRendered" && m.receipt.revision === 4));
 
 console.log(failed === 0 ? "\nPASS webview harness" : `\n${failed} webview checks FAILED`);
 process.exit(failed === 0 ? 0 : 1);

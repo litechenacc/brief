@@ -207,84 +207,95 @@ button:focus-visible {
    layout, so expanding the lens cannot make the transcript jump or reflow. */
 .conversation-lens {
 	position: absolute;
-	top: 0;
-	right: 8px;
-	bottom: 0;
-	width: 24px;
+	top: 50%;
+	right: 24px;
+	transform: translateY(-50%);
+	width: 56px;
+	max-height: min(320px, calc(100% - 32px));
+	opacity: 0;
+	border: 1px solid var(--pa-border);
+	border-radius: 10px;
+	background: var(--pa-surface-2);
+	box-shadow: 0 4px 16px var(--vscode-widget-shadow, transparent);
 	z-index: 20;
-	pointer-events: auto;
+}
+
+/* Keep the hover target active while hiding the whole floating panel.
+   Keyboard navigation can also reveal a focused turn. */
+.conversation-lens:hover,
+.conversation-lens:has(:focus-visible) {
+	opacity: 1;
 }
 
 .lens-rail {
 	position: absolute;
-	top: 0;
-	right: 0;
-	bottom: 0;
-	width: 2px;
-	background: color-mix(in srgb, var(--pa-border) 55%, transparent);
+	top: 27px;
+	right: 5px;
+	bottom: 27px;
+	left: 5px;
 }
 
-.lens-current {
-	position: absolute;
-	right: 0;
-	width: 4px;
-	height: 12px;
-	transform: translateY(-50%);
-	border-radius: 2px 0 0 2px;
-	background: var(--pa-accent);
-	box-shadow: 0 0 7px var(--pa-accent-glow);
-}
-
-.conversation-lens:not(.expanded) .lens-current {
-	width: 2px;
-	height: 18px;
-	box-shadow: none;
-}
-
-.conversation-lens:not(.expanded) .lens-marker {
-	display: none;
-}
-
+/* Keep bars dense; open space around the hovered row without moving its center. */
 .lens-marker {
 	position: absolute;
 	right: 0;
+	width: 44px;
 	height: 8px;
 	transform: translateY(-50%);
 	padding: 0;
-	border-radius: 3px 0 0 3px;
-	background: var(--pa-border-strong);
-	top: 0;
-	transition: width 80ms ease, background 80ms ease;
+	border-radius: 4px;
+	background: transparent;
 }
 
-.lens-individual {
-	width: 8px;
-	background: var(--pa-accent);
+.lens-marker:is(:hover, :focus-visible) {
+	height: 24px;
 }
 
-.lens-context-5 {
-	width: 16px;
-	height: 10px;
-	background: color-mix(in srgb, var(--pa-accent) 58%, var(--pa-border));
+.lens-marker:has(~ .lens-marker:is(:hover, :focus-visible)) {
+	transform: translateY(calc(-50% - 8px));
 }
 
-.lens-context-10 {
+.lens-marker:is(:hover, :focus-visible) ~ .lens-marker {
+	transform: translateY(calc(-50% + 8px));
+}
+
+.lens-marker::before {
+	content: "";
+	display: block;
+	width: 28px;
+	height: 4px;
+	margin: auto;
+	border-radius: 2px;
+	background: var(--pa-dim);
+	transition: width 80ms ease;
+}
+
+.conversation-lens.expanded .lens-individual::before {
 	width: 24px;
-	height: 12px;
-	background: color-mix(in srgb, var(--pa-accent) 42%, var(--pa-border));
 }
 
-.lens-marker:hover,
-.lens-marker:focus-visible {
+.conversation-lens.expanded .lens-context-5::before {
+	width: 34px;
+}
+
+.conversation-lens.expanded .lens-context-10::before {
+	width: 42px;
+}
+
+.lens-marker[aria-current="true"]::before,
+.lens-marker:hover::before,
+.lens-marker:focus-visible::before {
 	background: var(--pa-accent);
-	outline: 1px solid var(--pa-accent);
-	outline-offset: 1px;
+}
+
+.lens-marker:hover {
+	background: var(--pa-accent-dim);
 }
 
 .lens-tooltip {
 	position: absolute;
-	right: 28px;
-	width: min(280px, calc(100vw - 40px));
+	right: 64px;
+	width: min(280px, calc(100vw - 96px));
 	transform: translateY(-50%);
 	padding: 6px 8px;
 	border: 1px solid var(--pa-border);
@@ -363,13 +374,6 @@ textarea::-webkit-scrollbar {
 	font-size: 17px;
 	font-weight: 650;
 	letter-spacing: 0.01em;
-}
-
-.welcome-tag {
-	font-size: 12px;
-	line-height: 1.55;
-	color: var(--pa-dim);
-	white-space: pre-line;
 }
 
 .welcome-actions {

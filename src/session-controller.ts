@@ -35,6 +35,7 @@ import { compactMethods } from "./session-compact.js";
 import { daemonAttachMethods } from "./session-daemon.js";
 import { workspaceMethods } from "./session-workspace.js";
 import { historyCatalogMethods } from "./session-history.js";
+import { completedMessageTime } from "./session-completion.js";
 import type { AttachRef, ResolvedHistorySession, WebviewSink } from "./session-types.js";
 import type {
 	AgentEvent,
@@ -122,8 +123,10 @@ export interface SessionController {
 	overlayCachedHistory(): void;
 	paintHistory(): void;
 	viewedSessionPath(): string | undefined;
-	markHistoryWaitingForUser(sessionPath?: string): void;
-	markHistorySessionOpened(sessionPath: string): void;
+	recordHistoryCompletion(sessionPath: string, completedAt: number): boolean;
+	markHistoryWaitingForUser(sessionPath: string | undefined, completedAt: number): void;
+	markHistorySessionOpened(sessionPath: string, completedAt: number): void;
+	refreshHistoryCompletions(rows: Array<{ path: string }>): Promise<void>;
 	markHistoryUnread(sessionPath: string, sessionId: string): Promise<void>;
 	markHistoryArchived(sessionPath: string): void;
 	markHistoryUnarchived(sessionPath?: string): void;
@@ -131,7 +134,8 @@ export interface SessionController {
 	decorateHistoryRow(row: RecentSession): RecentSession;
 	showHistoryView(): void;
 	resolveHistorySession(sessionPath: string, sessionId: string): Promise<ResolvedHistorySession | null>;
-	rowsFromCatalog(catalog: SessionSummaryRef[]): RecentSession[];
+	updateHistoryRuntime(sessionPath: string, status: RecentSession["status"], statusLabel?: string, revision?: number): void;
+	rowsFromCatalog(catalog: SessionSummaryRef[], revision?: number): RecentSession[];
 	collectHistory(): Promise<RecentSession[]>;
 	listHistory(): Promise<void>;
 	searchHistory(query: string): Promise<void>;
@@ -236,8 +240,12 @@ export class SessionController implements vscode.Disposable {
 	historyArchived = new Set<string>();
 	/** Finished turns the operator has not opened since. */
 	historyUnreadComplete = new Set<string>();
-	/** Last seen running, so idle after a turn can bump rank exactly once. */
-	historyWasRunning = new Set<string>();
+	/** Durable terminal-message timestamps; read receipts refer to the same revision. */
+	historyCompletedAt = new Map<string, number>();
+	historyReadAt = new Map<string, number>();
+	historyRuntime = new Map<string, { status: RecentSession["status"]; statusLabel?: string; revision: number }>();
+	historyRuntimeClock = { revision: 0 };
+	historyPeers = new Set<SessionController>([this]);
 	/** Monotonic navigation ownership: late session RPCs cannot repaint a newer view. */
 	viewEpoch = 0;
 	/** Supersedes slow history/search answers so they cannot repaint a newer query. */
@@ -326,6 +334,13 @@ export class SessionController implements vscode.Disposable {
 
 	broadcast(message: HostToWebview): void {
 		if (this.disposed) return;
+		if (message.type === "snapshot" || message.type === "status") {
+			const sessionPath = message.status.sessionFile;
+			message = { ...message, status: { ...message.status,
+				unreadComplete: Boolean(sessionPath && this.historyUnreadComplete.has(this.historyPathKey(sessionPath))),
+				historyRunning: Boolean(sessionPath && this.historyRuntime.get(this.historyPathKey(sessionPath))?.status === "running"),
+			} };
+		}
 		if (this.sinks.size === 0) this.debugLog.append(`broadcast ${message.type} with no sinks`);
 		for (const sink of this.sinks) {
 			sink.post(message);
@@ -538,6 +553,7 @@ export class SessionController implements vscode.Disposable {
 	 * Stop button and a steer pill that no agent_end will ever clear.
 	 */
 	clearRunFlags(): void {
+		this.awaitingInput = false;
 		this.streaming = false;
 		this.compacting = false;
 		this.retrying = false;
@@ -546,6 +562,7 @@ export class SessionController implements vscode.Disposable {
 	dispose(): void {
 		if (this.disposed) return;
 		this.disposed = true;
+		this.historyPeers.delete(this);
 		this.stop();
 		// Drop the attach intent before tearing the socket down, or the close
 		// handler restarts the re-attach backoff against a dead controller.
@@ -593,12 +610,14 @@ export class SessionController implements vscode.Disposable {
 				break;
 			case "agent_end":
 				this.streaming = false;
+				if (this.attached && this.rentedState) this.rentedState = { ...this.rentedState, isStreaming: false };
+				else if (this.state) this.state = { ...this.state, isStreaming: false };
 				this.awaitingInput = true;
 				this.retrying = false;
 				this.onBusySettled();
 				this.scheduleChildrenRefresh();
 				// Rank only moves when the turn is done and the agent is waiting.
-				this.markHistoryWaitingForUser();
+				this.markHistoryWaitingForUser(undefined, completedMessageTime(event.messages ?? []));
 				this.scheduleHistoryRefresh();
 				break;
 			case "compaction_start":

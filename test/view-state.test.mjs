@@ -118,15 +118,16 @@ source.send({ type: "captureViewState", requestId: "pending-move", sessionId: "s
 assert.equal(source.posted.at(-1).type, "viewStateFailed");
 assert.match(source.posted.at(-1).error, /pending/);
 assert.equal(source.document.getElementById("app").inert, false);
+const beforeFocus = source.posted.length;
 input.dispatchEvent(new source.window.FocusEvent("focusin", { bubbles: true }));
-assert.equal(source.posted.at(-1).type, "viewFocused");
+assert.ok(source.posted.slice(beforeFocus).some((message) => message.type === "viewFocused"));
 assert.deepEqual(parseWebviewMessage({ type: "viewFocused", ignored: true }), { type: "viewFocused" });
 const history = view();
 history.send({ type: "setHistoryMode", enabled: true });
 history.send({ type: "history", sessions: [{ id: "old", path: "/known/old.jsonl", cwd: "/workspace", timestamp: new Date().toISOString(), name: "Old chat", inWorkspace: true }] });
 assert.equal(history.document.querySelector(".chat-view").style.display, "none");
 assert.equal(history.document.querySelector(".status-strip").style.display, "none");
-assert.ok(history.document.querySelector(".boot-splash").classList.contains("gone"));
+assert.equal(history.document.querySelector(".boot-splash"), null, "history stays unobstructed without a boot splash");
 history.document.querySelector(".history-resume").click();
 assert.equal(history.posted.at(-1).type, "switchSession");
 assert.equal(history.document.querySelector(".history-view").style.display, "");
