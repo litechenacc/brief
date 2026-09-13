@@ -1,12 +1,14 @@
 {
   "name": "brief",
   "displayName": "Brief",
-  "description": "Brief is a persistent AI coding agent for VS Code.",
-  "version": "0.3.1",
+  "description": "An independent Prime Agent frontend for VS Code, with persistent sessions, parallel editor tabs, and sidebar chat.",
+  "version": "0.3.2",
   "publisher": "litechenacc",
   "license": "MIT",
   "icon": "media/icon.png",
   "keywords": [
+    "prime",
+    "prime agent",
     "ai agent",
     "coding agent",
     "chat",
