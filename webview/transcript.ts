@@ -107,6 +107,8 @@ interface CustomDisplayMessage {
 	details?: {
 		message?: string;
 		from?: {
+			activeSessionId?: string;
+			clientId?: string;
 			sessionId?: string;
 			sessionName?: string;
 			model?: string;
@@ -157,12 +159,6 @@ interface LensTurn {
 	row: HTMLElement | null;
 	message: UserMessage | null;
 	optimisticId?: string;
-}
-
-interface LensBand {
-	start: number;
-	end: number;
-	kind: "individual" | "context-5" | "context-10";
 }
 
 export class Transcript {
@@ -260,12 +256,9 @@ export class Transcript {
 	/** User prompts are kept separately from rendered rows so the lens follows windowed history. */
 	private lensTurns: LensTurn[] = [];
 	private lensRoot: HTMLElement | null = null;
-	private lensFocus = 0;
 	private lensCurrent = 0;
-	private lensBands: LensBand[] = [];
 	private lensCollapseTimer: number | undefined;
-	private lensFocusTimer: number | undefined;
-	private lensTooltipTimer: number | undefined;
+	private readonly lensSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 	/** Child-index path from the scroller down to a node, plus the offset in it. */
 	private capturePoint(node: Node, offset: number): SelectionPoint | null {
@@ -460,58 +453,24 @@ export class Transcript {
 		root.appendChild(rail);
 		host.appendChild(root);
 		this.lensRoot = root;
-		root.addEventListener("mouseenter", () => {
+		const open = (event: Event) => {
 			window.clearTimeout(this.lensCollapseTimer);
-			if (this.lensTurns.length > 10) {
-				root.classList.add("expanded");
-				this.paintLens();
-			}
-		});
-		root.addEventListener("mouseleave", () => {
+			if (root.classList.contains("expanded")) return;
+			root.classList.add("expanded");
+			const current = (event.type === "focusin" ? event.target : rail.children[this.lensCurrent]) as HTMLElement | undefined;
+			if (current) rail.scrollTop = current.offsetTop - (rail.clientHeight - current.offsetHeight) / 2;
+		};
+		const close = () => {
 			window.clearTimeout(this.lensCollapseTimer);
 			this.lensCollapseTimer = window.setTimeout(() => {
-				root.classList.remove("expanded");
-				root.querySelector(".lens-tooltip")?.remove();
-			}, 350);
-		});
-		root.addEventListener("mousemove", (event) => this.lensPointerMove(event));
+				if (!root.matches(":hover") && !root.querySelector(":focus-visible")) root.classList.remove("expanded");
+			}, 150);
+		};
+		root.addEventListener("mouseenter", open);
+		root.addEventListener("mouseleave", close);
+		root.addEventListener("focusin", open);
+		root.addEventListener("focusout", close);
 		this.paintLens();
-	}
-
-	private lensPointerMove(event: MouseEvent): void {
-		if (!this.lensRoot || this.lensTurns.length <= 10 || this.lensBands.length === 0) return;
-		// Keep an individual button stable while the reader aims and clicks.
-		if ((event.target as HTMLElement).closest(".lens-individual")) return;
-		const rect = this.lensRoot.getBoundingClientRect();
-		if (rect.height <= 0) return;
-		const position = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
-		// The physical ends are explicit edge targets. This keeps the first/last
-		// seven turns reachable without inventing symmetric blank slots.
-		if (position <= 0) {
-			this.scheduleLensFocus(0);
-			return;
-		}
-		if (position >= 1) {
-			this.scheduleLensFocus(this.lensTurns.length - 1);
-			return;
-		}
-		const slot = Math.round(position * (this.lensBands.length - 1));
-		const band = this.lensBands[slot];
-		if (!band) return;
-		const next = Math.round((band.start + band.end) / 2);
-		this.scheduleLensFocus(next);
-	}
-
-	private scheduleLensFocus(next: number): void {
-		next = Math.max(0, Math.min(this.lensTurns.length - 1, next));
-		if (next === this.lensFocus) return;
-		window.clearTimeout(this.lensFocusTimer);
-		// A short settle window prevents a pointer resting on a boundary from
-		// swapping the seven nearby markers back and forth.
-		this.lensFocusTimer = window.setTimeout(() => {
-			this.lensFocus = next;
-			this.paintLens();
-		}, 35);
 	}
 
 	private updateLensCurrent(): void {
@@ -531,7 +490,6 @@ export class Transcript {
 		}
 		if (!found && this.scroller.scrollTop <= 0) current = 0;
 		this.lensCurrent = Math.max(0, Math.min(this.lensTurns.length - 1, current));
-		if (this.lensFocus < 0 || this.lensFocus >= this.lensTurns.length) this.lensFocus = this.lensCurrent;
 		this.lensRoot?.querySelectorAll<HTMLElement>(".lens-marker").forEach((marker) => {
 			marker.setAttribute("aria-current", String(Number(marker.dataset.start) <= this.lensCurrent && this.lensCurrent <= Number(marker.dataset.end)));
 		});
@@ -540,86 +498,31 @@ export class Transcript {
 	private paintLens(): void {
 		const root = this.lensRoot;
 		if (!root) return;
-		window.clearTimeout(this.lensTooltipTimer);
-		root.querySelector(".lens-tooltip")?.remove();
 		const count = this.lensTurns.length;
 		root.hidden = count === 0;
 		root.setAttribute("aria-hidden", String(count === 0));
-		this.lensBands = [];
-		if (count === 0) return;
 		const rail = root.querySelector<HTMLElement>(".lens-rail");
 		if (!rail) return;
-		rail.replaceChildren();
-		if (count <= 10) root.classList.remove("expanded");
-		const start = count <= 10 ? 0 : Math.max(0, Math.min(count - 7, this.lensFocus - 3));
-		const end = count <= 10 ? count - 1 : Math.min(count - 1, start + 6);
-		const bands: LensBand[] = [];
-		const before: LensBand[] = [];
-		// Build context outward from the focus: the nearest five are always the
-		// medium context, then farther turns are grouped in tens.
-		for (let cursor = start - 1, nearest = true; cursor >= 0;) {
-			const size = nearest ? 5 : 10;
-			const from = Math.max(0, cursor - size + 1);
-			before.push({ start: from, end: cursor, kind: nearest ? "context-5" : "context-10" });
-			cursor = from - 1;
-			nearest = false;
-		}
-		bands.push(...before.reverse());
-		for (let index = start; index <= end; index += 1) bands.push({ start: index, end: index, kind: "individual" });
-		for (let cursor = end + 1, nearest = true; cursor < count;) {
-			const size = nearest ? 5 : 10;
-			const to = Math.min(count - 1, cursor + size - 1);
-			bands.push({ start: cursor, end: to, kind: nearest ? "context-5" : "context-10" });
-			cursor = to + 1;
-			nearest = false;
-		}
-		this.lensBands = bands;
-		root.style.height = `${bands.length * 8 + 48}px`;
-		const slots = Math.max(1, bands.length - 1);
-		bands.forEach((band, slot) => this.addLensMarker(rail, band, bands.length === 1 ? 0.5 : slot / slots));
-	}
-
-	private addLensMarker(rail: HTMLElement, band: LensBand, top: number): void {
-		const { start, end } = band;
-		const className = band.kind === "individual" ? "lens-individual" : band.kind === "context-5" ? "lens-context-5" : "lens-context-10";
-		const marker = el("button", `lens-marker ${className}`) as HTMLButtonElement;
-		marker.type = "button";
-		const renderedTop = `${top * 100}%`;
-		marker.style.top = renderedTop;
-		marker.dataset.start = String(start);
-		marker.dataset.end = String(end);
-		marker.setAttribute("aria-current", String(start <= this.lensCurrent && this.lensCurrent <= end));
-		marker.setAttribute("aria-label", start === end ? `Turn ${start + 1}` : `Turns ${start + 1}–${end + 1}`);
-		marker.addEventListener("mouseenter", () => {
-			window.clearTimeout(this.lensTooltipTimer);
-			if (start === end) {
-				this.lensTooltipTimer = window.setTimeout(() => this.showLensTooltip(start, renderedTop), 200);
-			} else {
-				this.scheduleLensFocus(Math.round((start + end) / 2));
+		// Reuse rows so incoming messages do not interrupt hover, focus or scrolling.
+		this.lensTurns.forEach((turn, index) => {
+			let marker = rail.children[index] as HTMLButtonElement | undefined;
+			if (!marker) {
+				marker = el("button", "lens-marker lens-individual") as HTMLButtonElement;
+				marker.type = "button";
+				marker.appendChild(el("span", "lens-label"));
+				marker.addEventListener("click", () => this.jumpToTurn(index));
+				rail.appendChild(marker);
 			}
+			const text = turn.text.replace(/\s+/gu, " ").trim() || "(image prompt)";
+			const characters = Array.from(this.lensSegmenter.segment(text), (part) => part.segment);
+			const label = characters.slice(0, 16).join("") + (characters.length > 16 ? "…" : "");
+			if (marker.firstChild!.textContent !== label) marker.firstChild!.textContent = label;
+			marker.dataset.start = marker.dataset.end = String(index);
+			marker.setAttribute("aria-label", `Turn ${index + 1} of ${count}: ${text}`);
+			marker.setAttribute("aria-current", String(index === this.lensCurrent));
 		});
-		marker.addEventListener("mouseleave", () => {
-			window.clearTimeout(this.lensTooltipTimer);
-			this.lensRoot?.querySelector(".lens-tooltip")?.remove();
-		});
-		marker.addEventListener("click", (event) => {
-			event.stopPropagation();
-			if (start === end) this.jumpToTurn(start);
-			else this.scheduleLensFocus(Math.round((start + end) / 2));
-		});
-		rail.appendChild(marker);
-	}
-
-	private showLensTooltip(index: number, renderedTop: string): void {
-		const root = this.lensRoot;
-		const turn = this.lensTurns[index];
-		if (!root || !turn) return;
-		root.querySelector(".lens-tooltip")?.remove();
-		const tooltip = el("div", "lens-tooltip");
-		tooltip.appendChild(el("div", "lens-tooltip-heading", `Turn ${index + 1} of ${this.lensTurns.length}`));
-		tooltip.appendChild(el("div", "lens-tooltip-text", turn.text || "(image prompt)"));
-		tooltip.style.top = renderedTop;
-		root.appendChild(tooltip);
+		while (rail.children.length > count) rail.lastElementChild!.remove();
+		if (count === 0) root.classList.remove("expanded");
 	}
 
 	private jumpToTurn(index: number): void {
@@ -679,7 +582,7 @@ export class Transcript {
 		newBtn.addEventListener("click", () => this.deps.onNewSession());
 		const histBtn = document.createElement("button");
 		histBtn.className = "welcome-action";
-		histBtn.title = "Sessions in this workspace";
+		histBtn.title = "Session history";
 		histBtn.appendChild(icon("history", 14));
 		histBtn.appendChild(el("span", "", "Resume session"));
 		histBtn.addEventListener("click", () => this.deps.onShowHistory());
@@ -763,7 +666,6 @@ export class Transcript {
 		this.stopWorking();
 		this.optimisticRows.clear();
 		this.lensTurns = [];
-		this.lensFocus = 0;
 		this.lensCurrent = 0;
 		this.userOrdinals = new WeakMap<object, number>();
 		this.nextUserOrdinal = 0;
@@ -798,7 +700,6 @@ export class Transcript {
 		// the scroll position was in the session we came from.
 		this.forceScrollToBottom();
 		this.updateLensCurrent();
-		this.lensFocus = this.lensCurrent;
 		this.paintLens();
 	}
 
@@ -1235,7 +1136,7 @@ export class Transcript {
 		this.optimisticRows.set(clientRequestId, { clientRequestId, text, imageSignature: this.imageSignature(images), row });
 		this.lensTurns.push({ ordinal, text, row, message: optimisticMessage, optimisticId: clientRequestId });
 		this.lensTurns.sort((a, b) => a.ordinal - b.ordinal);
-		this.lensFocus = this.lensCurrent = Math.max(0, this.lensTurns.length - 1);
+		this.lensCurrent = Math.max(0, this.lensTurns.length - 1);
 		this.paintLens();
 		this.markSending();
 		// The operator just hit send — that is an explicit intent to follow along.
@@ -1375,8 +1276,10 @@ export class Transcript {
 		const sender = message.details?.from;
 		const reply = message.details?.message?.trim();
 		const content = typeof message.content === "string" ? message.content.trim() : "";
-		if (message.customType === "agent_message" && sender?.sessionName && reply) {
-			return this.buildConversationMessage(sender.sessionName, sender.model, reply, "agent");
+		if (message.customType === "agent_message" && reply) {
+			const name = sender?.sessionName?.trim() || sender?.activeSessionId?.trim()
+				|| sender?.clientId?.trim() || sender?.sessionId?.trim() || "agent";
+			return this.buildConversationMessage(name, sender?.model, reply, "agent");
 		}
 		if (message.customType === "async_bash_completion" && content) {
 			const details = message.details as { pid?: number; exitCode?: number } | undefined;

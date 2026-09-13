@@ -203,126 +203,110 @@ button:focus-visible {
 	position: relative;
 }
 
-/* This is a fixed-width overlay. It never participates in the messages flex
-   layout, so expanding the lens cannot make the transcript jump or reflow. */
+/* A clipped right-edge drawer. Its width never participates in transcript layout. */
 .conversation-lens {
+	display: flex;
+	flex-direction: column;
 	position: absolute;
-	top: 50%;
-	right: 24px;
-	transform: translateY(-50%);
-	width: 56px;
-	max-height: min(320px, calc(100% - 32px));
-	opacity: 0;
-	border: 1px solid var(--pa-border);
-	border-radius: 10px;
-	background: var(--pa-surface-2);
-	box-shadow: 0 4px 16px var(--vscode-widget-shadow, transparent);
+	top: 12px;
+	right: 12px;
+	width: 40px;
+	max-width: calc(100% - 24px);
+	max-height: calc(100% - 24px);
+	overflow: hidden;
+	border: 1px solid transparent;
+	border-radius: 8px;
+	background: transparent;
 	z-index: 20;
+	transition: width 140ms ease-out;
 }
 
-/* Keep the hover target active while hiding the whole floating panel.
-   Keyboard navigation can also reveal a focused turn. */
-.conversation-lens:hover,
-.conversation-lens:has(:focus-visible) {
-	opacity: 1;
+.conversation-lens[hidden] {
+	display: none;
+}
+
+.conversation-lens.expanded {
+	width: min(260px, calc(100% - 24px));
+	background: var(--vscode-menu-background, var(--vscode-editor-background, var(--pa-surface-2)));
+	box-shadow: 0 0 0 1px rgb(0 0 0 / 4%), 0 4px 16px rgb(0 0 0 / 8%);
 }
 
 .lens-rail {
-	position: absolute;
-	top: 27px;
-	right: 5px;
-	bottom: 27px;
-	left: 5px;
+	position: relative;
+	width: 258px;
+	max-width: calc(100vw - 26px);
+	min-height: 0;
+	max-height: 360px;
+	overflow-x: hidden;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	scrollbar-width: thin;
+	padding: 10px 8px;
 }
 
-/* Keep bars dense; open space around the hovered row without moving its center. */
 .lens-marker {
-	position: absolute;
-	right: 0;
-	width: 44px;
-	height: 8px;
-	transform: translateY(-50%);
-	padding: 0;
+	display: flex;
+	align-items: center;
+	width: 100%;
+	height: 30px;
+	padding: 0 8px;
+	border: 0;
 	border-radius: 4px;
 	background: transparent;
+	color: color-mix(in srgb, var(--pa-text) 70%, transparent);
+	text-align: left;
+	font-size: 8px;
+	line-height: 20px;
+	font-weight: 400;
+	cursor: pointer;
 }
 
-.lens-marker:is(:hover, :focus-visible) {
-	height: 24px;
+.conversation-lens.expanded .lens-marker {
+	font-size: 13px;
 }
 
-.lens-marker:has(~ .lens-marker:is(:hover, :focus-visible)) {
-	transform: translateY(calc(-50% - 8px));
-}
-
-.lens-marker:is(:hover, :focus-visible) ~ .lens-marker {
-	transform: translateY(calc(-50% + 8px));
-}
-
-.lens-marker::before {
-	content: "";
+.lens-label {
 	display: block;
-	width: 28px;
-	height: 4px;
-	margin: auto;
-	border-radius: 2px;
-	background: var(--pa-dim);
-	transition: width 80ms ease;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
 }
 
-.conversation-lens.expanded .lens-individual::before {
-	width: 24px;
+.lens-marker[aria-current="true"] {
+	color: var(--vscode-textLink-foreground, #0875c4);
+	font-weight: 500;
 }
 
-.conversation-lens.expanded .lens-context-5::before {
-	width: 34px;
-}
-
-.conversation-lens.expanded .lens-context-10::before {
-	width: 42px;
-}
-
-.lens-marker[aria-current="true"]::before,
-.lens-marker:hover::before,
-.lens-marker:focus-visible::before {
-	background: var(--pa-accent);
+body.vscode-dark .lens-marker[aria-current="true"] {
+	color: var(--vscode-textLink-foreground, #6caef5);
 }
 
 .lens-marker:hover {
-	background: var(--pa-accent-dim);
+	background: color-mix(in srgb, var(--pa-text) 5%, transparent);
 }
 
-.lens-tooltip {
-	position: absolute;
-	right: 64px;
-	width: min(280px, calc(100vw - 96px));
-	transform: translateY(-50%);
-	padding: 6px 8px;
-	border: 1px solid var(--pa-border);
-	border-radius: 6px;
-	background: var(--pa-surface-2);
-	box-shadow: 0 4px 16px var(--vscode-widget-shadow, transparent);
-	font-size: 11px;
-	pointer-events: none;
-	overflow: hidden;
-	z-index: 2;
+.lens-marker:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder, var(--pa-accent));
+	outline-offset: -2px;
 }
 
-.lens-tooltip-heading {
-	margin-bottom: 3px;
-	color: var(--pa-accent);
-	font-size: 10px;
-	font-weight: 600;
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .conversation-lens.expanded {
+	border-color: var(--vscode-contrastBorder, var(--pa-text));
 }
 
-.lens-tooltip-text {
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .lens-marker {
 	color: var(--pa-text);
-	display: -webkit-box;
-	-webkit-box-orient: vertical;
-	-webkit-line-clamp: 2;
-	overflow: hidden;
-	line-height: 1.35;
-	word-break: break-word;
+}
+
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .lens-marker[aria-current="true"] {
+	color: var(--vscode-textLink-foreground, var(--pa-accent));
+	text-decoration: underline;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.conversation-lens {
+		transition: none;
+	}
 }
 
 .messages {
