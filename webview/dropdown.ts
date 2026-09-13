@@ -8,6 +8,8 @@ import { el } from "./dom.js";
 export interface DropdownItem {
 	/** Primary label */
 	label: string;
+	/** Decorative leading icon (used by model rows). */
+	icon?: SVGSVGElement;
 	/** Secondary dimmed text */
 	sub?: string;
 	/** Section header rendered above this item when it starts a new group */
@@ -161,6 +163,7 @@ export class Dropdown {
 			const main = el("span", "dropdown-label");
 			main.appendChild(el("span", "dropdown-text", item.label));
 			if (item.sub) main.appendChild(el("span", "dropdown-sub", item.sub));
+			if (item.icon) select.appendChild(item.icon);
 			select.appendChild(main);
 			if (item.right) select.appendChild(el("span", "dropdown-right", item.right));
 			row.appendChild(select);

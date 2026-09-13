@@ -115,6 +115,20 @@ try {
 	assert.equal(await input.inputValue(), "draft before connection");
 	assert.equal(await send.isDisabled(), false);
 	assert.notEqual(await send.evaluate(el => getComputedStyle(el).borderTopStyle), "dashed");
+	for (const status of [
+		{ connected: false },
+		{ connected: true, streaming: true, historyRunning: true, statusText: "running" },
+		{ connected: true, streaming: false, historyRunning: false, unreadComplete: true },
+	]) {
+		await startup.evaluate(status => window.dispatchEvent(new MessageEvent("message", { data: {
+			type: "status", status: { sessionId: "created", ...status },
+		} })), status);
+		assert.equal(await startup.locator(".status-strip").evaluate(el => getComputedStyle(el).display), "none", "composer status stays hidden after runtime updates");
+		for (const selector of [".status-strip", ".conn-dot", ".live-label"]) {
+			assert.equal(await startup.locator(selector).boundingBox(), null, `${selector} has no visible content or reserved space`);
+		}
+	}
+	console.log("PASS composer runtime indicator stays hidden without reserved space");
 	console.log("PASS startup draft, cached picker, static dashed send and decorative welcome animation");
 	console.log("PASS working icon/text animation, static timer, reduced motion and forced colors");
 } finally {

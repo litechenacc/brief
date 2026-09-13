@@ -46,13 +46,19 @@
       {
         "command": "brief.openChat",
         "title": "Open Chat in Editor Tab",
-        "icon": { "light": "media/tab-light.svg", "dark": "media/tab-dark.svg" },
+        "icon": {
+          "light": "media/tab-light.svg",
+          "dark": "media/tab-dark.svg"
+        },
         "category": "Brief"
       },
       {
         "command": "brief.focusChat",
         "title": "Focus Chat",
-        "icon": { "light": "media/tab-light.svg", "dark": "media/tab-dark.svg" },
+        "icon": {
+          "light": "media/tab-light.svg",
+          "dark": "media/tab-dark.svg"
+        },
         "category": "Brief"
       },
       {
@@ -75,7 +81,7 @@
       },
       {
         "command": "brief.exportChat",
-        "title": "Export Chat\u2026",
+        "title": "Export Chat…",
         "icon": "$(export)",
         "category": "Brief"
       },
@@ -279,7 +285,34 @@
             "followUp"
           ],
           "default": "steer",
-          "description": "How messages sent while the agent is working are delivered: steer interrupts after the current turn, followUp waits until the run ends. Toggleable per-run in the chat rail."
+          "description": "How messages sent while the agent is working are delivered: steer interrupts after the current turn, followUp waits until the run ends. Choose Queue or Steer from the send button menu for the current run."
+        },
+        "brief.composerToolbar": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "model",
+              "effort",
+              "spacer",
+              "id",
+              "cost",
+              "context",
+              "btn"
+            ]
+          },
+          "default": [
+            "model",
+            "effort",
+            "spacer",
+            "id",
+            "cost",
+            "context",
+            "btn"
+          ],
+          "scope": "window",
+          "description": "Controls which composer toolbar items are shown and their order. The attachment button remains at the left. Available items: model, effort, spacer, id, cost, context, btn.",
+          "uniqueItems": true
         },
         "brief.liveTranscript": {
           "type": "boolean",
@@ -338,7 +371,7 @@
     "typecheck": "tsc --noEmit",
     "package": "node esbuild.config.mjs --production && npx @vscode/vsce package --no-dependencies",
     "smoke": "node test/smoke.mjs",
-    "test": "node test/agent-locator.test.mjs && node test/activate.test.mjs && node test/editor-tabs.test.mjs && node test/session-startup.test.mjs && node test/session-completion.test.mjs && node test/history-read.test.mjs && node test/runtime-lamp.test.mjs && node test/chat-view-message.test.mjs && node test/composer-attachments-host.test.mjs && node test/composer-attachments.test.mjs && node test/attachment-main.test.mjs && node test/composer-attachments-browser.test.mjs && node test/session-controller-boundary.test.mjs && node test/attach-lifecycle.test.mjs && node test/session-actions.test.mjs && node test/webview.test.mjs && node test/conversation-lens.test.mjs && node test/view-state.test.mjs && node test/transcript-window.test.mjs && node test/export-md.test.mjs && node test/recent-sessions-tail.test.mjs && node test/roster-parity.test.mjs && node test/crosswire.test.mjs && node test/image-fit.test.mjs && node test/transport-regression.test.mjs && node test/owner-visibility.test.mjs && node test/hidden-details.test.mjs && node test/working-animation.test.mjs",
+    "test": "node test/agent-locator.test.mjs && node test/activate.test.mjs && node test/editor-tabs.test.mjs && node test/session-startup.test.mjs && node test/session-completion.test.mjs && node test/history-read.test.mjs && node test/runtime-lamp.test.mjs && node test/chat-view-message.test.mjs && node test/composer-attachments-host.test.mjs && node test/composer-attachments.test.mjs && node test/composer-send-controls.test.mjs && node test/provider-icons.test.mjs && node test/composer-alignment.test.mjs && node test/attachment-main.test.mjs && node test/composer-attachments-browser.test.mjs && node test/session-controller-boundary.test.mjs && node test/attach-lifecycle.test.mjs && node test/session-actions.test.mjs && node test/webview.test.mjs && node test/conversation-lens.test.mjs && node test/view-state.test.mjs && node test/transcript-window.test.mjs && node test/export-md.test.mjs && node test/recent-sessions-tail.test.mjs && node test/roster-parity.test.mjs && node test/crosswire.test.mjs && node test/image-fit.test.mjs && node test/transport-regression.test.mjs && node test/owner-visibility.test.mjs && node test/hidden-details.test.mjs && node test/working-animation.test.mjs",
     "test:live": "node esbuild.config.mjs && node test/daemon-parity.mjs --require-daemon && node test/owned-roster.mjs --require-daemon && node test/host-e2e.mjs && node test/smoke.mjs",
     "icon": "node test/render-icon.cjs",
     "pretest": "node esbuild.config.mjs",

@@ -164,6 +164,7 @@ const composerDeps = {
 	onToggleFavorite: (provider: string, modelId: string) => post({ type: "toggleFavoriteModel", provider, modelId }),
 	onOpenFile: (path: string, startLine?: number, endLine?: number) => post({ type: "openFile", path, startLine, endLine }),
 	onNewSession: () => requestNewSession(),
+	onLogin: () => post({ type: "login" }),
 };
 const composer = new Composer(composerDeps);
 const cachedModels = document.getElementById("cached-models");
@@ -243,15 +244,12 @@ const historyView = new HistoryView({
 // ---------------------------------------------------------------------------
 
 const statusStrip = el("div", "status-strip");
+// Runtime state remains available to the webview, but is intentionally not shown
+// in the composer chrome.
+statusStrip.hidden = true;
 const connDot = el("span", "conn-dot");
 const liveLabel = el("span", "live-label", "connecting");
-const sessionIdLabel = el("span", "session-id", "");
-const statsLabel = el("details", "stats-label") as HTMLDetailsElement;
-const statsSummary = el("summary", "", "");
-const statsDetail = el("div", "stats-detail");
-statsLabel.append(statsSummary, statsDetail);
-statsLabel.hidden = true;
-statusStrip.append(connDot, liveLabel, sessionIdLabel, el("span", "spacer"), statsLabel);
+statusStrip.append(connDot, liveLabel, el("span", "spacer"));
 composer.root.querySelector(".composer-card")!.appendChild(statusStrip);
 
 const subagents = new SubagentsStrip({
@@ -361,10 +359,7 @@ function startNewThread(): void {
 			statsText: "",
 		};
 		renderLiveLabel(currentStatus);
-		sessionIdLabel.textContent = "";
-		sessionIdLabel.title = "";
-		statsLabel.hidden = true;
-		statsLabel.open = false;
+		composer.setSessionInfo(undefined, undefined, undefined, undefined);
 	}
 }
 
@@ -460,22 +455,12 @@ function applyStatus(incomingStatus: StatusSnapshot): void {
 		// session change, and collapsing the strip under the operator mid-navigation
 		// is exactly the freeze that made siblings unreachable.
 		subagents.resetForSessionChange();
-		statsLabel.open = false;
 	}
 	currentStatus = status;
 	renderLiveLabel(status);
 
-	sessionIdLabel.textContent = status.sessionId ? `#${status.sessionId.slice(0, 8)}` : "";
-	sessionIdLabel.title = status.sessionFile ?? "";
-
-	statsLabel.hidden = status.costUsd == null && status.usageTotal == null;
-	statsSummary.textContent = status.costUsd != null ? `$${status.costUsd.toFixed(2)}` : "Cost pending";
-	statsDetail.textContent = [
-		"Scope: model usage from the current session state; not a permanent billing history.",
-		"Whether subagents are fully included is unconfirmed; this is not a total across all agents.",
-		status.usageTotal != null ? `Cumulative usage: ${formatNumber(status.usageTotal)} tokens (including cache)` : "Cumulative usage: pending",
-		status.costUsd != null ? `Reported cost: $${status.costUsd.toFixed(4)} (not an account charge)` : "Reported cost: pending",
-	].join("\n");
+	composer.setToolbar(status.composerToolbar);
+	composer.setSessionInfo(status.sessionId, status.sessionFile, status.costUsd, status.usageTotal);
 
 	// Startup has no authoritative model yet. Keep the local picker choice.
 	if (status.sessionId || status.modelId) {
@@ -858,12 +843,6 @@ function userPromptsOf(messages: AgentMessage[]): string[] {
 		}
 	}
 	return prompts;
-}
-
-function formatNumber(value: number): string {
-	if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-	if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
-	return String(value);
 }
 
 // ---------------------------------------------------------------------------

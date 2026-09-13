@@ -1261,6 +1261,13 @@ body.vscode-high-contrast-light .history-item.current {
 	gap: 3px;
 }
 
+/* Keep text line boxes consistent across pills, metadata and delivery actions. */
+.composer-rail > .rail-pill,
+.composer-rail > .composer-meta,
+.send-control > .send-btn {
+	line-height: 16px;
+}
+
 .rail-sep {
 	width: 1px;
 	height: 16px;
@@ -1284,10 +1291,22 @@ body.vscode-high-contrast-light .history-item.current {
 	flex-shrink: 0;
 }
 
+.provider-icon {
+	display: block;
+	flex-shrink: 0;
+}
+
 .rail-pill.model {
+	gap: 5px;
 	flex-shrink: 1;
 	max-width: 190px;
 	min-width: 0;
+}
+
+.rail-pill.model .pill-label {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
 }
 
 .rail-pill:hover {
@@ -1339,6 +1358,50 @@ body.vscode-high-contrast-light .history-item.current {
 .send-btn.stop {
 	background: var(--vscode-statusBarItem-errorBackground, var(--pa-error));
 	color: var(--vscode-statusBarItem-errorForeground, var(--pa-accent-ink));
+}
+
+/* One fixed-width delivery control so run transitions do not shift the rail. */
+.send-control {
+	display: flex;
+	align-items: stretch;
+	width: 108px;
+	height: 26px;
+	flex-shrink: 0;
+	border: 1px solid var(--pa-border);
+	border-radius: 7px;
+}
+
+.send-control > .send-btn {
+	width: auto;
+	flex: 1;
+	height: 100%;
+	gap: 5px;
+	border-radius: 6px 0 0 6px;
+	font-size: 11px;
+}
+
+.send-mode-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	border-left: 1px solid var(--pa-border);
+	border-radius: 0 6px 6px 0;
+	color: var(--pa-text);
+	background: var(--pa-raised);
+}
+
+.send-mode-btn:hover { background: var(--pa-accent-dim); }
+.send-control:has(> .send-mode-btn[style*="display: none"]) > .send-btn { border-radius: 6px; }
+.send-control > button:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: 2px;
+}
+.send-control > .send-btn:disabled,
+.send-control > .send-btn:disabled:hover {
+	background: transparent;
+	color: var(--pa-dim);
+	cursor: not-allowed;
 }
 
 /* ---------- autocomplete ---------- */
@@ -1394,6 +1457,11 @@ body.vscode-high-contrast-light .history-item.current {
 }
 
 /* ---------- status strip ---------- */
+
+/* Author display rules otherwise override the native hidden attribute. */
+.status-strip[hidden] {
+	display: none;
+}
 
 .status-strip {
 	display: flex;
@@ -1458,14 +1526,47 @@ body.vscode-high-contrast-light .history-item.current {
 	color: #30a46c;
 }
 
-.session-id {
-	font-family: var(--vscode-editor-font-family, monospace);
-	font-size: 9.5px;
-	opacity: 0.75;
+.composer-rail > .composer-meta {
+	display: inline-flex;
+	align-items: center;
+	box-sizing: border-box;
+	height: 26px;
+	padding: 0 8px;
+	border: 1px solid var(--pa-border);
+	border-radius: 9px;
+	background: var(--pa-surface-2);
+	color: var(--pa-dim);
+	font-size: 10.5px;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+	flex-shrink: 0;
 }
 
-.stats-label {
-	white-space: nowrap;
+.composer-rail > .session-id {
+	font-family: var(--vscode-editor-font-family, monospace);
+}
+
+.composer-rail > .context-meter {
+	margin: 0;
+	cursor: default;
+}
+
+.composer-rail > .stats-label summary {
+	list-style: none;
+	cursor: pointer;
+}
+
+.composer-rail > .stats-label summary::-webkit-details-marker {
+	display: none;
+}
+
+.composer-rail > .stats-label summary::before {
+	content: "▸ ";
+	color: var(--pa-faint);
+}
+
+.composer-rail > .stats-label[open] summary::before {
+	content: "▾ ";
 }
 
 /* ---------- dropdown menus ---------- */
@@ -2473,11 +2574,10 @@ pre.term {
 	opacity: 0.72;
 }
 
-/* ---------- brain rail pill (icon-centered, tight) ---------- */
+/* ---------- brain rail pill (icon + current level) ---------- */
 
 .rail-pill.brain {
-	padding: 0;
-	width: 26px;
+	gap: 5px;
 	justify-content: center;
 }
 

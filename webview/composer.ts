@@ -10,7 +10,8 @@
 import { Dropdown, type DropdownItem } from "./dropdown.js";
 import { fitImageDataUrl, MAX_DECODED_IMAGE_BYTES, planImageFit } from "./image-fit.js";
 import { el, icon, iconButton, svgIcon } from "./dom.js";
-import type { ChatViewState, ComposerAttachment, ImageAttachment, ModelRef, RpcModel, RpcSlashCommand, SelectionAttachment } from "../src/protocol.js";
+import { providerIcon } from "./provider-icon.js";
+import type { ChatViewState, ComposerAttachment, ComposerToolbarItem, ImageAttachment, ModelRef, RpcModel, RpcSlashCommand, SelectionAttachment } from "../src/protocol.js";
 
 /** Keys that move the caret without producing an input event. */
 const CARET_KEYS = new Set(["ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"]);
@@ -23,9 +24,15 @@ const MAX_IMAGES = 8;
 // attach instead — see image-fit.js.
 const MAX_IMAGE_BYTES = MAX_DECODED_IMAGE_BYTES;
 const MAX_TOTAL_IMAGE_BYTES = 16 * 1024 * 1024;
+
+function formatUsage(value: number): string {
+	if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+	if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
+	return String(value);
+}
 const SUPPORTED_IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif"]);
 
-type UiSlashAction = "model" | "effort" | "stash" | "new";
+type UiSlashAction = "model" | "effort" | "stash" | "new" | "login";
 
 const UI_SLASH_COMMANDS: Array<{ name: string; description: string; action: UiSlashAction }> = [
 	{ name: "model", description: "Select model", action: "model" },
@@ -33,6 +40,7 @@ const UI_SLASH_COMMANDS: Array<{ name: string; description: string; action: UiSl
 	{ name: "thinking", description: "Select thinking level", action: "effort" },
 	{ name: "stash", description: "Stash or restore the current prompt", action: "stash" },
 	{ name: "new", description: "Start a new session", action: "new" },
+	{ name: "login", description: "Open Prime Agent login in terminal", action: "login" },
 ];
 
 const UI_SLASH_BY_NAME = new Map(UI_SLASH_COMMANDS.map((command) => [command.name, command.action]));
@@ -86,20 +94,31 @@ export interface ComposerDeps {
 	onOpenFile: (path: string, startLine?: number, endLine?: number) => void;
 	onDraftChanged: (text: string, attachmentDraft?: { text: string; attachments: ComposerAttachment[] }) => void;
 	onNewSession: () => void;
+	onLogin: () => void;
 }
 
 export class Composer {
 	readonly root: HTMLElement;
 	private textarea: HTMLTextAreaElement;
 	private chipsEl: HTMLElement;
+	private rail: HTMLElement;
+	private attachBtn: HTMLButtonElement;
 	private sendBtn: HTMLButtonElement;
 	private stopBtn: HTMLButtonElement;
 	private behaviorBtn: HTMLButtonElement;
+	private sendControl: HTMLElement;
+	private behaviorMenu: Dropdown | null = null;
 	private contextWrap: HTMLElement;
 	private contextLabel: HTMLElement;
+	private sessionIdLabel: HTMLElement;
+	private statsLabel: HTMLDetailsElement;
+	private statsSummary: HTMLElement;
+	private statsDetail: HTMLElement;
 	private modelBtn: HTMLButtonElement;
+	private modelIconEl: SVGSVGElement;
 	private modelLabelEl: HTMLElement;
 	private brainBtn: HTMLButtonElement;
+	private thinkingLabelEl: HTMLSpanElement;
 	private availableThinkingLevels: string[] | null = null;
 	private currentDisplayedLabel: string | null = null;
 	private attachMenu: Dropdown | null = null;
@@ -175,18 +194,19 @@ export class Composer {
 		this.textarea.rows = 1;
 		this.textarea.placeholder = "Message Brief…";
 
-		const rail = el("div", "composer-rail");
-		const attachBtn = iconButton("plus", "Attach @file, selection, image…", 15);
-		attachBtn.addEventListener("click", (event) => {
+		this.rail = el("div", "composer-rail");
+		this.attachBtn = iconButton("plus", "Attach @file, selection, image…", 15);
+		this.attachBtn.addEventListener("click", (event) => {
 			event.stopPropagation();
-			this.toggleAttachMenu(attachBtn);
+			this.toggleAttachMenu(this.attachBtn);
 		});
 
 		this.modelBtn = document.createElement("button");
 		this.modelBtn.className = "rail-pill model";
 		this.modelBtn.title = "Choose model";
 		this.modelLabelEl = el("span", "pill-label", "Choose model");
-		this.modelBtn.appendChild(this.modelLabelEl);
+		this.modelIconEl = providerIcon();
+		this.modelBtn.append(this.modelIconEl, this.modelLabelEl);
 		this.modelBtn.addEventListener("click", (event) => {
 			event.stopPropagation();
 			this.toggleModelMenu();
@@ -195,26 +215,41 @@ export class Composer {
 		this.brainBtn.className = "rail-pill brain";
 		this.brainBtn.title = "Thinking level";
 		this.brainBtn.appendChild(icon("brain", 13));
+		this.thinkingLabelEl = document.createElement("span");
+		this.thinkingLabelEl.textContent = this.currentThinking;
+		this.brainBtn.appendChild(this.thinkingLabelEl);
 		this.brainBtn.addEventListener("click", (event) => {
 			event.stopPropagation();
 			this.toggleThinkingMenu();
 		});
 
 		this.behaviorBtn = document.createElement("button");
-		this.behaviorBtn.className = "rail-pill subtle behavior";
+		this.behaviorBtn.className = "send-mode-btn";
 		this.behaviorBtn.style.display = "none";
-		this.behaviorBtn.title = "How a message is delivered while the agent is working";
+		this.behaviorBtn.title = "Choose Queue or Steer";
+		this.behaviorBtn.setAttribute("aria-label", this.behaviorBtn.title);
+		this.behaviorBtn.setAttribute("aria-expanded", "false");
+		this.behaviorBtn.appendChild(icon("chevron", 12));
 		this.behaviorBtn.addEventListener("click", () => this.toggleBehavior());
 
-		this.contextWrap = el("div", "context-meter");
+		this.contextWrap = el("div", "composer-meta context-meter");
 		this.contextLabel = el("span", "context-label", "");
 		this.contextWrap.append(this.contextLabel);
+
+		this.sessionIdLabel = el("span", "composer-meta session-id", "");
+		this.statsLabel = el("details", "composer-meta stats-label") as HTMLDetailsElement;
+		this.statsSummary = el("summary", "", "");
+		this.statsDetail = el("div", "stats-detail");
+		this.statsLabel.append(this.statsSummary, this.statsDetail);
+		this.statsLabel.hidden = true;
 
 		this.sendBtn = document.createElement("button");
 		this.sendBtn.className = "send-btn muted";
 		this.sendBtn.title = "Send (Enter)";
 		this.sendBtn.appendChild(icon("send", 15));
 		this.sendBtn.addEventListener("click", () => this.send());
+		this.sendControl = el("div", "send-control");
+		this.sendControl.append(this.sendBtn, this.behaviorBtn);
 
 		this.stopBtn = document.createElement("button");
 		this.stopBtn.className = "send-btn stop";
@@ -223,12 +258,12 @@ export class Composer {
 		this.stopBtn.style.display = "none";
 		this.stopBtn.addEventListener("click", () => this.deps.onStop());
 
-		rail.append(attachBtn, this.modelBtn, this.brainBtn, this.behaviorBtn, el("span", "spacer"), this.contextWrap, this.stopBtn, this.sendBtn);
+		this.setToolbar(["model", "effort", "spacer", "id", "cost", "context", "btn"]);
 		// Mentions render inline-styled via a mirrored layer behind a transparent textarea.
 		this.textWrap = el("div", "composer-text-wrap");
 		this.mirror = el("div", "composer-mirror");
 		this.textWrap.append(this.mirror, this.textarea);
-		card.append(this.textWrap, rail);
+		card.append(this.textWrap, this.rail);
 		this.root.append(this.chipsEl, card);
 
 		this.autocompleteEl = el("div", "autocomplete");
@@ -316,6 +351,7 @@ export class Composer {
 		if (this.composing || this.attachments.some((a) => a.status === "pending")) throw new Error("Finish composing or attaching images before moving this chat.");
 		// Picker menus are portaled outside the inert app. Closing a slash picker
 		// also puts its parked draft back before we take the transfer snapshot.
+		this.behaviorMenu?.hide();
 		this.attachMenu?.hide();
 		this.modelMenu?.hide();
 		this.thinkingMenu?.hide();
@@ -367,6 +403,9 @@ export class Composer {
 		// The level list belongs to the outgoing model; carrying it into the new
 		// one would offer levels the new model rejects until the next status lands.
 		this.availableThinkingLevels = null;
+		const nextIcon = providerIcon(provider);
+		this.modelIconEl.replaceWith(nextIcon);
+		this.modelIconEl = nextIcon;
 		this.currentModel = { provider, modelId };
 		this.currentDisplayedLabel = label;
 		this.modelLabelEl.textContent = this.truncateModelLabel(label);
@@ -379,6 +418,7 @@ export class Composer {
 		// support max and nothing else. Aliasing it made the pill read a level the
 		// operator could not have chosen and never marked the current row.
 		this.currentThinking = level;
+		this.thinkingLabelEl.textContent = level;
 		// Assign unconditionally: an absent list means "we don't know this model",
 		// and keeping the last model's list is how stale levels survive a switch.
 		this.availableThinkingLevels = Array.isArray(availableLevels) && availableLevels.length > 0 ? [...availableLevels] : null;
@@ -408,13 +448,7 @@ export class Composer {
 	}
 
 	private applyInputState(): void {
-		const blocked = !this.canSend();
 		this.textarea.disabled = this.observing || (!this.enabled && !this.draftAllowed);
-		this.sendBtn.disabled = blocked;
-		this.sendBtn.classList.toggle("unavailable", !this.enabled && !this.observing);
-		const sendLabel = !this.enabled ? (this.blockedReason ?? "Connecting — send unavailable") : "Send (Enter)";
-		this.sendBtn.title = sendLabel;
-		this.sendBtn.setAttribute("aria-label", sendLabel);
 		this.textarea.placeholder = this.observing
 			? "Watching a live session — read-only"
 			: this.enabled || this.draftAllowed
@@ -460,6 +494,7 @@ export class Composer {
 	}
 
 	private toggleAttachMenu(anchor: HTMLButtonElement): void {
+		this.behaviorMenu?.hide();
 		if (this.attachMenu?.isOpen()) {
 			this.attachMenu.hide();
 			return;
@@ -517,12 +552,44 @@ export class Composer {
 		// on screen is owned by another client. Offering it there is a lie.
 		const show = this.streaming && !this.observing;
 		this.stopBtn.style.display = show ? "" : "none";
-		this.behaviorBtn.style.display = show ? "" : "none";
+		this.updateSendState();
 	}
 
 	// Parameter deliberately NOT named `window`: this class calls window.setTimeout
 	// elsewhere, and shadowing the global with a number here is a TypeError
 	// waiting for the next line of code added to this method.
+	setToolbar(items: ComposerToolbarItem[] | undefined): void {
+		const enabled: ComposerToolbarItem[] = [];
+		for (const item of items ?? ["model", "effort", "spacer", "id", "cost", "context", "btn"]) {
+			if (!enabled.includes(item)) enabled.push(item);
+		}
+		this.rail.replaceChildren(this.attachBtn);
+		for (const item of enabled) {
+			switch (item) {
+				case "model": this.rail.append(this.modelBtn); break;
+				case "effort": this.rail.append(this.brainBtn); break;
+				case "spacer": this.rail.append(el("span", "spacer")); break;
+				case "id": this.rail.append(this.sessionIdLabel); break;
+				case "cost": this.rail.append(this.statsLabel); break;
+				case "context": this.rail.append(this.contextWrap); break;
+				case "btn": this.rail.append(this.stopBtn, this.sendControl); break;
+			}
+		}
+	}
+
+	setSessionInfo(sessionId: string | undefined, sessionFile: string | undefined, costUsd: number | undefined, usageTotal: number | undefined): void {
+		this.sessionIdLabel.textContent = sessionId ? `#${sessionId.slice(0, 8)}` : "";
+		this.sessionIdLabel.title = sessionFile ?? "";
+		this.statsLabel.hidden = costUsd == null && usageTotal == null;
+		this.statsSummary.textContent = costUsd != null ? `$${costUsd.toFixed(2)}` : "Cost pending";
+		this.statsDetail.textContent = [
+			"Scope: model usage from the current session state; not a permanent billing history.",
+			"Whether subagents are fully included is unconfirmed; this is not a total across all agents.",
+			usageTotal != null ? `Cumulative usage: ${formatUsage(usageTotal)} tokens (including cache)` : "Cumulative usage: pending",
+			costUsd != null ? `Reported cost: $${costUsd.toFixed(4)} (not an account charge)` : "Reported cost: pending",
+		].join("\n");
+	}
+
 	setContext(percent: number | null | undefined, tokens: number | null | undefined, contextWindow: number | undefined, compactThreshold: number | null, compactDefaultPercent: number | null): void {
 		this.contextPercentCurrent = percent ?? null;
 		this.contextTokensCurrent = tokens ?? null;
@@ -894,6 +961,7 @@ export class Composer {
 		this.acSelected = 0;
 		this.closeAutocomplete();
 
+		this.behaviorMenu?.hide();
 		this.attachMenu?.hide();
 		this.attachMenu = null;
 		this.modelMenu?.hide();
@@ -977,16 +1045,28 @@ export class Composer {
 	}
 
 	private toggleBehavior(): void {
-		this.behavior = this.behavior === "steer" ? "followUp" : "steer";
+		if (!this.streaming || !this.canSend()) return;
+		this.attachMenu?.hide();
+		this.modelMenu?.hide();
+		this.thinkingMenu?.hide();
+		this.closeAutocomplete();
+		this.behaviorMenu ??= new Dropdown(this.behaviorBtn);
+		this.behaviorMenu.toggle([
+			{ label: "Queue", sub: "Delivered when the run ends", current: this.behavior === "followUp",
+				onSelect: () => this.selectBehavior("followUp") },
+			{ label: "Steer", sub: "Delivered after the current turn, mid-run", current: this.behavior === "steer",
+				onSelect: () => this.selectBehavior("steer") },
+		]);
+	}
+
+	private selectBehavior(behavior: "steer" | "followUp"): void {
+		this.behavior = behavior;
 		this.updateBehaviorLabel();
+		this.textarea.focus();
 	}
 
 	private updateBehaviorLabel(): void {
-		this.behaviorBtn.textContent = this.behavior === "steer" ? "steer" : "queue";
-		this.behaviorBtn.title =
-			this.behavior === "steer"
-				? "Steer: delivered after the current turn, mid-run"
-				: "Queue: delivered when the run ends";
+		this.updateSendState();
 	}
 
 	// ---------------------------------------------------------------
@@ -1039,6 +1119,7 @@ export class Composer {
 	}
 
 	private toggleThinkingMenu(initialQuery?: string): void {
+		this.behaviorMenu?.hide();
 		if (this.thinkingMenu?.isOpen()) {
 			this.thinkingMenu.hide();
 			return;
@@ -1110,6 +1191,7 @@ export class Composer {
 		};
 		const makeItem = (model: RpcModel, section: string): DropdownItem => ({
 			label: this.modelLabelFor(model),
+			icon: providerIcon(model.provider),
 			title: model.name && model.name !== model.id ? `${this.modelLabelFor(model)} — ${model.name}` : this.modelLabelFor(model),
 			sub: model.name && model.name !== model.id ? model.name : undefined,
 			right: rightFor(model),
@@ -1129,6 +1211,7 @@ export class Composer {
 			...rest.map((m) => makeItem(m, favorites.length > 0 ? "All models" : "Models")),
 		];
 		this.suppressPickerHide = true;
+		this.behaviorMenu?.hide();
 		this.attachMenu?.hide();
 		this.thinkingMenu?.hide();
 		this.modelMenu?.hide();
@@ -1437,12 +1520,33 @@ export class Composer {
 	}
 
 	private updateSendState(): void {
-		const hasContent =
-			this.textarea.value.trim().length > 0 ||
-			this.images.length > 0 ||
-			this.selections.length > 0;
-		this.sendBtn.disabled = !this.canSend() || this.attachments.some((a) => a.status !== "ready");
-		this.sendBtn.classList.toggle("muted", !hasContent || this.sendBtn.disabled);
+		const hasContent = this.textarea.value.trim().length > 0 || this.images.length > 0 || this.selections.length > 0;
+		const pending = this.attachments.some((a) => a.status !== "ready");
+		const unavailable = !this.canSend();
+		const action = !this.streaming ? "submit" : this.behavior === "followUp" ? "queue" : "steer";
+		const label = unavailable || pending ? "Blocked" : action === "submit" ? "Send" : action === "queue" ? "Queue" : "Steer";
+		const reason = this.observing ? "Watching a live session — read-only"
+			: unavailable ? (this.blockedReason ?? "Connecting — send unavailable")
+			: pending ? "Attachments are not ready — resolve errors or wait for upload"
+			: !hasContent ? "Add a message or attachment to send"
+			: action === "queue" ? "Queue (Enter) — delivered when the run ends"
+			: action === "steer" ? "Steer (Enter) — delivered after the current turn, mid-run" : "Send (Enter)";
+		this.sendBtn.disabled = unavailable || pending || !hasContent;
+		this.sendControl.dataset.state = this.sendBtn.disabled ? "blocked" : action;
+		this.sendControl.title = reason;
+		this.sendBtn.title = reason;
+		this.sendBtn.setAttribute("aria-label", this.sendBtn.disabled ? `${label}: ${reason}` : reason);
+		this.sendBtn.classList.toggle("muted", this.sendBtn.disabled);
+		this.sendBtn.classList.toggle("unavailable", unavailable || pending);
+		const glyph = unavailable || pending ? svgIcon(["M8 10V7a4 4 0 0 1 8 0v3", "M6 10h12v11H6z"], 15)
+			: action === "queue" ? icon("selection", 15)
+			: action === "steer" ? svgIcon(["M6 20v-7a6 6 0 0 1 6-6h7", "M14 2l5 5-5 5"], 15) : icon("send", 15);
+		glyph.setAttribute("aria-hidden", "true");
+		this.sendBtn.replaceChildren(glyph, el("span", "send-label", label));
+		const canChoose = this.streaming && !unavailable;
+		this.behaviorBtn.style.display = canChoose ? "" : "none";
+		this.behaviorBtn.disabled = !canChoose;
+		if (!canChoose) this.behaviorMenu?.hide();
 	}
 
 	private renderChips(): void {
@@ -1765,6 +1869,11 @@ export class Composer {
 	private runUiSlashAction(action: UiSlashAction, args: string): void {
 		if (action === "stash") {
 			this.handleStashCommand();
+			return;
+		}
+		if (action === "login") {
+			this.applyComposerSnapshot(this.lastNonSlashDraft);
+			this.deps.onLogin();
 			return;
 		}
 		if (action === "new") {

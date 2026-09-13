@@ -297,6 +297,7 @@ export type WebviewToHost =
 	| { type: "prompt"; payload: PromptPayload }
 	| { type: "abort" }
 	| { type: "newSession" }
+	| { type: "login" }
 	| { type: "compact"; instructions?: string }
 	| { type: "exportChat" }
 	| { type: "restart" }
@@ -333,6 +334,8 @@ export type WebviewToHost =
 	| { type: "setCompactThreshold"; percent: number | null }
 	| { type: "openExternal"; url: string };
 
+export type ComposerToolbarItem = "model" | "effort" | "spacer" | "id" | "cost" | "context" | "btn";
+
 export interface StatusSnapshot {
 	connected: boolean;
 	streaming: boolean;
@@ -355,6 +358,8 @@ export interface StatusSnapshot {
 	sessionId?: string;
 	statsText: string;
 	statusText?: string;
+	/** Ordered, enabled composer controls from the brief.composerToolbar setting. */
+	composerToolbar?: ComposerToolbarItem[];
 	compactThresholdPercent?: number | null;
 	compactDefaultPercent?: number | null;
 	usageTotal?: number;
