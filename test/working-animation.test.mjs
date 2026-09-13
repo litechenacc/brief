@@ -8,8 +8,7 @@ try {
 	await page.setContent(`<body style="--vscode-foreground: #ccc; --vscode-descriptionForeground: #ccc">
 		<div class="working-row" role="status" aria-label="Working">
 			<span class="working-mark" aria-hidden="true">B</span>
-			<span class="working-label">${Array.from("Thinking", (char, index) =>
-				`<span class="working-letter" style="animation-delay: ${(index + 1) * 0.1 - 1.4}s">${char}</span>`).join("")}</span><span class="working-elapsed">7s</span>
+			<span class="working-label">Thinking</span><span class="working-elapsed">7s</span>
 		</div>
 		<div class="status-strip"><span class="conn-dot working"></span><span class="live-label working">running</span></div>
 		<span class="conn-dot" id="idle-lamp"></span>
@@ -26,39 +25,34 @@ try {
 		assert.equal(await page.locator(selector).evaluate(el => getComputedStyle(el).backgroundColor), "rgb(48, 164, 108)");
 	}
 	assert.equal(await page.locator(".working-mark").evaluate(el => getComputedStyle(el).fontWeight), "800");
-	for (const [selector, midpoint] of [[".working-mark", 420], [".working-letter:first-child", 520]]) {
-		const samples = await page.locator(selector).evaluate((element, midpoint) => {
+	for (const selector of [".working-label", ".working-elapsed"]) {
+		const samples = await page.locator(selector).evaluate(element => {
 			const animation = element.getAnimations()[0];
 			if (!animation) return null;
 			animation.pause();
 			animation.currentTime = 0;
-			const start = Number(getComputedStyle(element).opacity);
-			animation.currentTime = midpoint;
-			return [start, Number(getComputedStyle(element).opacity)];
-		}, midpoint);
-		assert.ok(samples && Math.abs(samples[0] - samples[1]) > 0.4, `${selector} visibly animates even with identical theme colors`);
+			const start = getComputedStyle(element).backgroundPosition;
+			animation.currentTime = 3400;
+			return { start, end: getComputedStyle(element).backgroundPosition,
+				name: getComputedStyle(element).animationName,
+				gradient: getComputedStyle(element).backgroundImage };
+		});
+		assert.equal(samples?.name, "working-sheen", `${selector} has sweeping animation`);
+		assert.notEqual(samples.start, samples.end);
+		assert.ok(samples.gradient.includes("gradient"), "sheen has a brightness gradient even with identical theme colors");
 	}
-	const brightness = await page.locator(".working-letter").evaluateAll(letters => letters.map(letter => {
-		const animation = letter.getAnimations()[0];
-		animation.pause();
-		animation.currentTime = 420;
-		return Number(getComputedStyle(letter).opacity);
-	}));
-	assert.ok(Math.max(...brightness) - Math.min(...brightness) > 0.4, "letters have different brightness at the same time");
-	assert.equal(await page.locator(".working-elapsed").evaluate(el => el.getAnimations().length), 0);
 	const layout = await page.locator(".working-row").evaluate(row => {
-		const mark = row.querySelector(".working-mark");
-		const letter = row.querySelector(".working-letter");
+
 		const label = row.querySelector(".working-label");
 		const elapsed = row.querySelector(".working-elapsed");
 		return {
-			sameAnimation: getComputedStyle(mark).animationName === getComputedStyle(letter).animationName,
+			sameAnimation: getComputedStyle(label).animationName === getComputedStyle(elapsed).animationName,
 			gapBeforeDot: elapsed.getBoundingClientRect().left - label.getBoundingClientRect().right,
 			gapAfterDot: getComputedStyle(elapsed).gap,
 			dot: getComputedStyle(elapsed, "::before").content,
 		};
 	});
-	assert.ok(layout.sameAnimation, "icon shares the letter breathing rhythm");
+	assert.ok(layout.sameAnimation, "verb and timer share the sweeping animation");
 	assert.equal(layout.gapBeforeDot, 8);
 	assert.equal(layout.gapAfterDot, "8px");
 	assert.equal(layout.dot, '"·"');
@@ -90,7 +84,9 @@ try {
 	for (const media of [{ reducedMotion: "reduce" }, { reducedMotion: "no-preference", forcedColors: "active" }]) {
 		await page.emulateMedia(media);
 		assert.equal(await page.locator(".working-row").evaluate(el => el.getAnimations({ subtree: true }).length), 0);
-		assert.notEqual(await page.locator(".working-label").evaluate(el => getComputedStyle(el).webkitTextFillColor), "rgba(0, 0, 0, 0)");
+		for (const selector of [".working-label", ".working-elapsed"]) {
+			assert.notEqual(await page.locator(selector).evaluate(el => getComputedStyle(el).webkitTextFillColor), "rgba(0, 0, 0, 0)");
+		}
 	}
 	const startup = await browser.newPage({ reducedMotion: "no-preference" });
 	await startup.setContent('<div id="app"></div><script id="cached-models" type="application/json">[{"provider":"cached","id":"cached-model"}]</script>');
@@ -130,7 +126,7 @@ try {
 	}
 	console.log("PASS composer runtime indicator stays hidden without reserved space");
 	console.log("PASS startup draft, cached picker, static dashed send and decorative welcome animation");
-	console.log("PASS working icon/text animation, static timer, reduced motion and forced colors");
+	console.log("PASS working verb/timer sheen, reduced motion and forced colors");
 } finally {
 	await browser.close();
 }

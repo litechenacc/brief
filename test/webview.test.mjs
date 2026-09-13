@@ -1809,12 +1809,11 @@ check("separate sends carry separate client request ids",
 check("two optimistic rows render before either verdict", scroller.querySelectorAll(".row-user").length === 2, String(scroller.querySelectorAll(".row-user").length));
 check("send paints a working indicator before the first token", !!scroller.querySelector(".working-row .working-mark") && (scroller.querySelector(".working-label")?.textContent ?? "").length > 0 && !/Sending/.test(scroller.querySelector(".working-label")?.textContent ?? ""), scroller.querySelector(".working-label")?.textContent ?? "none");
 const workingLabel = scroller.querySelector(".working-label");
-const workingLetters = [...workingLabel.querySelectorAll(".working-letter")];
+const workingText = workingLabel.firstChild;
 check("working icon is a decorative B, not a brand SVG", scroller.querySelector(".working-mark")?.textContent === "B" && scroller.querySelector(".working-mark")?.tagName === "SPAN" && scroller.querySelector(".working-mark")?.getAttribute("aria-hidden") === "true");
-check("working verb renders one span per character", workingLetters.length === Array.from(workingLabel.textContent).length && workingLetters.every(letter => letter.textContent.length === 1));
-check("working letters have staggered animation delays", new Set(workingLetters.map(letter => letter.style.animationDelay)).size === workingLetters.length);
+check("working verb uses plain text for CSS sheen", workingText?.nodeType === 3);
 await new Promise(resolve => window.setTimeout(resolve, 450));
-check("timer tick preserves animated letter nodes", workingLabel.firstChild === workingLetters[0]);
+check("timer tick preserves animated text", workingLabel.firstChild === workingText);
 hostMessage({ type: "promptRejected", error: "transport disconnected", clientRequestId: firstOptimisticPrompt?.payload?.clientRequestId });
 check("rejection removes the exact optimistic row", !scroller.textContent.includes("first optimistic prompt") && scroller.textContent.includes("second optimistic prompt"), scroller.textContent);
 check("rejection of one queued send keeps the working spinner", !!scroller.querySelector(".working-row") && !/Sending/.test(scroller.querySelector(".working-label")?.textContent ?? ""));

@@ -505,13 +505,23 @@ textarea::-webkit-scrollbar {
 	animation: working-letter-pulse 1.4s ease-in-out infinite;
 }
 
-.working-label {
+.working-label,
+.working-elapsed {
 	color: var(--pa-text, inherit);
+	background: linear-gradient(100deg,
+		color-mix(in srgb, currentColor 35%, transparent) 35%,
+		currentColor 50%,
+		color-mix(in srgb, currentColor 35%, transparent) 65%);
+	background-size: 300% 100%;
+	background-position: 100% 0;
+	background-clip: text;
+	-webkit-text-fill-color: transparent;
+	animation: working-sheen 4s ease-in-out infinite;
 }
 
-.working-letter {
-	opacity: 0.35;
-	animation: working-letter-pulse 1.4s ease-in-out infinite;
+@keyframes working-sheen {
+	0%, 15% { background-position: 100% 0; }
+	85%, 100% { background-position: 0% 0; }
 }
 
 .working-elapsed {
@@ -534,16 +544,23 @@ textarea::-webkit-scrollbar {
 
 @media (prefers-reduced-motion: reduce), (forced-colors: active) {
 	.working-mark,
-	.working-letter {
+	.working-label,
+	.working-elapsed {
 		animation: none;
+		background: none;
+		-webkit-text-fill-color: currentColor;
 		opacity: 1;
 	}
 }
 
 body.vscode-high-contrast .working-mark,
 body.vscode-high-contrast-light .working-mark,
-body.vscode-high-contrast .working-letter,
-body.vscode-high-contrast-light .working-letter {
+body.vscode-high-contrast .working-label,
+body.vscode-high-contrast-light .working-label,
+body.vscode-high-contrast .working-elapsed,
+body.vscode-high-contrast-light .working-elapsed {
+	background: none;
+	-webkit-text-fill-color: currentColor;
 	animation: none;
 	opacity: 1;
 }

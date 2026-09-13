@@ -1086,13 +1086,7 @@ export class Transcript {
 		const label = this.workingRow?.querySelector(".working-label");
 		if (!label) return;
 		if (label.textContent !== this.workingVerbBase) {
-			// Keep replacement verbs in phase with the icon's ongoing animation.
-			const phase = (Date.now() - this.workingStartedAt) / 1000;
-			label.replaceChildren(...Array.from(this.workingVerbBase, (char, index) => {
-				const letter = el("span", "working-letter", char);
-				letter.style.animationDelay = `${(index + 1) * 0.1 - 1.4 - phase}s`;
-				return letter;
-			}));
+			label.textContent = this.workingVerbBase;
 		}
 		const elapsed = this.workingRow?.querySelector(".working-elapsed");
 		if (!elapsed) return;
