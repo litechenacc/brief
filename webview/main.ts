@@ -251,14 +251,8 @@ const statsSummary = el("summary", "", "");
 const statsDetail = el("div", "stats-detail");
 statsLabel.append(statsSummary, statsDetail);
 statsLabel.hidden = true;
-const convCopy = el("button", "strip-icon") as HTMLButtonElement;
-convCopy.title = "Copy the whole conversation (Markdown with summarized tool calls)";
-convCopy.appendChild(icon("copy", 11));
-convCopy.addEventListener("click", (event) => {
-	event.stopPropagation();
-	post({ type: "copyConversation" });
-});
-statusStrip.append(connDot, liveLabel, sessionIdLabel, el("span", "spacer"), statsLabel, convCopy);
+statusStrip.append(connDot, liveLabel, sessionIdLabel, el("span", "spacer"), statsLabel);
+composer.root.querySelector(".composer-card")!.appendChild(statusStrip);
 
 const subagents = new SubagentsStrip({
 	post,
@@ -323,7 +317,7 @@ function renderInstallBanner(url: string, reason: string): void {
 	installBanner.appendChild(card);
 	installBanner.classList.add("visible");
 }
-app.append(installBanner, observeBanner, noticesDock, chatView, historyView.root, subagentsStrip, composer.root, statusStrip);
+app.append(installBanner, observeBanner, noticesDock, chatView, historyView.root, subagentsStrip, composer.root);
 historyView.root.style.display = "none";
 
 function showView(view: "chat" | "history"): void {
@@ -407,6 +401,12 @@ let extensionTitle: { sessionId?: string; title: string; provisional: boolean } 
  */
 function adoptAuthoritativeSession(sessionId: string | undefined): boolean {
 	if (!sessionId || sessionId === authoritativeSessionId) return false;
+	// The first identity belongs to the chat already being drafted, not a switch.
+	if (!authoritativeSessionId) {
+		authoritativeSessionId = sessionId;
+		if (!composer.textIsEmpty()) composer.flushDraft();
+		return false;
+	}
 	authoritativeSessionId = sessionId;
 	renderPendingInputs();
 	pendingPrompts.clear();
@@ -469,7 +469,7 @@ function applyStatus(incomingStatus: StatusSnapshot): void {
 	sessionIdLabel.title = status.sessionFile ?? "";
 
 	statsLabel.hidden = status.costUsd == null && status.usageTotal == null;
-	statsSummary.textContent = status.costUsd != null ? `This session $${status.costUsd.toFixed(4)}` : "This session cost pending";
+	statsSummary.textContent = status.costUsd != null ? `$${status.costUsd.toFixed(2)}` : "Cost pending";
 	statsDetail.textContent = [
 		"Scope: model usage from the current session state; not a permanent billing history.",
 		"Whether subagents are fully included is unconfirmed; this is not a total across all agents.",
@@ -478,7 +478,7 @@ function applyStatus(incomingStatus: StatusSnapshot): void {
 	].join("\n");
 
 	// Startup has no authoritative model yet. Keep the local picker choice.
-	if (!status.restoring || status.sessionId) {
+	if (status.sessionId || status.modelId) {
 		composer.setModel(status.modelLabel, status.modelProvider, status.modelId);
 		composer.setThinking(status.thinkingLevel, status.availableThinkingLevels ?? null);
 	}
@@ -496,7 +496,7 @@ function applyStatus(incomingStatus: StatusSnapshot): void {
 			: status.connected
 				? null
 				: "Not connected — the agent runtime isn't answering",
-		status.restoring && !status.sessionId && !status.observingId,
+		!status.sessionId && !status.observingId,
 	);
 	// Apply capacity and thresholds together so each status paints the meter once.
 	// Missing overrides must clear the previous session's threshold.
