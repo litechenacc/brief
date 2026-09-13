@@ -98,6 +98,24 @@ Document Workspace 是先前「Session Area」構想的暫稱。方向是讓人�
 
 Roadmap 表達方向，不代表交付承諾，也沒有預定時程。
 
+### Slash commands 完成進度
+
+以下整理自 [slash commands roadmap](docs/roadmap.md)。**已完成**表示該列明定的 Brief 範圍已實作並驗證，不代表與 Prime Agent 的全部行為相同。詳細決策與驗證界線以 roadmap 為準；底層 runtime 有能力不代表 Brief 已支援。
+
+| 狀態 | 指令 | 已完成範圍／剩餘工作 |
+| --- | --- | --- |
+| 已完成 | `/compact [instructions]`、`/refine`、`/goal`、`/autonomous` | 固定補全入口與既有 prompt 路徑；goal 與 autonomous 操作選單。持續可見的狀態面板不在本次範圍。 |
+| 已完成 | `/stash`、`/new`、`/clear` | 每個 session 的草稿暫存；在新 editor tab 建立空白 session，保留原 session。 |
+| 已完成 | `/logout` | Provider 選單、移除確認、已儲存認證移除，以及不啟動 agent 的模型清單更新。 |
+| 已完成 | `/name`、`/rename`、`/resume` | 重新命名目前 session，或開啟 sidebar Session History。 |
+| 已完成 | `/fork`、`/export`、`/copy` | 從 user message 分支至新分頁、匯出 Markdown，或複製最後一則已完成 agent 回覆的正文。 |
+| 已完成 | `/session`、`/context`、`/usage` | 本地唯讀統計快照，明示統計範圍並區分缺值。 |
+| 部分完成 | `/model`、`/effort`、`/thinking` | 已實作選擇與驗證；Prime 仍會寫入全域預設，預期的 session-only 行為受 runtime 限制。 |
+| 部分完成 | `/login` | 已有 VS Code provider 登入；特殊設定流程與認證管理範圍待討論。 |
+| 部分完成 | Extension、prompt template、`/skill:名稱` | 已有動態補全與 prompt 路徑；自訂 extension UI 尚未完全支援。 |
+| 待討論 | `/fast`、`/scoped-models`、`/import`、`/clone`、`/tree`、`/system-prompt`、`/btw`、`/side`、`/rlm-max-depth`、`/heartbeat`、`/heartbeats`、`/reload`、`/settings` | Runtime 已有底層能力，Brief 接入方式與互動設計尚未定案。 |
+| 待討論 | `/mcp`、`/share`、`/logs`、`/traces`、`/changelog`、`/hotkeys`、`/update`、`/fullscreen`、`/quit` | 前端或命令列整合，以及 Brief 對應操作仍待討論。 |
+
 ## 改成你喜歡的樣子
 
 **歡迎 fork，使用 AI agent 把 Brief 改成符合你習慣與喜好的工具。** 不需要等我的同意，也不必遵循我的設計方向。請保留 MIT 授權要求的 copyright 與授權聲明。

@@ -98,6 +98,24 @@ Document Workspace is a working name for the earlier “Session Area” idea. Th
 
 This roadmap describes interests, not delivery commitments. There is no promised schedule.
 
+### Slash commands progress
+
+Summary of the [slash commands roadmap](docs/roadmap.md). **Completed** means the defined Brief scope is implemented and verified, not full parity with Prime Agent. Verification limits and detailed decisions are recorded in the roadmap; runtime support alone does not mean Brief support.
+
+| Status | Commands | Scope or remaining work |
+| --- | --- | --- |
+| Completed | `/compact [instructions]`, `/refine`, `/goal`, `/autonomous` | Fixed completion entries and existing prompt routing; goal and autonomous action menus. Persistent status panels remain outside this scope. |
+| Completed | `/stash`, `/new`, `/clear` | Per-session draft stash; new empty session in a new editor tab, preserving the original session. |
+| Completed | `/logout` | Provider selection, removal confirmation, stored credential removal, and model-list refresh without starting an agent. |
+| Completed | `/name`, `/rename`, `/resume` | Rename the current session or open sidebar Session History. |
+| Completed | `/fork`, `/export`, `/copy` | Fork from a user message into a new tab, export Markdown, or copy the last completed agent reply body. |
+| Completed | `/session`, `/context`, `/usage` | Local read-only statistics snapshots with explicit scope and missing-value handling. |
+| Partial | `/model`, `/effort`, `/thinking` | Selection and validation are implemented. Prime still writes global defaults; the intended session-only behavior is blocked by the runtime. |
+| Partial | `/login` | VS Code provider login is available; special setup flows and credential-management scope remain under discussion. |
+| Partial | Extensions, prompt templates, `/skill:name` | Dynamic completion and prompt routing are available; custom extension UI is not fully supported. |
+| To discuss | `/fast`, `/scoped-models`, `/import`, `/clone`, `/tree`, `/system-prompt`, `/btw`, `/side`, `/rlm-max-depth`, `/heartbeat`, `/heartbeats`, `/reload`, `/settings` | Runtime capabilities exist, but Brief integration and interaction design are not decided. |
+| To discuss | `/mcp`, `/share`, `/logs`, `/traces`, `/changelog`, `/hotkeys`, `/update`, `/fullscreen`, `/quit` | Frontend or command-line integration and Brief-specific behavior need discussion. |
+
 ## Make it your own
 
 **Fork freely. Use an AI agent to make Brief fit your own habits and style.** You do not need my permission, and your fork does not need to follow my design direction. Please retain the copyright and license notices required by the MIT license.
