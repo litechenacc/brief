@@ -23,7 +23,7 @@ assert.equal(persisted.writes.length, 1, "unchanged session identity is persiste
 persisted.send({ type: "status", status: { ...identity, sessionFile: "/moved/s1.jsonl" } });
 persisted.send({ type: "status", status: { ...identity, sessionId: "s2" } });
 assert.equal(persisted.writes.length, 3, "path and session identity changes each persist");
-assert.deepEqual(structuredClone(persisted.writes.at(-1)), { historyFolds: { archive: true }, session: { sessionId: "s2", sessionFile: identity.sessionFile } });
+assert.deepEqual(structuredClone(persisted.writes.at(-1)), { historyFolds: { archive: true }, session: { sessionId: "s2", sessionFile: identity.sessionFile, isNew: false } });
 persisted.send({ type: "status", status });
 assert.equal(persisted.writes.length, 3, "incomplete status does not erase persisted identity");
 await persisted.window.happyDOM.close();

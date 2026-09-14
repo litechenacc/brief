@@ -299,7 +299,7 @@ try {
 	await tick(); resolveHistory({ path: "/known/c.jsonl", id: "session-c" }); await tick();
 	assert.equal(panels.length, 3, "concurrent resume deduplicates before target ready");
 	const c = panels[2], cc = controllers[2]; c.send({ type: "ready" }); await tick();
-	assert.deepEqual(cc.calls.find(([name]) => name === "switch"), ["switch", "/known/c.jsonl", "session-c"]);
+	assert.deepEqual(cc.calls.find(([name]) => name === "switch"), ["switch", "/known/c.jsonl", "session-c", false]);
 	assert.ok(!cb.calls.some(([name]) => name === "switch"), "history preserves source session");
 	const beforeNew = a.webview.messages.length;
 	a.send({ type: "newSessionFromCurrent" }); await tick();
@@ -326,8 +326,19 @@ try {
 	assert.ok(cr.calls.some(([name]) => name === "abort"), "pending model discovery cannot block Stop");
 	resolveModels(); await tick();
 	assert.equal(cr.calls.filter(([name]) => name === "switch").length, 1);
-	assert.deepEqual(cr.calls.find(([name]) => name === "switch"), ["switch", "/known/r.jsonl", "session-r"]);
+	assert.deepEqual(cr.calls.find(([name]) => name === "switch"), ["switch", "/known/r.jsonl", "session-r", false]);
 	assert.ok(!cr.calls.some(([name]) => name === "start"));
+	const reloadedDraftPanel = makePanel();
+	await manager.deserializeWebviewPanel(reloadedDraftPanel, { session: { sessionId: "unsent", sessionFile: "/known/unsent.jsonl", isNew: true } });
+	await tick();
+	const reloadedDraftController = controllers.at(-1);
+	assert.deepEqual(reloadedDraftController.calls.find(([name]) => name === "switch"), ["switch", "/known/unsent.jsonl", "unsent", true]);
+	reloadedDraftController.sink.post({ type: "status", status: { sessionId: "replacement", sessionFile: "/known/replacement.jsonl" } });
+	assert.equal(reloadedDraftPanel.webview.messages.at(-1).status.isNewSession, true);
+	reloadedDraftController.sink.post({ type: "promptAccepted" });
+	reloadedDraftController.sink.post({ type: "status", status: { sessionId: "replacement", sessionFile: "/known/replacement.jsonl" } });
+	assert.equal(reloadedDraftPanel.webview.messages.at(-1).status.isNewSession, false);
+	reloadedDraftPanel.dispose();
 	const count = controllers.length, duplicate = makePanel();
 	await manager.deserializeWebviewPanel(duplicate, { session: { sessionId: "session-r", sessionFile: "/known/r.jsonl" } });
 	assert.ok(duplicate.disposed); assert.equal(controllers.length, count);
@@ -497,7 +508,7 @@ try {
 	const beforeResume = panels.length;
 	sidebar.send({ type: "switchSession", path: "/known/old.jsonl", sessionId: "old" }); await tick();
 	assert.equal(panels.length, beforeResume + 1, "history opens unopened sessions in editor");
-	assert.deepEqual(controllers.at(-1).calls.find(([name]) => name === "switch"), ["switch", "/known/old.jsonl", "old"]);
+	assert.deepEqual(controllers.at(-1).calls.find(([name]) => name === "switch"), ["switch", "/known/old.jsonl", "old", false]);
 	await manager.newSession();
 	const draftPanel = panels.at(-1), draftController = controllers.at(-1);
 	const latestHistory = () => sidebar.webview.messages.filter((message) => message.type === "history").at(-1).sessions;

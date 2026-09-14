@@ -539,9 +539,10 @@ function applyStatus(incomingStatus: StatusSnapshot): void {
 	adoptAuthoritativeSession(incomingStatus.sessionId);
 	if (incomingStatus.sessionId && incomingStatus.sessionFile) {
 		const saved = (vscode.getState() as Record<string, unknown> | undefined) ?? {};
-		const session = saved.session as { sessionId?: string; sessionFile?: string } | undefined;
-		if (session?.sessionId !== incomingStatus.sessionId || session?.sessionFile !== incomingStatus.sessionFile) {
-			vscode.setState({ ...saved, session: { sessionId: incomingStatus.sessionId, sessionFile: incomingStatus.sessionFile } });
+		const session = saved.session as { sessionId?: string; sessionFile?: string; isNew?: boolean } | undefined;
+		const isNew = incomingStatus.isNewSession === true;
+		if (session?.sessionId !== incomingStatus.sessionId || session?.sessionFile !== incomingStatus.sessionFile || session?.isNew !== isNew) {
+			vscode.setState({ ...saved, session: { sessionId: incomingStatus.sessionId, sessionFile: incomingStatus.sessionFile, isNew } });
 		}
 	}
 	const previousSessionId = currentStatus?.sessionId;
@@ -924,12 +925,15 @@ function dispatchHostMessage(message: HostToWebview): void {
 		case "droppedWorkspaceUrisResolved":
 			composer.resolveWorkspaceDrop(message.requestId, message.files);
 			break;
-		case "promptAccepted":
+		case "promptAccepted": {
+			const saved = (vscode.getState() as Record<string, unknown> | undefined) ?? {};
+			if (saved.session) vscode.setState({ ...saved, session: { ...saved.session as object, isNew: false } });
 			if (message.clientRequestId && pendingPrompts.has(message.clientRequestId) && message.recallText !== undefined) composer.rememberAcceptedPrompt(message.recallText);
 			// Host acceptance makes the prompt durable. Keep its optimistic row until
 			// the transcript echoes it, but do not block switching away from a run.
 			if (message.clientRequestId) pendingPrompts.delete(message.clientRequestId);
 			break;
+		}
 		case "editorText":
 			composer.setText(message.text);
 			break;

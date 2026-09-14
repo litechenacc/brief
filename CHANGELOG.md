@@ -8,6 +8,8 @@ All notable changes to this extension are recorded here. The format follows
 
 ## [Unreleased]
 
+- Silently create a fresh session when reloading a known unsent chat tab that is absent from the daemon catalog. Resume existing drafts with their settings intact, and keep normal resume checks and catalog errors visible.
+
 ## [0.4.0]
 
 - Preserve drafts stashed during startup when the first session identity arrives, including attachments and later session switching.

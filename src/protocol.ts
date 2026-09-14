@@ -375,6 +375,8 @@ export interface StatusSnapshot {
 	sessionName?: string;
 	/** Named title, else first prompt line. Empty when the thread has neither. */
 	sessionLabel?: string;
+	/** A new tab that has not accepted a prompt yet. */
+	isNewSession?: boolean;
 	sessionFile?: string;
 	sessionId?: string;
 	statsText: string;

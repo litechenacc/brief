@@ -139,6 +139,12 @@ startupInput.dispatchEvent(new window.Event("input", { bubbles: true }));
 
 check("status persists the exact session for editor restoration", savedWebviewState.session?.sessionId === baseStatus.sessionId && savedWebviewState.session?.sessionFile === baseStatus.sessionFile);
 check("session persistence preserves history fold state", savedWebviewState.historyFolds?.archive === true);
+hostMessage({ type: "status", status: { ...baseStatus, isNewSession: true } });
+check("unsent status persists the reload replacement permission", savedWebviewState.session?.isNew === true);
+hostMessage({ type: "promptAccepted" });
+check("acceptance clears reload replacement permission before another status", savedWebviewState.session?.isNew === false);
+hostMessage({ type: "status", status: { ...baseStatus, isNewSession: false } });
+check("submitted status keeps the session resumable", savedWebviewState.session?.isNew === false);
 const scroller = document.querySelector(".messages");
 check("connected status keeps the chat unobstructed", !document.querySelector(".boot-splash"));
 check("welcome removed after snapshot", !document.querySelector(".welcome"));

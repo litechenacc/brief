@@ -181,7 +181,7 @@ showHistoryView(this: SessionController): void {
  * may only act on a session record the host generated from its catalog. If a
  * sidebar was reloaded, refresh once before rejecting the stale row.
  */
-async resolveHistorySession(this: SessionController, sessionPath: string, sessionId: string): Promise<ResolvedHistorySession | null> {
+async resolveHistorySession(this: SessionController, sessionPath: string, sessionId: string, restoredDraft?: SessionSummaryRef): Promise<ResolvedHistorySession | null> {
 	if (typeof sessionPath !== "string" || typeof sessionId !== "string" || !sessionId || !/^[A-Za-z0-9_-]+$/.test(sessionId)) {
 		this.broadcast({ type: "notice", level: "error", text: "Invalid session reference." });
 		return null;
@@ -189,6 +189,11 @@ async resolveHistorySession(this: SessionController, sessionPath: string, sessio
 	const target = normalizeFsPath(sessionPath);
 	let rows = this.actionHistory ?? this.lastHistory;
 	let match = rows?.find((row) => row.id === sessionId && normalizeFsPath(row.path) === target);
+	// Reload may restore a host-catalogued draft hidden from normal History.
+	// It still passes the same regular-file validation below.
+	if (!match && restoredDraft?.sessionFile) {
+		match = { id: sessionId, path: restoredDraft.sessionFile, cwd: restoredDraft.cwd ?? this.workspaceRoot, timestamp: "", inWorkspace: false };
+	}
 	if (!match) {
 		rows = await this.collectHistory();
 		this.lastHistory = rows;

@@ -96,7 +96,7 @@ export interface SessionController {
 	compact(instructions?: string, opts?: { betweenTurnsOnly?: boolean }): Promise<void>;
 	maybeTriggerAutoCompact(percent: number | null, owner: string): void;
 
-	switchSession(sessionPath: string, sessionId: string): Promise<void>;
+	switchSession(sessionPath: string, sessionId: string, restoreDraft?: boolean): Promise<void>;
 	startObserving(sessionId: string, previousAttachment?: AttachRef | null, epoch?: number, sessionPath?: string, observedAtStart?: string | null): Promise<boolean>;
 	ensureSidecar(options?: { reattach?: boolean }): Promise<import("./daemon-sidecar.js").DaemonSidecar>;
 	connectDaemon(): Promise<import("./daemon-sidecar.js").DaemonSidecar>;
@@ -144,7 +144,7 @@ export interface SessionController {
 	unarchiveSession(sessionPath: string, sessionId: string): Promise<void>;
 	decorateHistoryRow(row: RecentSession): RecentSession;
 	showHistoryView(): void;
-	resolveHistorySession(sessionPath: string, sessionId: string): Promise<ResolvedHistorySession | null>;
+	resolveHistorySession(sessionPath: string, sessionId: string, restoredDraft?: SessionSummaryRef): Promise<ResolvedHistorySession | null>;
 	updateHistoryRuntime(sessionPath: string, status: RecentSession["status"], statusLabel?: string, revision?: number): void;
 	rowsFromCatalog(catalog: SessionSummaryRef[], revision?: number): RecentSession[];
 	collectHistory(): Promise<RecentSession[]>;

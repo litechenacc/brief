@@ -15,7 +15,7 @@ import { parseWebviewMessage } from "./webview-message.js";
 declare const BRIEF_BUILD_REV: string | undefined;
 const WEBVIEW_REV = typeof BRIEF_BUILD_REV === "string" ? BRIEF_BUILD_REV : "dev";
 
-type SessionReference = { sessionId: string; sessionFile: string };
+type SessionReference = { sessionId: string; sessionFile: string; isNew?: boolean };
 
 type ChatLocation = "editor" | "sidebar";
 type ChatTab = {
@@ -321,7 +321,7 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 			panel.dispose(); return;
 		}
 		const previous = this.lastActive;
-		const tab = this.create({ sessionId: session.sessionId, sessionFile: session.sessionFile });
+		const tab = this.create({ sessionId: session.sessionId, sessionFile: session.sessionFile, isNew: session.isNew === true });
 		this.bind(tab, this.makeView(panel));
 		if (!panel.active && previous) this.lastActive = previous;
 	}
@@ -358,18 +358,19 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 
 	private create(session?: SessionReference, controller = new SessionController(this.context, this.output)): ChatTab {
 		const tab: ChatTab = { controller, session, title: "New Session", closed: false, attachment: { dispose() {} } };
-		if (!session) {
-			const id = `new-${getNonce()}`;
-			tab.entry = { id, path: id, cwd: controller.workspaceRoot, timestamp: new Date().toISOString(), inWorkspace: true, isNew: true, status: "idle" };
+		if (!session || session.isNew) {
+			const id = session?.sessionId ?? `new-${getNonce()}`;
+			tab.entry = { id, path: session?.sessionFile ?? id, cwd: controller.workspaceRoot, timestamp: new Date().toISOString(), inWorkspace: true, isNew: true, status: "idle" };
 		}
 		this.tabs.add(tab);
 		this.paintTabHistory();
 		this.lastActive = tab;
 		tab.attachment = controller.attach({ post: (message) => {
 			if (tab.closed || tab.startupError) return;
-			if (message.type === "promptAccepted") this.markTabSubmitted(tab);
+			if (message.type === "promptAccepted" || (message.type === "snapshot" && message.messages.some(item => item.role === "user"))) this.markTabSubmitted(tab);
 			if (message.type === "history") { this.historyRows = message.sessions; message = this.historyMessage(); }
 			if (message.type === "snapshot" || message.type === "status") {
+				message = { ...message, status: { ...message.status, isNewSession: tab.entry?.isNew === true } };
 				const status = message.status;
 				if (tab.view && tab.session && status.sessionId && status.sessionId !== tab.session.sessionId) {
 					tab.view.readReceipt = undefined;
@@ -438,7 +439,9 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 		if (!view) throw new Error("Session has no view.");
 		await this.wait(view.ready);
 		if (view.closed || tab.closed) throw new Error("Chat view was closed.");
-		await (tab.initialized ??= tab.session ? tab.controller.switchSession(tab.session.sessionFile, tab.session.sessionId) : tab.controller.ensureStarted());
+		await (tab.initialized ??= tab.session
+			? tab.controller.switchSession(tab.session.sessionFile, tab.session.sessionId, tab.session.isNew === true)
+			: tab.controller.ensureStarted());
 		if (tab.startupError) throw tab.startupError;
 	}
 

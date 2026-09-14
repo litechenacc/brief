@@ -19,7 +19,21 @@ const OWNER_ID_MISS_TTL_MS = 2_000;
 const CHILDREN_REFRESH_MS = 700;
 
 export const daemonAttachMethods = {
-async switchSession(this: SessionController, sessionPath: string, sessionId: string): Promise<void> {
+async switchSession(this: SessionController, sessionPath: string, sessionId: string, restoreDraft = false): Promise<void> {
+	// Only reload of a known unsent tab may replace an absent history entry.
+	// Catalog failures still propagate; they are not evidence of a missing draft.
+	let restoredDraft: SessionSummaryRef | undefined;
+	if (restoreDraft) {
+		const epoch = this.viewEpoch;
+		const rows = await this.listSessions(await this.connectDaemon());
+		if (this.disposed || epoch !== this.viewEpoch) return;
+		const existing = rows.find(row => (row.sessionId === sessionId || row.id === sessionId) && row.sessionFile && normalizeFsPath(row.sessionFile) === normalizeFsPath(sessionPath));
+		if (existing?.lifecycle === "draft") restoredDraft = existing;
+		if (!existing) {
+			await this.ensureStarted();
+			return;
+		}
+	}
 	const previousAttachment = this.attached;
 	const epoch = this.beginNavigation();
 	const observedAtStart = this.observingId;
@@ -27,7 +41,7 @@ async switchSession(this: SessionController, sessionPath: string, sessionId: str
 		this.rememberedSession = { sessionId, sessionFile: sessionPath };
 		this.observationRestoring = true;
 	}
-	const session = await this.resolveHistorySession(sessionPath, sessionId);
+	const session = await this.resolveHistorySession(sessionPath, sessionId, restoredDraft);
 	if (!session || this.disposed || epoch !== this.viewEpoch) {
 		this.restoreAttachedView(previousAttachment, epoch);
 		return;

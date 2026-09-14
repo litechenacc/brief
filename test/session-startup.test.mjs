@@ -90,6 +90,43 @@ history.client = { running: true, request: async () => { historyActions.push({ t
 await history.switchSession(livePath, "remembered");
 check("inactive History resume uses daemon create plus attach, not RPC switch_session", historyActions[0]?.type === "create" && historyActions[0]?.sessionPath === livePath && historyActions[1]?.type === "attach" && !historyActions.some((action) => action.type === "rpc"), JSON.stringify(historyActions));
 
+// Reload may replace only a known unsent tab missing from the history catalog.
+const draftReload = controllerFor(new Map(), []);
+const draftNotices = [];
+draftReload.controller.attach({ post: message => draftNotices.push(message) });
+await draftReload.controller.switchSession(livePath, "unsent", true);
+check("missing unsent reload silently creates exactly one fresh session", draftReload.actions.filter(a => a.type === "create").length === 1 && !draftReload.actions[0].sessionPath && !draftNotices.some(m => m.type === "notice"));
+draftReload.controller.dispose();
+
+const catalogDraft = controllerFor(new Map(), [{ sessionId: "unsent", sessionFile: livePath, lifecycle: "draft" }]);
+await catalogDraft.controller.switchSession(livePath, "unsent", true);
+check("an existing draft excluded from history resumes its original file", catalogDraft.actions[0]?.type === "create" && catalogDraft.actions[0].sessionPath === livePath);
+catalogDraft.controller.dispose();
+
+const cancelledDraft = controllerFor(new Map(), []);
+let finishCatalog;
+cancelledDraft.controller.listSessions = () => new Promise(resolve => { finishCatalog = resolve; });
+const cancelledReload = cancelledDraft.controller.switchSession(livePath, "unsent", true);
+await Promise.resolve();
+cancelledDraft.controller.dispose();
+finishCatalog([]);
+await cancelledReload;
+check("closing during catalog lookup never creates a replacement", cancelledDraft.actions.length === 0);
+
+const failedCatalog = controllerFor(new Map(), []);
+failedCatalog.controller.listSessions = async () => { throw new Error("catalog unavailable"); };
+let catalogError;
+await failedCatalog.controller.switchSession(livePath, "unsent", true).catch(error => { catalogError = error; });
+check("catalog failure is not mistaken for a missing draft", catalogError?.message === "catalog unavailable" && failedCatalog.actions.length === 0);
+failedCatalog.controller.dispose();
+
+const existingDraft = controllerFor(new Map(), []);
+existingDraft.controller.listSessions = async () => [{ sessionId: "remembered", sessionFile: livePath }];
+existingDraft.controller.resolveHistorySession = history.resolveHistorySession;
+await existingDraft.controller.switchSession(livePath, "remembered", true);
+check("a formerly unsent tab present in history resumes its original file", existingDraft.actions[0]?.sessionPath === livePath);
+existingDraft.controller.dispose();
+
 const persistedMemory = new Map();
 const persisted = new SessionController(context(persistedMemory), output);
 await persisted.persistForegroundSession("persisted-id", livePath);
