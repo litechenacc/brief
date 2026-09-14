@@ -102,23 +102,23 @@ const file = name => vscode.Uri.file(`/workspace/${name}`);
 	]);
 	assert.deepEqual(files, [{ path: "a.ts", isDir: false }, { path: "folder", isDir: true }]);
 }
-// Remote Explorer drops are normalized only when they belong to this remote workspace authority.
+// Remote Explorer drops use vscode-remote: even though the remote extension host workspace is file:.
 {
 	const c = controller(); let relativeUri, statUri, statCalls = 0;
 	vscode.Uri.parse = value => {
 		const url = new URL(value);
 		return { scheme: url.protocol.slice(0, -1), authority: decodeURIComponent(url.host), fsPath: decodeURIComponent(url.pathname) };
 	};
-	vscode.workspace.workspaceFolders = [{ uri: { scheme: "vscode-remote", authority: "ssh-remote+host", fsPath: "/workspace" } }];
+	vscode.workspace.workspaceFolders = [{ uri: { scheme: "file", fsPath: "/workspace" } }];
 	c.workspaceRelativePath = uri => { relativeUri = uri; return uri.fsPath.startsWith("/workspace/") ? uri.fsPath.slice("/workspace/".length) : null; };
 	vscode.workspace.fs.stat = async uri => { statUri = uri; statCalls += 1; return { type: vscode.FileType.File }; };
-	const files = await c.resolveDroppedWorkspaceUris(["vscode-remote://ssh-remote%2Bhost/workspace/rtl/workspace/xxx.md"]);
+	const files = await c.resolveDroppedWorkspaceUris(["vscode-remote://ssh-remote%2Balgnn07/workspace/rtl/workspace/xxx.md"]);
 	assert.deepEqual(files, [{ path: "rtl/workspace/xxx.md", isDir: false }]);
 	assert.deepEqual(relativeUri, { scheme: "file", fsPath: "/workspace/rtl/workspace/xxx.md" });
 	assert.deepEqual(statUri, { scheme: "file", fsPath: "/workspace/rtl/workspace/xxx.md" });
 	statCalls = 0;
-	assert.deepEqual(await c.resolveDroppedWorkspaceUris(["vscode-remote://ssh-remote%2Bother/workspace/rtl/workspace/xxx.md"]), []);
-	assert.equal(statCalls, 0, "a different remote authority is rejected before stat");
+	assert.deepEqual(await c.resolveDroppedWorkspaceUris(["vscode-remote://ssh-remote%2Bother/outside/xxx.md"]), []);
+	assert.equal(statCalls, 0, "an out-of-workspace remote path is rejected before stat");
 }
 
 console.log("PASS workspace search progressive results, cancellation, folders, failures, navigation, and Explorer drops");
