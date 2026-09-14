@@ -2107,7 +2107,6 @@ export class Transcript {
 		this.lensJumpScrollTop = undefined;
 		this.stickToBottom = true;
 		this.scroller.scrollTop = this.scroller.scrollHeight;
-		this.jumpBtn?.classList.remove("visible");
 		this.updateLensCurrent();
 	}
 }

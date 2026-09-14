@@ -182,9 +182,15 @@ async searchDirs(this: SessionController, query: string, max: number, token?: vs
 async resolveDroppedWorkspaceUris(this: SessionController, uris: string[]): Promise<FileSearchItem[]> {
 	const files: FileSearchItem[] = [];
 	const seen = new Set<string>();
+	const root = vscode.workspace.workspaceFolders?.[0]?.uri;
 	for (const raw of uris) {
 		try {
-			const uri = vscode.Uri.parse(raw);
+			const parsed = vscode.Uri.parse(raw);
+			// Remote Explorer exposes vscode-remote: URIs. Convert only entries from
+			// this exact remote workspace authority, then retain the local-path
+			// realpath containment check in workspaceRelativePath().
+			const uri = parsed.scheme === "vscode-remote" && root?.scheme === "vscode-remote" && parsed.authority === root.authority
+				? vscode.Uri.file(parsed.fsPath) : parsed;
 			if (uri.scheme !== "file") continue;
 			const relative = this.workspaceRelativePath(uri);
 			if (!relative) continue;
