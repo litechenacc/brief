@@ -2100,38 +2100,6 @@ pre.term {
 	text-decoration: underline;
 }
 
-/* ---------- scroll lock / jump-to-latest ---------- */
-
-.messages { position: relative; }
-
-.jump-to-latest {
-	position: sticky;
-	bottom: 10px;
-	left: calc(100% - 30px);
-	display: none;
-	align-items: center;
-	justify-content: center;
-	width: 20px;
-	height: 20px;
-	border-radius: 50%;
-	background: var(--vscode-widget-background, var(--pa-raised));
-	border: 1px solid var(--vscode-widget-border, var(--pa-border));
-	color: var(--pa-dim);
-	box-shadow: 0 2px 6px var(--vscode-widget-shadow, transparent);
-	cursor: pointer;
-	z-index: 5;
-	padding: 0;
-	opacity: 0.85;
-}
-
-.jump-to-latest.visible { display: inline-flex; }
-
-.jump-to-latest:hover {
-	opacity: 1;
-	color: var(--pa-accent);
-	border-color: var(--pa-accent-dim);
-}
-
 /* ---------- composer mention chips ---------- */
 
 .compose-chip.mention {

@@ -5,8 +5,8 @@ const window = new Window({ url: "https://webview.local" });
 for (const name of ["window", "document", "HTMLElement", "HTMLInputElement", "FileReader"]) globalThis[name] = name === "window" ? window : window[name];
 const built = buildSync({ entryPoints: ["webview/composer.ts"], bundle: true, platform: "browser", format: "esm", write: false });
 const { Composer } = await import(`data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString("base64")}`);
-const creates = [], sends = [], drafts = [], opens = [];
-const c = new Composer({ onSend: (...args) => sends.push(args), onStop() {}, onSearchFiles() {}, onPickImage() {}, onAttachSelection() {}, onAttachActiveFile() {}, onSetModel() {}, onSetThinking() {}, onToggleFavorite() {}, onOpenFile() {}, onDraftChanged: (...args) => drafts.push(args), onNewSession() {}, onCreateAttachment: (a) => creates.push(a), onOpenAttachment: (id) => opens.push(id) });
+const creates = [], sends = [], drafts = [], opens = [], drops = [];
+const c = new Composer({ onSend: (...args) => sends.push(args), onStop() {}, onSearchFiles() {}, onDropWorkspaceUris: (uris) => drops.push(uris), onPickImage() {}, onAttachSelection() {}, onAttachActiveFile() {}, onSetModel() {}, onSetThinking() {}, onToggleFavorite() {}, onOpenFile() {}, onDraftChanged: (...args) => drafts.push(args), onNewSession() {}, onCreateAttachment: (a) => creates.push(a), onOpenAttachment: (id) => opens.push(id) });
 document.body.append(c.root); c.setEnabled(true); c.setModels([]);
 const textarea = c.root.querySelector("textarea");
 function paste(text) { const event = new window.Event("paste", { cancelable: true }); Object.defineProperty(event, "clipboardData", { value: { files: [], getData: () => text } }); textarea.dispatchEvent(event); return event; }
@@ -111,5 +111,15 @@ undo(); const cancelledUndo = c.captureViewState().draft.attachments;
 assert.equal(cancelledUndo.length,1); assert.equal(cancelledUndo[0].status,"error"); assert.ok(c.root.querySelector(".attachment-card").title.includes("cancelled"));
 undo(true); assert.equal(textarea.value,"保留我"); assert.equal(c.captureViewState().draft.attachments.length,0);
 undo(); c.root.querySelector(".attachment-card .chip-remove").click(); assert.equal(c.captureViewState().draft.attachments.length,0);
-console.log("PASS composer tracked attachment ranges, deletion, undo/redo, pending, transfer, restore, picker, literal and thresholds");
+// Explorer URI drops are sent to the host; they do not become image attachments.
+c.resetForSessionBoundary(); c.setModels([]);
+const drop = new window.Event("drop", { cancelable: true });
+Object.defineProperty(drop, "dataTransfer", { value: { getData: type => type === "text/uri-list" ? "file:///workspace/a.ts\r\n# ignored\r\nfile:///workspace/folder" : "", files: [] } });
+textarea.dispatchEvent(drop);
+assert.equal(drop.defaultPrevented, true);
+assert.deepEqual(drops.at(-1), ["file:///workspace/a.ts", "file:///workspace/folder"]);
+c.insertMentions([{ path: "a.ts", isDir: false }, { path: "folder", isDir: true }]);
+assert.equal(textarea.value, "@a.ts @folder/ ");
+c.send(); assert.equal(sends.at(-1)[0], "@a.ts @folder/");
+console.log("PASS composer attachment invariants, offsets, image lifecycle, native undo, and Explorer drops");
 window.happyDOM.abort();

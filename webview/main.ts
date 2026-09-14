@@ -204,10 +204,10 @@ const composerDeps = {
 		const clientRequestId = `${promptClientScope}-${++nextPromptClientRequestId}`;
 		// Attachment files can have changed in an editor. Only the host can know
 		// the actual message; wait for its authoritative echo instead of inventing one.
-		const optimistic = !composer.queuesNextSend && attachments.length === 0;
+		const optimistic = !composer.isStreaming && attachments.length === 0;
 		pendingPrompts.set(clientRequestId, { text, images: [...images], selections: [...selections], attachments: attachments.map((attachment) => ({ ...attachment, ...(attachment.image ? { image: { ...attachment.image } } : {}) })), optimistic });
 		if (optimistic) transcript.showOptimisticUserMessage(clientRequestId, text, images);
-		if (!composer.queuesNextSend) transcript.markSending();
+		if (!composer.isStreaming) transcript.markSending();
 		post({
 			type: "prompt",
 			// Stamp the thread this was typed in. The host refuses the send if that
@@ -233,6 +233,7 @@ const composerDeps = {
 		pendingFileSearches.set(hostRequestId, requestId);
 		post({ type: "searchFiles", query, requestId: hostRequestId });
 	},
+	onDropWorkspaceUris: (uris: string[], requestId: number) => post({ type: "dropWorkspaceUris", uris, requestId }),
 	onDraftChanged: (text: string, attachmentDraft?: { text: string; attachments: ComposerAttachment[] }) => {
 		if (authoritativeSessionId) post({ type: "draftChanged", text, sessionId: authoritativeSessionId, ...(attachmentDraft ? { attachmentDraft } : {}) });
 	},
@@ -919,6 +920,9 @@ function dispatchHostMessage(message: HostToWebview): void {
 		case "insertMention":
 			composer.insertMention(message.path);
 			showView("chat");
+			break;
+		case "droppedWorkspaceUrisResolved":
+			composer.resolveWorkspaceDrop(message.requestId, message.files);
 			break;
 		case "promptAccepted":
 			if (message.clientRequestId && pendingPrompts.has(message.clientRequestId) && message.recallText !== undefined) composer.rememberAcceptedPrompt(message.recallText);

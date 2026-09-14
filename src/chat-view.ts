@@ -921,6 +921,14 @@ async function handleMessage(message: WebviewToHost, controller: SessionControll
 		case "searchFiles":
 			await controller.searchFiles(message.query, message.requestId, reply);
 			return;
+		case "dropWorkspaceUris": {
+			const epoch = controller.viewEpoch, attached = controller.attached, observingId = controller.observingId;
+			const files = await controller.resolveDroppedWorkspaceUris(message.uris);
+			if (!controller.disposed && epoch === controller.viewEpoch && attached === controller.attached && observingId === controller.observingId) {
+				reply({ type: "droppedWorkspaceUrisResolved", requestId: message.requestId, files });
+			}
+			return;
+		}
 		case "openFile":
 			await controller.openFile(message.path, message.startLine, message.endLine);
 			return;

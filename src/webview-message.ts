@@ -302,6 +302,10 @@ export function parseWebviewMessage(value: unknown): WebviewToHost | undefined {
 			return isBoundedString(value.query, MAX_QUERY_CHARS, true) && isRequestId(value.requestId)
 				? { type: "searchFiles", query: value.query, requestId: value.requestId }
 				: undefined;
+		case "dropWorkspaceUris":
+			return Array.isArray(value.uris) && value.uris.length > 0 && value.uris.length <= 64 && value.uris.every(isPath) && isRequestId(value.requestId)
+				? { type: "dropWorkspaceUris", uris: [...value.uris], requestId: value.requestId }
+				: undefined;
 		case "openFile": {
 			if (!isPath(value.path)) return undefined;
 			if (value.startLine !== undefined && !isLineNumber(value.startLine)) return undefined;

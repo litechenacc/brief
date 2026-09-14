@@ -2334,6 +2334,22 @@ check("queued input stays in the pending input strip", !document.querySelector("
 hostMessage({ type: "promptRejected", error: "queue rejected", clientRequestId: midRunPrompt?.payload?.clientRequestId });
 check("rejected queued input returns to the composer", textarea.value === "and then run the tests", textarea.value);
 textarea.value = "";
+behaviorPill.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+const steerOption = [...document.querySelectorAll(".dropdown-select")].find((item) => item.textContent.startsWith("Steer"));
+steerOption.click();
+posted.length = 0;
+textarea.value = "steer waits for the authoritative user event";
+textarea.dispatchEvent(new window.Event("input", { bubbles: true }));
+textarea.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+const steerPrompt = posted.find((m) => m.type === "prompt");
+check("a working Steer send still carries steer delivery", steerPrompt?.payload?.streamingBehavior === "steer",
+	JSON.stringify(steerPrompt?.payload?.streamingBehavior ?? "<none>"));
+check("working Steer input is not painted as a conversation message", !scroller.textContent.includes("steer waits for the authoritative user event"), scroller.textContent);
+hostMessage({ type: "event", event: { type: "session_action_update", actions: { queuedCount: 1, steering: ["steer waits for the authoritative user event"], followUps: [] } } });
+check("working Steer input stays in the pending input strip", !document.querySelector(".pending-inputs").hidden && document.querySelector(".pending-inputs").textContent.includes("steer waits for the authoritative user event"));
+hostMessage({ type: "promptRejected", error: "steer rejected", clientRequestId: steerPrompt?.payload?.clientRequestId });
+check("rejected working Steer input returns to the composer", textarea.value === "steer waits for the authoritative user event", textarea.value);
+textarea.value = "";
 posted.length = 0;
 stopBtn.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
 check("stop posts abort", posted.some((m) => m.type === "abort"), JSON.stringify(posted));
@@ -2353,16 +2369,15 @@ Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 200
 Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 400 });
 scroller.scrollTop = 0;
 scroller.dispatchEvent(new window.Event("scroll"));
-const jumpBtn = scroller.querySelector(".jump-to-latest");
-check("jump-to-bottom appears once the reader scrolls away", !!jumpBtn && jumpBtn.className.includes("visible"), jumpBtn?.className ?? "<none>");
-check("jump button is a labeled down arrow", jumpBtn?.title === "Jump to bottom" && jumpBtn.getAttribute("aria-label") === "Jump to bottom" && jumpBtn.className.includes("down"),
-	`${jumpBtn?.title ?? "<none>"} / ${jumpBtn?.className ?? ""}`);
+const latestEntry = document.querySelector(".conversation-lens .lens-latest");
+check("outline adds Jump to latest once the reader scrolls away", latestEntry?.textContent === "Jump to latest", latestEntry?.textContent ?? "<none>");
+check("no jump button is inserted into the transcript", !scroller.querySelector(".jump-to-latest"));
 hostMessage({ type: "event", event: { type: "message_start", message: { role: "assistant", model: "kimi", content: [{ type: "text", text: "still going" }] } } });
 hostMessage({ type: "event", event: { type: "message_update", message: { role: "assistant", model: "kimi", content: [{ type: "text", text: "still going and going" }] } } });
 check("streaming never yanks a scrolled-up reader back down", scroller.scrollTop === 0, String(scroller.scrollTop));
-jumpBtn.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-check("jump returns to the latest and retires the pill", scroller.scrollTop === 2000 && !jumpBtn.className.includes("visible"),
-	`${scroller.scrollTop} / ${jumpBtn.className}`);
+latestEntry.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+check("outline entry returns to the latest and retires", scroller.scrollTop === 2000 && !document.querySelector(".lens-latest"),
+	`${scroller.scrollTop} / ${document.querySelector(".lens-latest")?.textContent ?? "none"}`);
 hostMessage({ type: "event", event: { type: "message_update", message: { role: "assistant", model: "kimi", content: [{ type: "text", text: "still going and going and going" }] } } });
 check("auto-follow resumes after the jump", scroller.scrollTop === 2000, String(scroller.scrollTop));
 

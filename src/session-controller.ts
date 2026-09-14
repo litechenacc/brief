@@ -82,6 +82,7 @@ export interface SessionController {
 	getActiveSelection(): { path: string; startLine: number; endLine: number; text: string; languageId: string } | null;
 	getActiveFilePath(): string | null;
 	searchFiles(query: string, requestId: number, reply?: (message: import("./protocol.js").HostToWebview) => void): Promise<void>;
+	resolveDroppedWorkspaceUris(uris: string[]): Promise<import("./protocol.js").FileSearchItem[]>;
 	searchDirs(query: string, max: number, token?: import("vscode").CancellationToken): Promise<string[]>;
 	pickImages(requestId: number, reply?: (message: import("./protocol.js").HostToWebview) => void): Promise<void>;
 	openFile(relPath: string, startLine?: number, endLine?: number): Promise<void>;

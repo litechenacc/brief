@@ -12,10 +12,10 @@ import zipfile
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "verify-vsix.py"
 ASSETS = """
 package.json readme.md README.zh-TW.md LICENSE.txt changelog.md
-THIRD_PARTY_NOTICES.md dist/extension.js media/activity.svg media/tab-light.svg
+THIRD_PARTY_NOTICES.md dist/extension.js dist/prime-auth-helper.mjs media/activity.svg media/tab-light.svg
 media/tab-dark.svg media/icon.svg media/icon.png media/icon-32.png
 media/icon-64.png media/icon-128.png media/icon-256.png media/main.css
-media/main.js media/screenshots/editor-tabs.png media/screenshots/sidebar.png
+media/main.js
 """.split()
 
 

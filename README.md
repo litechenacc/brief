@@ -10,7 +10,7 @@ The current release is ready for my everyday use. Some UI edges remain, and impr
 
 > **Community project.** Brief is not published by, endorsed by, or affiliated with Prime Intellect. Prime Agent provides the runtime; Brief provides the VS Code interface.
 
-![Brief with a session list on the left, native editor tabs, activity indicators, and a conversation outline.](media/screenshots/editor-tabs.png)
+![Brief with a session list on the left, native editor tabs, activity indicators, and a conversation outline.](https://raw.githubusercontent.com/litechenacc/brief/HEAD/media/screenshots/editor-tabs.jpg)
 
 *Editor Tabs: browse and sort sessions, keep conversations alongside file tabs, and follow activity and the conversation outline.*
 
@@ -18,7 +18,7 @@ The current release is ready for my everyday use. Some UI edges remain, and impr
 
 I develop Brief out of love for code and Prime Agent. These are the details that make me happy to use it every day:
 
-![Brief feature tour: agent conversation bubbles, native tabs, outline, activity, message controls, and more.](media/screenshots/features-annotated.png)
+![Brief feature tour: agent conversation bubbles, native tabs, outline, activity, message controls, and more.](https://raw.githubusercontent.com/litechenacc/brief/HEAD/media/screenshots/features-annotated.jpg)
 
 The numbers below match the image. **01–06 highlight visible UI; 07–10 are feature notes for states or actions not shown in this screenshot.**
 
@@ -41,7 +41,7 @@ Use **Sidebar** to keep the editor area for code, or **Editor Tabs** to give eac
 
 Run `Brief: Use Sidebar` or `Brief: Use Editor` to move the current session and remember the workspace preference. New sessions open in Editor Tabs by default. Moving a session does not stop its agent.
 
-![Brief chat in the VS Code Secondary Side Bar, with Explorer on the left and README open in the editor.](media/screenshots/sidebar.png)
+![Brief chat in the VS Code Secondary Side Bar, with Explorer on the left and README open in the editor.](https://raw.githubusercontent.com/litechenacc/brief/HEAD/media/screenshots/sidebar.jpg)
 
 *Sidebar: Explorer, your file, and chat in one window. This example places Brief in the Secondary Side Bar.*
 

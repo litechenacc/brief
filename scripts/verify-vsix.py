@@ -27,8 +27,6 @@ EXPECTED_FILES = {
     "extension/media/icon-256.png",
     "extension/media/main.css",
     "extension/media/main.js",
-    "extension/media/screenshots/editor-tabs.png",
-    "extension/media/screenshots/sidebar.png",
 }
 
 if len(sys.argv) not in (2, 3):

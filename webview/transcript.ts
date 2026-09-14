@@ -240,7 +240,6 @@ export class Transcript {
 		this.scrollToBottom();
 	}
 
-	private jumpBtn: HTMLElement | null = null;
 	/**
 	 * The selection as it stood the instant before a collapsible was toggled.
 	 *
@@ -417,28 +416,11 @@ export class Transcript {
 	private setStick(value: boolean): void {
 		if (this.stickToBottom === value) return;
 		this.stickToBottom = value;
-		this.updateJumpButton();
+		this.updateLensLatest();
 	}
 
-	private updateJumpButton(): void {
-		if (this.stickToBottom) {
-			this.jumpBtn?.classList.remove("visible");
-			return;
-		}
-		if (!this.jumpBtn) {
-			this.jumpBtn = el("button", "jump-to-latest");
-			this.jumpBtn.title = "Jump to bottom";
-			this.jumpBtn.setAttribute("aria-label", "Jump to bottom");
-			this.jumpBtn.appendChild(icon("chevron", 12));
-			this.jumpBtn.classList.add("down");
-			this.jumpBtn.addEventListener("click", () => {
-				this.stickToBottom = true;
-				this.scrollToBottom();
-				this.updateJumpButton();
-			});
-			this.scroller.appendChild(this.jumpBtn);
-		}
-		this.jumpBtn.classList.add("visible");
+	private updateLensLatest(): void {
+		this.paintLens();
 	}
 
 	// ---------------------------------------------------------------
@@ -514,6 +496,10 @@ export class Transcript {
 		root.setAttribute("aria-hidden", String(count === 0));
 		const rail = root.querySelector<HTMLElement>(".lens-rail");
 		if (!rail) return;
+		// Keep the optional latest entry outside the turn-indexed children while
+		// rows are reconciled. Otherwise a newly appended turn reuses it as a marker.
+		let latest = rail.querySelector<HTMLButtonElement>(".lens-latest");
+		latest?.remove();
 		// Reuse rows so incoming messages do not interrupt hover, focus or scrolling.
 		this.lensTurns.forEach((turn, index) => {
 			let marker = rail.children[index] as HTMLButtonElement | undefined;
@@ -533,6 +519,18 @@ export class Transcript {
 			marker.setAttribute("aria-current", String(index === this.lensCurrent));
 		});
 		while (rail.children.length > count) rail.lastElementChild!.remove();
+		if (!this.stickToBottom) {
+			if (!latest) {
+				latest = el("button", "lens-marker lens-latest", "Jump to latest") as HTMLButtonElement;
+				latest.type = "button";
+				latest.title = "Jump to bottom";
+				latest.addEventListener("click", () => {
+					this.forceScrollToBottom();
+					this.updateLensLatest();
+				});
+			}
+			rail.appendChild(latest);
+		}
 		if (count === 0) root.classList.remove("expanded");
 	}
 
@@ -690,10 +688,6 @@ export class Transcript {
 				this.addLensTurn(message as UserMessage, ordinal, null);
 			}
 		}
-		// The jump pill lived inside the scroller we just emptied; keeping the
-		// detached node would leave the operator with no way back to the bottom
-		// for the rest of the session.
-		this.jumpBtn = null;
 		// Windowing state belongs to the transcript we just discarded.
 		this.prunedNotice = null;
 		this.prunedCount = 0;
@@ -818,14 +812,12 @@ export class Transcript {
 		// trimmed count and drifts the effective window by a slot per cycle.
 		const chrome =
 			(this.earlierBar?.parentElement === this.scroller ? 1 : 0) +
-			(this.jumpBtn?.parentElement === this.scroller ? 1 : 0) +
 			(this.prunedNotice?.parentElement === this.scroller ? 1 : 0);
 		const removable = rows.length - chrome;
 		if (removable <= MAX_RENDERED_ROWS) return;
 		let toRemove = removable - PRUNE_TO;
 		for (const node of Array.from(rows)) {
 			if (toRemove <= 0) break;
-			if (node === this.earlierBar || node === this.jumpBtn || node === this.prunedNotice) continue;
 			if (node.contains(this.streamingBubble) || node === this.streamingBubble) break;
 			for (const [id, block] of this.toolBlocks) {
 				if (node.contains(block.root)) this.toolBlocks.delete(id);
@@ -1166,7 +1158,7 @@ export class Transcript {
 		this.markSending();
 		// The operator just hit send — that is an explicit intent to follow along.
 		this.forceScrollToBottom();
-		this.updateJumpButton();
+		this.updateLensLatest();
 	}
 
 	/** Immediate local feedback before agent_start takes over the run indicator. */
@@ -1199,7 +1191,7 @@ export class Transcript {
 			this.hasContent = false;
 			this.showWelcome();
 		}
-		this.updateJumpButton();
+		this.updateLensLatest();
 		return true;
 	}
 

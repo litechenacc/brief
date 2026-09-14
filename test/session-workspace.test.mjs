@@ -88,4 +88,19 @@ const file = name => vscode.Uri.file(`/workspace/${name}`);
  assert.equal(posts.length, 1);
  assert.deepEqual(reads, ["/workspace"]);
 }
-console.log("PASS workspace search progressive results, cancellation, folders, failures, and navigation");
+// Explorer drop URIs resolve to bounded workspace-relative file/folder mentions.
+{
+	const c = controller();
+	vscode.Uri.parse = value => {
+		const url = new URL(value);
+		return { scheme: url.protocol.slice(0, -1), fsPath: decodeURIComponent(url.pathname) };
+	};
+	vscode.workspace.fs.stat = async uri => ({ type: uri.fsPath.endsWith("/folder") ? vscode.FileType.Directory : vscode.FileType.File });
+	c.workspaceRelativePath = uri => uri.fsPath.startsWith("/workspace/") ? uri.fsPath.slice("/workspace/".length) : null;
+	const files = await c.resolveDroppedWorkspaceUris([
+		"file:///workspace/a.ts", "file:///workspace/folder", "file:///workspace/a.ts", "https://example.com/nope",
+	]);
+	assert.deepEqual(files, [{ path: "a.ts", isDir: false }, { path: "folder", isDir: true }]);
+}
+
+console.log("PASS workspace search progressive results, cancellation, folders, failures, navigation, and Explorer drops");

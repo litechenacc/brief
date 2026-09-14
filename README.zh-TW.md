@@ -10,7 +10,7 @@ Brief 是 [sirouk/prime-agent-vscode](https://github.com/sirouk/prime-agent-vsco
 
 > **社群專案。** Brief 並非由 Prime Intellect 發布、背書，也不隸屬於該公司。Prime Agent 提供 runtime，Brief 提供 VS Code 介面。
 
-![Brief 左側顯示 session 列表，上方為原生編輯器分頁，並顯示工作狀態與對話大綱。](media/screenshots/editor-tabs.png)
+![Brief 左側顯示 session 列表，上方為原生編輯器分頁，並顯示工作狀態與對話大綱。](https://raw.githubusercontent.com/litechenacc/brief/HEAD/media/screenshots/editor-tabs.jpg)
 
 *Editor Tabs：瀏覽與排序 sessions，讓對話和檔案分頁並存，並查看工作狀態與對話大綱。*
 
@@ -18,7 +18,7 @@ Brief 是 [sirouk/prime-agent-vscode](https://github.com/sirouk/prime-agent-vsco
 
 我帶著對程式碼與 Prime Agent 的愛開發 Brief。下面這些細節，是我每天用起來會覺得開心的地方：
 
-![Brief 功能導覽：agents 對話泡泡、原生分頁、大綱、工作狀態、訊息控制與其他貼心功能。](media/screenshots/features-annotated.zh-TW.png)
+![Brief 功能導覽：agents 對話泡泡、原生分頁、大綱、工作狀態、訊息控制與其他貼心功能。](https://raw.githubusercontent.com/litechenacc/brief/HEAD/media/screenshots/features-annotated.zh-TW.jpg)
 
 以下編號與圖片一致。**01–06 標示截圖中可見的介面；07–10 是功能補充，對應的狀態或操作未出現在這張截圖中。**
 
@@ -41,7 +41,7 @@ Brief 是 [sirouk/prime-agent-vscode](https://github.com/sirouk/prime-agent-vsco
 
 執行 `Brief: Use Sidebar` 或 `Brief: Use Editor`，即可搬移目前 session 並記住 workspace 偏好。新 session 預設使用 Editor Tabs。搬移 session 不會停止 agent。
 
-![Brief 聊天位於 VS Code Secondary Side Bar，左側為 Explorer，中間編輯區開啟 README。](media/screenshots/sidebar.png)
+![Brief 聊天位於 VS Code Secondary Side Bar，左側為 Explorer，中間編輯區開啟 README。](https://raw.githubusercontent.com/litechenacc/brief/HEAD/media/screenshots/sidebar.jpg)
 
 *Sidebar：檔案列表、編輯中的檔案與對話放在同一個視窗。此圖將 Brief 放在 Secondary Side Bar。*
 

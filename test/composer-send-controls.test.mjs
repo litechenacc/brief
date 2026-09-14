@@ -77,9 +77,11 @@ try {
 	state("blocked", "Blocked", true, false);
 	c.setEnabled(true);
 	c.setSteerDefault("followUp");
+	assert.equal(c.isStreaming, false, "streaming getter reports idle state");
 	state("blocked", "Send", true, false);
 	parity("Send", "followUp", false);
 	c.setStreaming(true);
+	assert.equal(c.isStreaming, true, "streaming getter reports active state");
 	state("blocked", "Queue", true, true);
 	assert.equal(visible(stop), true);
 	parity("Queue", "followUp", true);

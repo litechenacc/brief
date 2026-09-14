@@ -9,7 +9,10 @@ tsconfig.json
 .gitignore
 *.vsix
 
-# Unredacted screenshot inputs at the repository root; publish media/screenshots instead.
+# Screenshot assets are served by GitHub URLs in the README files; do not package them.
+media/screenshots/**
+
+# Unredacted screenshot input at the repository root.
 image.png
 *.map
 media/*.map

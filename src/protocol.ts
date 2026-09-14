@@ -328,6 +328,7 @@ export type WebviewToHost =
 	| { type: "stopObserving" }
 	| { type: "deleteSession"; path: string; sessionId: string }
 	| { type: "searchFiles"; query: string; requestId: number }
+	| { type: "dropWorkspaceUris"; uris: string[]; requestId: number }
 	| { type: "openFile"; path: string; startLine?: number; endLine?: number }
 	| { type: "pickImage"; requestId: number }
 	| { type: "attachActiveFile" }
@@ -508,6 +509,7 @@ export type HostToWebview =
 	| { type: "imagePicked"; requestId: number; images: ImageAttachment[] }
 	| { type: "insertSelection"; selection: SelectionAttachment }
 	| { type: "insertMention"; path: string }
+	| { type: "droppedWorkspaceUrisResolved"; requestId: number; files: FileSearchItem[] }
 	| { type: "observedSession"; sessionId: string; messages: AgentMessage[] }
 	| { type: "observedEvent"; sessionId: string; event: AgentEvent }
 	| { type: "observedClosed"; sessionId: string }

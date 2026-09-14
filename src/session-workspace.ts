@@ -178,6 +178,27 @@ async searchDirs(this: SessionController, query: string, max: number, token?: vs
 	return out;
 },
 
+
+async resolveDroppedWorkspaceUris(this: SessionController, uris: string[]): Promise<FileSearchItem[]> {
+	const files: FileSearchItem[] = [];
+	const seen = new Set<string>();
+	for (const raw of uris) {
+		try {
+			const uri = vscode.Uri.parse(raw);
+			if (uri.scheme !== "file") continue;
+			const relative = this.workspaceRelativePath(uri);
+			if (!relative) continue;
+			const stat = await vscode.workspace.fs.stat(uri);
+			const isDir = (stat.type & vscode.FileType.Directory) !== 0;
+			if (!isDir && (stat.type & vscode.FileType.File) === 0) continue;
+			const key = `${isDir ? "dir" : "file"}:${relative}`;
+			if (!seen.has(key)) { seen.add(key); files.push({ path: relative, isDir }); }
+		} catch {
+			// Ignore malformed, unavailable, and non-workspace drag entries.
+		}
+	}
+	return files;
+},
 async pickImages(this: SessionController, requestId: number, reply: (message: HostToWebview) => void = (message) => this.broadcast(message)): Promise<void> {
 	const epoch = this.viewEpoch;
 	const attached = this.attached;

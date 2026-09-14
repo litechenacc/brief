@@ -69,6 +69,12 @@ assert.deepEqual(parseWebviewMessage({ type: "unarchiveSession", path: "/tmp/kno
 });
 assert.equal(parseWebviewMessage({ type: "openFile", path: "src/app.ts", endLine: 4 }), undefined);
 assert.equal(parseWebviewMessage({ type: "searchFiles", query: "src", requestId: Number.NaN }), undefined);
+assert.deepEqual(parseWebviewMessage({ type: "dropWorkspaceUris", uris: ["file:///workspace/src/app.ts", "file:///workspace/src"], requestId: 1, requestId: 1 }), {
+	type: "dropWorkspaceUris", uris: ["file:///workspace/src/app.ts", "file:///workspace/src"], requestId: 1,
+});
+assert.equal(parseWebviewMessage({ type: "dropWorkspaceUris", uris: [], requestId: 1 }), undefined);
+assert.equal(parseWebviewMessage({ type: "dropWorkspaceUris", uris: ["x\0"], requestId: 1 }), undefined);
+assert.equal(parseWebviewMessage({ type: "dropWorkspaceUris", uris: Array(65).fill("file:///workspace/a"), requestId: 1 }), undefined);
 assert.equal(parseWebviewMessage({ type: "setCompactThreshold", percent: 19 }), undefined);
 assert.equal(parseWebviewMessage({ type: "setCompactThreshold", percent: 22.5 }), undefined);
 assert.deepEqual(parseWebviewMessage({ type: "setCompactThreshold", percent: 55 }), { type: "setCompactThreshold", percent: 55 });

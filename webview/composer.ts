@@ -104,6 +104,7 @@ export interface ComposerDeps {
 	onOpenAttachment: (id: string) => void;
 	onStop: () => void;
 	onSearchFiles: (query: string, requestId: number) => void;
+	onDropWorkspaceUris: (uris: string[], requestId: number) => void;
 	onPickImage: () => void;
 	onAttachSelection: () => void;
 	onAttachActiveFile: () => void;
@@ -161,6 +162,8 @@ export class Composer {
 	private attachmentRegistry = new Map<string, ComposerAttachment>();
 	private attachmentErrors = new Map<string, string>();
 	private attachmentSerial = 0;
+	private nextWorkspaceDropRequestId = 0;
+	private pendingWorkspaceDrops = new Map<number, { generation: number; text: string; start: number; end: number; images: File[] }>();
 	private sessionGeneration = 0;
 	private trackedText = "";
 	private undoEdits: Array<{ text: string; attachments: ComposerAttachment[] }> = [];
@@ -927,17 +930,39 @@ export class Composer {
 	}
 
 	insertMention(path: string): void {
-		this.accepted.add(path);
-		const caret = this.textarea.selectionStart ?? this.textarea.value.length;
-		const before = this.textarea.value.slice(0, caret);
-		const after = this.textarea.value.slice(caret);
-		const sep = before && !before.endsWith("\n") && !before.endsWith(" ") ? " " : "";
+		this.insertMentions([{ path, isDir: path.endsWith("/") }]);
+	}
+
+	insertMentions(files: Array<{ path: string; isDir: boolean }>): void {
+		const paths = files.map((file) => file.isDir ? `${file.path.replace(/\/+$/, "")}/` : file.path).filter(Boolean);
+		if (!paths.length || this.textarea.disabled) return;
+		for (const path of paths) this.accepted.add(path);
+		const start = this.textarea.selectionStart ?? this.textarea.value.length;
+		const end = this.textarea.selectionEnd ?? start;
+		const before = this.textarea.value.slice(0, start);
+		const sep = before && !/[\s]$/.test(before) ? " " : "";
+		const text = `${sep}${paths.map((path) => `@${path}`).join(" ")} `;
 		this.historyIndex = null;
-		this.textarea.value = `${before}${sep}@${path} ${after}`;
-		const pos = before.length + sep.length + path.length + 2;
-		this.textarea.selectionStart = this.textarea.selectionEnd = pos;
-		this.autoGrow();
+		this.replaceTracked(start, end, text);
 		this.focus();
+	}
+
+	resolveWorkspaceDrop(requestId: number, files: Array<{ path: string; isDir: boolean }>): void {
+		const pending = this.pendingWorkspaceDrops.get(requestId);
+		this.pendingWorkspaceDrops.delete(requestId);
+		if (!pending || pending.generation !== this.sessionGeneration || this.textarea.disabled) return;
+		if (this.textarea.value !== pending.text) { this.showHint("Draft changed. Drop the files again."); return; }
+		if (files.length) {
+			const paths = files.map((file) => file.isDir ? `${file.path.replace(/\/+$/, "")}/` : file.path).filter(Boolean);
+			if (!paths.length) return;
+			for (const path of paths) this.accepted.add(path);
+			const before = this.textarea.value.slice(0, pending.start);
+			const sep = before && !/[\s]$/.test(before) ? " " : "";
+			this.historyIndex = null;
+			this.replaceTracked(pending.start, pending.end, `${sep}${paths.map((path) => `@${path}`).join(" ")} `);
+			this.focus();
+		} else if (pending.images.length) this.readImageFiles(pending.images);
+		else this.showHint("No supported workspace files or images in this drop.");
 	}
 
 	textIsEmpty(): boolean {
@@ -999,6 +1024,7 @@ export class Composer {
 		}
 		this.sessionIdentity = null;
 		this.sessionGeneration++;
+		this.pendingWorkspaceDrops.clear();
 		this.sessionCommandMenu?.hide();
 		this.editRange = null;
 		this.compositionUndoIndex = null;
@@ -1103,6 +1129,7 @@ export class Composer {
 		}
 		if (!this.attachments.length) this.rememberPrompt(this.expandedText());
 		this.deps.onSend(text, this.images, this.selections, this.attachments.map((a) => ({ ...a })));
+		this.pendingWorkspaceDrops.clear();
 		this.attachments = [];
 		this.undoEdits = [];
 		this.redoEdits = [];
@@ -1119,6 +1146,10 @@ export class Composer {
 
 	get streamingBehavior(): "steer" | "followUp" {
 		return this.behavior;
+	}
+
+	get isStreaming(): boolean {
+		return this.streaming;
 	}
 
 	get queuesNextSend(): boolean {
@@ -1724,8 +1755,20 @@ export class Composer {
 	}
 
 	private onDrop(event: DragEvent): void {
-		event.preventDefault();
-		this.readImageFiles(Array.from(event.dataTransfer?.files ?? []).filter((f) => SUPPORTED_IMAGE_MIME_TYPES.has(f.type)));
+		const transfer = event.dataTransfer;
+		const images = Array.from(transfer?.files ?? []).filter((file) => SUPPORTED_IMAGE_MIME_TYPES.has(file.type));
+		const uriList = transfer?.getData("text/uri-list") ?? "";
+		const uris = uriList.split(/\r?\n/).map((uri) => uri.trim()).filter((uri) => uri && !uri.startsWith("#"));
+		if (uris.length > 64 || uris.some((uri) => uri.length > 4096 || uri.includes("\0"))) { event.preventDefault(); this.showHint("Too many or invalid dropped URIs."); return; }
+		if (uris.length) {
+			event.preventDefault();
+			const requestId = ++this.nextWorkspaceDropRequestId;
+			this.pendingWorkspaceDrops.set(requestId, { generation: this.sessionGeneration, text: this.textarea.value,
+				start: this.textarea.selectionStart, end: this.textarea.selectionEnd, images });
+			this.deps.onDropWorkspaceUris(uris, requestId);
+			return;
+		}
+		if (images.length) { event.preventDefault(); this.readImageFiles(images); }
 	}
 
 	private readImageFiles(files: File[]): void {
