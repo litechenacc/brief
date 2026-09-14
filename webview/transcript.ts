@@ -1029,7 +1029,7 @@ export class Transcript {
 		const label = el(
 			"span",
 			"retry-text",
-			`Provider request failed — auto-retry ${attempt}/${maxAttempts}${errorMessage ? ` · ${errorMessage.slice(0, 90)}` : ""}`,
+			`Provider request failed — auto-retry ${attempt}/${maxAttempts}${errorMessage ? ` · ${errorMessage}` : ""}`,
 		);
 		row.appendChild(label);
 		this.place(row);
@@ -1044,12 +1044,12 @@ export class Transcript {
 
 	private failRetryRow(finalError?: string): void {
 		if (!this.retryRow) {
-			this.systemNote(`Provider request failed${finalError ? `: ${finalError.slice(0, 120)}` : ""}`, true);
+			this.systemNote(`Provider request failed${finalError ? `: ${finalError}` : ""}`, true);
 			return;
 		}
 		this.retryRow.classList.add("fatal");
 		const label = this.retryRow.querySelector(".retry-text");
-		if (label) label.textContent = `Provider request failed — giving up${finalError ? ` · ${finalError.slice(0, 120)}` : ""}`;
+		if (label) label.textContent = `Provider request failed — giving up${finalError ? ` · ${finalError}` : ""}`;
 		this.retryRow = null; // leave the fatal row in the transcript
 	}
 

@@ -2426,6 +2426,16 @@ for (const completed of [true, false]) {
 	check("agent_end removes the working row", !scroller.querySelector(".working-row"));
 }
 
+// --- Provider errors keep their full message and can wrap in the panel -------
+const providerError = "Provider requested a 452604s wait before retrying (above retry.provider.maxRetryDelayMs=60000ms): You have hit your Chat message limit.";
+hostMessage({ type: "snapshot", status: { ...baseStatus, sessionId: "session-provider-error" }, state: null, messages: [] });
+hostMessage({ type: "event", event: { type: "auto_retry_start", attempt: 1, maxAttempts: 2, errorMessage: providerError } });
+check("provider retry errors keep the full message", document.querySelector(".retry-text")?.textContent?.includes(providerError),
+	document.querySelector(".retry-text")?.textContent ?? "<none>");
+hostMessage({ type: "event", event: { type: "auto_retry_end", success: false, finalError: providerError } });
+check("fatal provider retry errors keep the full message", document.querySelector(".retry-text")?.textContent?.includes(providerError),
+	document.querySelector(".retry-text")?.textContent ?? "<none>");
+
 // --- Empty thinking parts must not draw an empty "Thought process" box -------
 hostMessage({
 	type: "snapshot",
