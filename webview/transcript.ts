@@ -365,6 +365,7 @@ export class Transcript {
 		// auto-follow could fire in between and drag the reader back down before
 		// their flick was ever noticed — the fight this used to lose. wheel and
 		// touchmove unstick synchronously, so the very next frame already knows.
+		this.createWorkingRow();
 		this.wireSelectionPreserve();
 		this.mountConversationLens();
 		this.scroller.addEventListener("wheel", (event) => {
@@ -675,6 +676,7 @@ export class Transcript {
 		this.streaming = false;
 		this.lastPartialAssistant = null;
 		this.stopWorking();
+		this.scroller.appendChild(this.workingRow!);
 		this.optimisticRows.clear();
 		this.lensTurns = [];
 		this.lensCurrent = 0;
@@ -1065,20 +1067,12 @@ export class Transcript {
 		mark.replaceChildren(svg);
 	}
 
-	private startWorking(): void {
-		if (!this.workingRow) {
-			this.workingVerbBase = pickSpinnerVerb();
-			this.nextVerbAt = Date.now() + 8_000;
-		}
-		if (this.workingRow) {
-			this.paintWorkingLabel();
-			return;
-		}
-		this.workingStartedAt = Date.now();
-		const row = el("div", "working-row");
+	private createWorkingRow(): void {
+		const row = el("div", "working-row working-idle");
 		row.setAttribute("role", "status");
 		row.setAttribute("aria-label", "Working");
-		row.setAttribute("aria-busy", "true");
+		row.setAttribute("aria-busy", "false");
+		row.setAttribute("aria-hidden", "true");
 		const mark = el("span", "working-mark");
 		this.paintWorkingIcon(mark);
 		mark.setAttribute("aria-hidden", "true");
@@ -1089,11 +1083,23 @@ export class Transcript {
 		const elapsed = el("span", "working-elapsed");
 		elapsed.setAttribute("aria-hidden", "true");
 		row.appendChild(elapsed);
-		this.place(row);
+		this.scroller.appendChild(row);
 		this.workingRow = row;
-		window.clearInterval(this.workingTimer);
-		this.workingTimer = window.setInterval(() => this.tickWorking(), 400);
+	}
+
+	private startWorking(): void {
+		if (this.workingTimer !== undefined) {
+			this.paintWorkingLabel();
+			return;
+		}
+		this.workingVerbBase = pickSpinnerVerb();
+		this.workingStartedAt = Date.now();
+		this.nextVerbAt = this.workingStartedAt + 8_000;
+		this.workingRow?.classList.remove("working-idle");
+		this.workingRow?.setAttribute("aria-busy", "true");
+		this.workingRow?.removeAttribute("aria-hidden");
 		this.paintWorkingLabel();
+		this.workingTimer = window.setInterval(() => this.tickWorking(), 400);
 	}
 
 	private tickWorking(): void {
@@ -1125,8 +1131,10 @@ export class Transcript {
 
 	private stopWorking(): void {
 		window.clearInterval(this.workingTimer);
-		this.workingRow?.remove();
-		this.workingRow = null;
+		this.workingTimer = undefined;
+		this.workingRow?.classList.add("working-idle");
+		this.workingRow?.setAttribute("aria-busy", "false");
+		this.workingRow?.setAttribute("aria-hidden", "true");
 	}
 
 	// ---------------------------------------------------------------

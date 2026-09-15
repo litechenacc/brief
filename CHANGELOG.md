@@ -8,6 +8,8 @@ All notable changes to this extension are recorded here. The format follows
 
 ## [Unreleased]
 
+- Keep a fixed working-indicator slot and hide it when idle to prevent layout jumps when agent activity starts or ends.
+
 ## [0.4.1]
 
 - Silently create a fresh session when reloading a known unsent chat tab that is absent from the daemon catalog. Resume existing drafts with their settings intact, and keep normal resume checks and catalog errors visible.
