@@ -774,6 +774,8 @@ async refreshChildren(this: SessionController): Promise<void> {
 				activeSessionId,
 				...(parentId ? { browseRef: this.browseRefFor(activeSessionId, parentId) } : {}),
 				name: rich.sessionName,
+				model: rich.model,
+				thinkingLevel: rich.thinkingLevel,
 				runtimeKind: rich.runtimeKind,
 				rlmDepth: rich.rlmDepth,
 				created: rich.created,

@@ -5,6 +5,7 @@
 import { el, icon } from "./dom.js";
 import type { RecentSession } from "../src/protocol.js";
 import { deriveSessionLabel } from "../src/session-label.js";
+import { subagentLabel } from "./subagent-label.js";
 
 export interface HistoryFoldState {
 	active: boolean;
@@ -117,6 +118,7 @@ export class HistoryView {
 	private searchTimer: number | undefined;
 	private folds: HistoryFoldState;
 	private applyingFolds = false;
+	private expandedChildSessions = new Set<string>();
 
 	/** Keep the last render on screen while a fresh list arrives; mark subtly. */
 	showLoading(): void {
@@ -385,19 +387,33 @@ export class HistoryView {
 			if (sub) item.appendChild(el("div", "history-item-sub", sub));
 		}
 		if (session.children?.length) {
-			const children = el("div", "history-children");
-			for (const child of session.children) {
-				const childItem = el("div", "history-child");
-				if (child.id === this.currentId || child.activeSessionId === this.currentId) childItem.classList.add("current");
-				childItem.addEventListener("click", (event) => event.stopPropagation());
-				childItem.append(
-					el("span", "history-child-arrow", "↳"),
-					el("span", "history-child-name", child.name || "(untitled subagent)"),
-					el("span", `history-child-status ${child.status}`, child.status),
-				);
-				children.appendChild(childItem);
+			const childrenKey = session.path;
+			const expanded = this.expandedChildSessions.has(childrenKey);
+			const toggle = el("button", "history-children-toggle") as HTMLButtonElement;
+			toggle.append(el("span", "history-children-caret", expanded ? "▾" : "▸"), `Subagents (${session.children.length})`);
+			toggle.title = expanded ? "Hide subagents" : "Show subagents";
+			toggle.addEventListener("click", (event) => {
+				event.stopPropagation();
+				if (expanded) this.expandedChildSessions.delete(childrenKey);
+				else this.expandedChildSessions.add(childrenKey);
+				this.render(this.lastSessions ?? [], this.currentId);
+			});
+			item.appendChild(toggle);
+			if (expanded) {
+				const children = el("div", "history-children");
+				for (const child of session.children) {
+					const childItem = el("div", "history-child");
+					if (child.id === this.currentId || child.activeSessionId === this.currentId) childItem.classList.add("current");
+					childItem.addEventListener("click", (event) => event.stopPropagation());
+					childItem.append(
+						el("span", "history-child-arrow", "↳"),
+						el("span", "history-child-name", subagentLabel(child)),
+						el("span", `history-child-status ${child.status}`, child.status),
+					);
+					children.appendChild(childItem);
+				}
+				item.appendChild(children);
 			}
-			item.appendChild(children);
 		}
 		const openSession = (): void => {
 			this.deps.onResume(session.path, session.id);

@@ -158,6 +158,8 @@ export interface SessionChild {
 	/** Opaque host-issued capability required to browse this rendered child. */
 	browseRef?: string;
 	name?: string;
+	model?: { provider?: string; id?: string };
+	thinkingLevel?: string;
 	runtimeKind?: string;
 	rlmDepth?: number;
 	created?: string;
@@ -451,7 +453,7 @@ export interface RecentSession {
 	 */
 	sortMs?: number;
 	/** Live direct subagents attached to this history session. */
-	children?: Array<{ id: string; activeSessionId?: string; name?: string; status: "running" | "idle"; rlmDepth?: number }>;
+	children?: Array<{ id: string; activeSessionId?: string; name?: string; model?: { provider?: string; id?: string }; thinkingLevel?: string; status: "running" | "idle"; rlmDepth?: number }>;
 	/** True when the operator archived this row from Brief (not daemon auto-archive). */
 	archived?: boolean;
 	/**

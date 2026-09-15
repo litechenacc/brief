@@ -1091,6 +1091,25 @@ body.vscode-high-contrast-light .history-item.current {
 	white-space: nowrap;
 }
 
+.history-children-toggle {
+	display: flex;
+	align-items: center;
+	gap: 5px;
+	margin: 3px 0 0 10px;
+	padding: 2px 5px;
+	color: var(--pa-dim);
+	font-size: 10px;
+	text-align: left;
+}
+
+.history-children-toggle:hover {
+	color: var(--pa-accent);
+}
+
+.history-children-caret {
+	font-size: 8px;
+}
+
 .history-children {
 	margin: 2px 0 0 10px;
 	padding-left: 8px;

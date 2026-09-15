@@ -314,6 +314,8 @@ rowsFromCatalog(this: SessionController, catalog: SessionSummaryRef[], revision 
 				id: child.sessionId ?? child.activeSessionId ?? child.id ?? "",
 				...(child.activeSessionId ? { activeSessionId: child.activeSessionId } : {}),
 				...(child.sessionName ? { name: child.sessionName } : {}),
+				...(child.model ? { model: child.model } : {}),
+				...(child.thinkingLevel ? { thinkingLevel: child.thinkingLevel } : {}),
 				status: rosterStatus(child) as "running" | "idle",
 				rlmDepth: child.rlmDepth,
 			}));

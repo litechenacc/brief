@@ -58,6 +58,10 @@ export interface SessionSummaryRef {
 	sessionFile?: string;
 	cwd?: string;
 	sessionName?: string;
+	/** Model selected for this session in the daemon roster summary. */
+	model?: { provider?: string; id?: string };
+	/** Thinking level selected for this session in the daemon roster summary. */
+	thinkingLevel?: string;
 	created?: string;
 	modified?: string;
 	parentActiveSessionId?: string;

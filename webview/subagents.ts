@@ -3,6 +3,7 @@
  */
 import { el } from "./dom.js";
 import type { SessionChild, WebviewToHost } from "../src/protocol.js";
+import { subagentLabel } from "./subagent-label.js";
 
 export interface SpawnCard {
 	id: string;
@@ -161,7 +162,7 @@ export class SubagentsStrip {
 
 		if (parent) {
 			const back = el("button", "subagents-back-row") as HTMLButtonElement;
-			back.append(el("span", "subagents-back", "‹ parent"), el("span", "subagents-back-name", parent.name ?? parent.id));
+			back.append(el("span", "subagents-back", "‹ parent"), el("span", "subagents-back-name", subagentLabel(parent)));
 			back.title = "Return to the parent agent";
 			back.addEventListener("click", () => this.deps.post({ type: "backToParent" }));
 			this.root.appendChild(back);
@@ -212,7 +213,7 @@ export class SubagentsStrip {
 						: status === "idle"
 							? "idle — resident, waiting for work"
 							: "finished — no worker behind it";
-			const name = el("span", "subagent-name", child.name ?? child.id);
+			const name = el("span", "subagent-name", subagentLabel(child));
 			const badgeText = child.statusLabel ?? (status === "running" ? "running" : status === "idle" ? "idle" : "finished");
 			const badge =
 				status === "running" && !child.statusLabel
@@ -238,7 +239,7 @@ export class SubagentsStrip {
 			this.root.appendChild(list);
 		}
 		if (liveSiblings.length > 0) {
-			const siblingHeader = el("div", "subagents-sibling-header", parent ? `Under ${parent.name ?? parent.id}` : "Siblings");
+			const siblingHeader = el("div", "subagents-sibling-header", parent ? `Under ${subagentLabel(parent)}` : "Siblings");
 			const list = el("div", "subagents-list siblings");
 			for (const sib of liveSiblings) list.appendChild(buildRow(sib, true));
 			this.root.append(siblingHeader, list);
