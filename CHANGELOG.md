@@ -8,6 +8,8 @@ All notable changes to this extension are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.5.1]
+
 - Add StdOut and StdErr buttons beside running background task titles to open logs in VS Code, with elapsed time aligned to the right.
 
 - Show Codex banked reset counts and add a confirmed Apply reset action with idempotent requests and quota refresh.
@@ -424,7 +426,7 @@ The entries below predate Brief's release documentation and retain their origina
 - Test layers: webview DOM harness, export harness, activation harness, smoke, host e2e, headless
   screenshot matrix, and a persistent live-shell driver for real VS Code verification.
 
-[Unreleased]: https://github.com/litechenacc/brief/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/litechenacc/brief/compare/v0.5.1...HEAD
 [0.3.2]: https://github.com/litechenacc/brief/releases/tag/v0.3.2
 [0.3.1]: https://github.com/litechenacc/brief/releases/tag/v0.3.1
 [1.0.33]: https://github.com/sirouk/prime-agent-vscode/compare/v1.0.32...v1.0.33
@@ -465,3 +467,4 @@ The entries below predate Brief's release documentation and retain their origina
 [0.4.0]: https://github.com/litechenacc/brief/releases/tag/v0.4.0
 [0.4.1]: https://github.com/litechenacc/brief/releases/tag/v0.4.1
 [0.5.0]: https://github.com/litechenacc/brief/releases/tag/v0.5.0
+[0.5.1]: https://github.com/litechenacc/brief/releases/tag/v0.5.1
