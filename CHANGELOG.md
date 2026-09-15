@@ -8,6 +8,12 @@ All notable changes to this extension are recorded here. The format follows
 
 ## [Unreleased]
 
+- Separate original Markdown styling (`vscode-vanilla`) from live VS Code theme color mapping (`vscode`).
+
+- Add a Markdown theme picker for VS Code, Prime current, and discovered Prime themes.
+- Add configurable Brief font size with increase and decrease commands.
+- Add an optional Prime Agent TUI Markdown color theme.
+
 - Organize extension sources into host, session, runtime, and shared directories without changing runtime behavior or build output paths.
 
 - Block unsupported slash commands, including RPC-discovered extension commands, before sending. Show a composer notice and preserve the draft and attachments; keep Brief commands and runtime prompt/skill commands available.

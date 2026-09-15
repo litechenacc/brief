@@ -81,6 +81,16 @@
         "category": "Brief"
       },
       {
+        "command": "brief.increaseFontSize",
+        "title": "Increase Font Size",
+        "category": "Brief"
+      },
+      {
+        "command": "brief.decreaseFontSize",
+        "title": "Decrease Font Size",
+        "category": "Brief"
+      },
+      {
         "command": "brief.compact",
         "title": "Compact Context",
         "icon": "$(fold)",
@@ -145,6 +155,12 @@
         "title": "Switch Session",
         "category": "Brief",
         "icon": "$(list-selection)"
+      },
+      {
+        "command": "brief.selectPrimeTheme",
+        "title": "Select Markdown Theme",
+        "category": "Brief",
+        "icon": "$(symbol-color)"
       }
     ],
     "menus": {
@@ -264,6 +280,24 @@
           "ignoreSync": true,
           "description": "Command used to start Brief's agent runtime. Set an absolute path when `prime-agent` is not on PATH."
         },
+        "brief.fontSize": {
+          "type": "number",
+          "default": 13,
+          "scope": "window",
+          "description": "Font size for Brief chat content, in pixels."
+        },
+        "brief.markdownTheme": {
+          "type": "string",
+          "enum": [
+            "vscode-vanilla",
+            "vscode",
+            "prime-current",
+            "prime"
+          ],
+          "default": "vscode-vanilla",
+          "scope": "window",
+          "description": "Markdown colors: vanilla inherited styling, current VS Code theme colors, current Prime Agent theme, or a selected Prime theme."
+        },
         "brief.args": {
           "type": "array",
           "items": {
@@ -356,6 +390,12 @@
           "default": "editor",
           "scope": "window",
           "description": "Default location for new sessions and Focus Chat. Use Brief: Use Editor or Use Sidebar to also move the current session."
+        },
+        "brief.primeTheme": {
+          "type": "string",
+          "default": "",
+          "scope": "window",
+          "description": "Prime Agent theme name or JSON path used when brief.markdownTheme is prime."
         }
       }
     },

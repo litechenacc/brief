@@ -1,13 +1,16 @@
 /** Sessions own controllers; editor panels and the native sidebar are replaceable views. */
 import { unlink } from "node:fs/promises";
+import { readFileSync, readdirSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { isSessionActive } from "../session/session-actions.js";
 import { randomBytes } from "node:crypto";
-import { homedir } from "node:os";
 import { loginPrimeAgent, logoutPrimeAgent } from "../runtime/prime-auth.js";
 import { completedMessageTime } from "../session/session-completion.js";
 import * as vscode from "vscode";
 import type { ChatReadReceipt, ChatViewState, HostToWebview, RecentSession, WebviewToHost } from "../shared/protocol.js";
 import { SessionController } from "../session/session-controller.js";
+import { locateAgent, type LocatedAgent } from "../runtime/agent-locator.js";
 import { normalizeFsPath } from "../session/recent-sessions.js";
 export { parseWebviewMessage } from "../shared/webview-message.js";
 import { parseWebviewMessage } from "../shared/webview-message.js";
@@ -105,8 +108,12 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 
 
 	private readonly windowFocus: vscode.Disposable;
+	private readonly configuration: vscode.Disposable;
 
 	constructor(private readonly context: vscode.ExtensionContext, private readonly output: vscode.OutputChannel) {
+		this.configuration = vscode.workspace.onDidChangeConfiguration((event) => {
+			if (event.affectsConfiguration("brief.fontSize") || event.affectsConfiguration("brief.markdownTheme") || event.affectsConfiguration("brief.primeTheme")) this.broadcastUiSettings();
+		});
 		this.windowFocus = vscode.window.onDidChangeWindowState((state) => {
 			if (!state.focused) { this.setComposerFocus(undefined); return; }
 			for (const tab of this.tabs) {
@@ -114,6 +121,68 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 			}
 		});
 	}
+
+	private locatedAgent: Promise<LocatedAgent> | undefined;
+	private resolveAgent(): Promise<LocatedAgent> {
+		if (!this.locatedAgent) { const command = vscode.workspace.getConfiguration("brief").get<string>("command", "prime-agent"); this.locatedAgent = locateAgent(command.trim() || "prime-agent", line => this.output.appendLine(line)); }
+		return this.locatedAgent;
+	}
+	private async uiSettings(): Promise<HostToWebview> {
+		const config = vscode.workspace.getConfiguration("brief");
+		const markdownTheme = config.get<"vscode-vanilla" | "vscode" | "prime-current" | "prime">("markdownTheme", "vscode-vanilla");
+		const message: HostToWebview = { type: "uiSettings", fontSize: config.get<number>("fontSize", 13), markdownTheme };
+		if (markdownTheme === "prime" || markdownTheme === "prime-current") message.markdownColors = await this.primeMarkdownColors(markdownTheme === "prime-current" ? undefined : config.get<string>("primeTheme", ""));
+		return message;
+	}
+	private async primeMarkdownColors(themeRef?: string): Promise<Record<string, string>> {
+		const agentDir = process.env.PRIME_AGENT_DIR?.trim().replace(/^~(?=\/|$)/, homedir()) || join(homedir(), ".prime", "agent"); let selected = themeRef;
+		if (!selected) for (const file of [join(agentDir, "settings.json"), join(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "", ".prime", "agent", "settings.json")]) { try { const value = JSON.parse(readFileSync(file, "utf8")); if (typeof value.theme === "string") selected = value.theme; } catch { } }
+		selected ||= "dark"; const candidates = [selected, join(agentDir, "themes", `${selected}.json`), join(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "", ".prime", "agent", "themes", `${selected}.json`)];
+		for (const [directory] of await this.primeThemeDirectories()) candidates.push(join(directory, `${selected}.json`)); let raw: any;
+		for (const candidate of candidates) { try { raw = JSON.parse(readFileSync(candidate.startsWith("/") ? candidate : resolve(candidate), "utf8")); break; } catch { } } if (!raw?.colors) return {};
+		const vars = raw.vars ?? {}; const color = (value: unknown): string => { if (typeof value === "number") { const ansi16 = [[0,0,0],[128,0,0],[0,128,0],[128,128,0],[0,0,128],[128,0,128],[0,128,128],[192,192,192],[128,128,128],[255,0,0],[0,255,0],[255,255,0],[0,0,255],[255,0,255],[0,255,255],[255,255,255]]; const rgb = value < 16 ? ansi16[value] : value < 232 ? (() => { const n = value - 16; return [n / 36, n / 6, n].map(v => [0,95,135,175,215,255][Math.floor(v) % 6]); })() : [8 + (value - 232) * 10, 8 + (value - 232) * 10, 8 + (value - 232) * 10]; return `rgb(${rgb.join(",")})`; } if (typeof value !== "string") return "inherit"; return value.startsWith("#") ? value : color(vars[value]); };
+		return Object.fromEntries(["mdHeading","mdLink","mdLinkUrl","mdCode","mdCodeBlock","mdCodeBlockBorder","mdQuote","mdQuoteBorder","mdHr","mdListBullet"].map(key => [key, color(raw.colors[key])]));
+	}
+	private async primeThemeDirectories(): Promise<Array<[string, string]>> {
+		const agentDir = process.env.PRIME_AGENT_DIR?.trim().replace(/^~(?=\/|$)/, homedir()) || join(homedir(), ".prime", "agent"); const directories: Array<[string, string]> = [[join(agentDir, "themes"), "User theme"]]; const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath; if (workspace) directories.push([join(workspace, ".prime", "agent", "themes"), "Project theme"]);
+		let directory = dirname(realpathSync((await this.resolveAgent()).command)); for (;;) { const theme = join(directory, "modes", "interactive", "theme"); try { readdirSync(theme); directories.push([theme, "Built-in theme"]); break; } catch { } const parent = dirname(directory); if (parent === directory) break; directory = parent; } return directories;
+	}
+
+	broadcastUiSettings(): void {
+		void this.uiSettings().then(message => {
+			if (this.sidebar && !this.sidebar.closed) void this.sidebar.webview.postMessage(message);
+			for (const tab of this.tabs) if (tab.view && !tab.view.closed) void tab.view.webview.postMessage(message);
+		});
+	}
+
+	async adjustFontSize(delta: number): Promise<void> {
+		const config = vscode.workspace.getConfiguration("brief");
+		const current = config.get<number>("fontSize", 13);
+		await config.update("fontSize", current + delta, vscode.ConfigurationTarget.Global);
+	}
+
+	async selectPrimeTheme(): Promise<void> {
+		const config = vscode.workspace.getConfiguration("brief");
+		type ThemeChoice = vscode.QuickPickItem & { value: "vscode-vanilla" | "vscode" | "prime-current" | "prime"; theme?: string };
+		const items: ThemeChoice[] = [
+			{ label: "$(symbol-color) VS Code Vanilla", description: "Use the original inherited Markdown styling", value: "vscode-vanilla" },
+			{ label: "$(symbol-color) VS Code", description: "Use the current VS Code color theme", value: "vscode" },
+			{ label: "$(paintcan) Prime current theme", description: "Follow the theme in Prime Agent settings", value: "prime-current" },
+		];
+		for (const theme of await this.primeThemeChoices()) items.push({
+			label: `$(paintcan) ${theme.name}`,
+			description: theme.source,
+			detail: theme.path,
+			value: "prime",
+			theme: theme.name,
+		});
+		const choice = await vscode.window.showQuickPick(items, { placeHolder: "Select a Markdown color theme" });
+		if (!choice) return;
+		if (choice.value === "prime" && choice.theme) await config.update("primeTheme", choice.theme, vscode.ConfigurationTarget.Global);
+		await config.update("markdownTheme", choice.value, vscode.ConfigurationTarget.Global);
+	}
+
+	private async primeThemeChoices(): Promise<Array<{ name: string; path: string; source: string }>> { const choices: Array<{ name: string; path: string; source: string }> = []; const seen = new Set<string>(); for (const [directory, source] of await this.primeThemeDirectories()) { let files: string[]; try { files = readdirSync(directory); } catch { continue; } for (const file of files.filter(entry => entry.endsWith(".json") && entry !== "theme-schema.json").sort()) { const name = file.slice(0, -5); if (!seen.has(name)) { seen.add(name); choices.push({ name, path: join(directory, file), source }); } } } return choices; }
 
 	private requestReadReceipt(view: ChatView): void {
 		if (view.readReceipt && !view.closed && !view.transferring && vscode.window.state.focused &&
@@ -573,7 +642,7 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 				else void handleMessage(message, target.controller, reply);
 				return;
 			}
-			if (message.type === "ready") view.markReady();
+			if (message.type === "ready") { view.markReady(); void this.uiSettings().then(message => view.webview.postMessage(message)); }
 			const tab = view.tab;
 			if (view.sidebar && !tab && !view.closed && !view.transferring) {
 				void (async () => {
@@ -816,6 +885,7 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 		this.setComposerFocus(undefined);
 		this.loginAbort.abort();
 		this.windowFocus.dispose();
+		this.configuration.dispose();
 		this.historyAttachment?.dispose();
 		this.historyController?.dispose();
 		this.sidebar?.disposeBinding();

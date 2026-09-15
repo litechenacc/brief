@@ -4,6 +4,8 @@
    undefined (an idle subagent dot with no border is invisible, not subtle). */
 
 body {
+	/* Every webview text size derives from the user-configured Brief base. */
+	--brief-font-size-base: var(--brief-font-size, calc(var(--vscode-font-size, 13px) * 0.96));
 	--pa-bg: var(--vscode-sideBar-background, transparent);
 	--pa-text: var(--vscode-foreground, inherit);
 	--pa-dim: var(--vscode-descriptionForeground, var(--vscode-foreground, inherit));
@@ -49,7 +51,7 @@ body {
 	padding: 0;
 	height: 100%;
 	font-family: var(--vscode-font-family);
-	font-size: calc(var(--vscode-font-size, 13px) * 0.96);
+	font-size: var(--brief-font-size, calc(var(--vscode-font-size, 13px) * 0.96));
 	color: var(--pa-text, var(--vscode-foreground));
 	background: var(--pa-bg, transparent);
 }
@@ -68,7 +70,7 @@ body {
 
 button {
 	font-family: inherit;
-	font-size: 12px;
+	font-size: calc(var(--brief-font-size-base) * 0.923077);
 	color: inherit;
 	background: none;
 	border: none;
@@ -141,7 +143,7 @@ button:focus-visible {
 	justify-content: space-between;
 	gap: 8px;
 	padding: 7px 10px;
-	font-size: 11.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.884615);
 	border: 1px solid var(--pa-border);
 	border-radius: 6px;
 	box-shadow: 0 4px 14px var(--vscode-widget-shadow, transparent);
@@ -169,7 +171,7 @@ button:focus-visible {
 	border-radius: 4px;
 	background: transparent;
 	color: var(--pa-accent);
-	font-size: 11px;
+	font-size: calc(var(--brief-font-size-base) * 0.846154);
 	white-space: nowrap;
 	cursor: pointer;
 }
@@ -255,7 +257,7 @@ button:focus-visible {
 	background: transparent;
 	color: color-mix(in srgb, var(--pa-text) 70%, transparent);
 	text-align: left;
-	font-size: 8px;
+	font-size: calc(var(--brief-font-size-base) * 0.615385);
 	line-height: 20px;
 	font-weight: 400;
 	cursor: pointer;
@@ -271,7 +273,7 @@ button:focus-visible {
 }
 
 .conversation-lens.expanded .lens-marker {
-	font-size: 13px;
+	font-size: calc(var(--brief-font-size-base) * 1);
 }
 
 .lens-label {
@@ -360,7 +362,7 @@ textarea::-webkit-scrollbar {
 }
 
 .welcome-title {
-	font-size: 17px;
+	font-size: calc(var(--brief-font-size-base) * 1.307692);
 	font-weight: 650;
 	letter-spacing: 0.01em;
 }
@@ -379,7 +381,7 @@ textarea::-webkit-scrollbar {
 	border-radius: 7px;
 	border: 1px solid var(--pa-border);
 	background: var(--pa-surface);
-	font-size: 12px;
+	font-size: calc(var(--brief-font-size-base) * 0.923077);
 	color: var(--pa-text);
 }
 
@@ -393,7 +395,7 @@ textarea::-webkit-scrollbar {
 	flex-direction: column;
 	gap: 6px;
 	margin-top: 12px;
-	font-size: 11px;
+	font-size: calc(var(--brief-font-size-base) * 0.846154);
 	color: var(--pa-dim);
 	text-align: left;
 }
@@ -480,7 +482,7 @@ textarea::-webkit-scrollbar {
 	align-self: center;
 	max-width: calc(100% - 20px);
 	overflow-wrap: anywhere;
-	font-size: 10.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.807692);
 	color: var(--pa-dim);
 	padding: 2px 10px;
 	border-radius: 9px;
@@ -501,7 +503,7 @@ textarea::-webkit-scrollbar {
 	gap: 8px;
 	width: fit-content;
 	color: var(--pa-text, inherit);
-	font-size: 11px;
+	font-size: calc(var(--brief-font-size-base) * 0.846154);
 	line-height: 15px;
 	height: 17px;
 	box-sizing: border-box;
@@ -636,9 +638,9 @@ body.vscode-high-contrast-light .working-row .working-mark svg {
 	line-height: 1.3;
 }
 
-.md h1 { font-size: 1.25em; }
-.md h2 { font-size: 1.15em; }
-.md h3 { font-size: 1.05em; }
+.md h1 { font-size: calc(var(--brief-font-size-base) * 1.25); }
+.md h2 { font-size: calc(var(--brief-font-size-base) * 1.15); }
+.md h3 { font-size: calc(var(--brief-font-size-base) * 1.05); }
 
 .md ul, .md ol {
 	margin: 0.35em 0;
@@ -649,7 +651,7 @@ body.vscode-high-contrast-light .working-row .working-mark svg {
 
 .md code {
 	font-family: var(--vscode-editor-font-family, monospace);
-	font-size: 0.92em;
+	font-size: calc(var(--brief-font-size-base) * 0.92);
 	background: var(--vscode-textCodeBlock-background, var(--pa-surface-2));
 	border: 1px solid var(--pa-border);
 	border-radius: 4px;
@@ -670,12 +672,12 @@ body.vscode-high-contrast-light .working-row .working-mark svg {
 	padding: 3px 8px;
 	background: var(--pa-surface-2);
 	border-bottom: 1px solid var(--pa-border);
-	font-size: 10.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.807692);
 	color: var(--pa-dim);
 }
 
 .codeblock-copy {
-	font-size: 10.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.807692);
 	color: var(--pa-dim);
 	padding: 1px 6px;
 	border-radius: 4px;
@@ -736,7 +738,7 @@ body.vscode-high-contrast-light .working-row .working-mark svg {
 .md table {
 	border-collapse: collapse;
 	margin: 0.45em 0;
-	font-size: 0.95em;
+	font-size: calc(var(--brief-font-size-base) * 0.95);
 }
 
 .md th, .md td {
@@ -758,7 +760,7 @@ details.thinking {
 
 details.thinking summary {
 	cursor: pointer;
-	font-size: 11px;
+	font-size: calc(var(--brief-font-size-base) * 0.846154);
 	font-style: italic;
 	color: var(--pa-dim);
 	list-style: none;
@@ -771,7 +773,7 @@ details.thinking summary::before {
 
 details.thinking .thinking-body {
 	white-space: pre-wrap;
-	font-size: 11.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.884615);
 	line-height: 1.5;
 	color: var(--pa-dim);
 	max-height: 300px;
@@ -842,14 +844,14 @@ details.thinking .thinking-body {
 
 .tool-name {
 	font-family: var(--vscode-editor-font-family, monospace);
-	font-size: 11px;
+	font-size: calc(var(--brief-font-size-base) * 0.846154);
 	font-weight: 600;
 	color: var(--pa-accent);
 }
 
 .tool-summary {
 	font-family: var(--vscode-editor-font-family, monospace);
-	font-size: 10.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.807692);
 	color: var(--pa-dim);
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -858,7 +860,7 @@ details.thinking .thinking-body {
 }
 
 .tool-pill {
-	font-size: 9.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.730769);
 	text-transform: uppercase;
 	letter-spacing: 0.06em;
 	padding: 1px 6px;
@@ -890,7 +892,7 @@ details.thinking .thinking-body {
 
 .tool-section-label,
 .tool-section-head {
-	font-size: 9.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.730769);
 	text-transform: uppercase;
 	letter-spacing: 0.07em;
 	color: var(--pa-dim);
@@ -904,7 +906,7 @@ details.thinking .thinking-body {
 }
 
 .tool-copy {
-	font-size: 10px;
+	font-size: calc(var(--brief-font-size-base) * 0.769231);
 	color: var(--pa-dim);
 	padding: 0 5px;
 	border-radius: 4px;
@@ -917,7 +919,7 @@ details.thinking .thinking-body {
 
 .tool-body pre {
 	font-family: var(--vscode-editor-font-family, monospace);
-	font-size: 11px;
+	font-size: calc(var(--brief-font-size-base) * 0.846154);
 	white-space: pre-wrap;
 	word-break: break-word;
 	margin: 0;
@@ -934,13 +936,13 @@ details.thinking .thinking-body {
 }
 
 .tool-open {
-	font-size: 10.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.807692);
 	color: var(--pa-accent);
 	padding: 2px 0;
 }
 
 .usage-line {
-	font-size: 10px;
+	font-size: calc(var(--brief-font-size-base) * 0.769231);
 	color: var(--pa-dim);
 	padding-left: 2px;
 }
@@ -962,7 +964,7 @@ details.thinking .thinking-body {
 }
 
 .history-title {
-	font-size: 12px;
+	font-size: calc(var(--brief-font-size-base) * 0.923077);
 	font-weight: 600;
 }
 
@@ -970,7 +972,7 @@ details.thinking .thinking-body {
 	margin-left: auto;
 	padding: 3px 7px;
 	font: inherit;
-	font-size: 11px;
+	font-size: calc(var(--brief-font-size-base) * 0.846154);
 	color: var(--pa-text);
 	background: transparent;
 	border: 1px solid var(--pa-border);
@@ -986,7 +988,7 @@ details.thinking .thinking-body {
 	margin: 0 12px;
 	padding: 4px 7px;
 	font: inherit;
-	font-size: 11px;
+	font-size: calc(var(--brief-font-size-base) * 0.846154);
 	color: var(--pa-text);
 	background: var(--pa-surface);
 	border: 1px solid var(--pa-border);
@@ -1005,7 +1007,7 @@ details.thinking .thinking-body {
 .history-empty {
 	color: var(--pa-dim);
 	text-align: center;
-	font-size: 11.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.884615);
 	margin-top: 24px;
 }
 
@@ -1070,7 +1072,7 @@ body.vscode-high-contrast-light .history-item.current {
 .history-item-name {
 	flex: 1;
 	min-width: 0;
-	font-size: 12px;
+	font-size: calc(var(--brief-font-size-base) * 0.923077);
 	font-weight: 400;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -1086,7 +1088,7 @@ body.vscode-high-contrast-light .history-item.current {
 }
 
 .history-item-time {
-	font-size: 10px;
+	font-size: calc(var(--brief-font-size-base) * 0.769231);
 	color: var(--pa-dim);
 	flex-shrink: 0;
 	text-align: right;
@@ -1094,7 +1096,7 @@ body.vscode-high-contrast-light .history-item.current {
 }
 
 .history-item-sub {
-	font-size: 11px;
+	font-size: calc(var(--brief-font-size-base) * 0.846154);
 	color: var(--pa-dim);
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -1108,7 +1110,7 @@ body.vscode-high-contrast-light .history-item.current {
 	margin: 3px 0 0 10px;
 	padding: 2px 5px;
 	color: var(--pa-dim);
-	font-size: 10px;
+	font-size: calc(var(--brief-font-size-base) * 0.769231);
 	text-align: left;
 }
 
@@ -1117,7 +1119,7 @@ body.vscode-high-contrast-light .history-item.current {
 }
 
 .history-children-caret {
-	font-size: 8px;
+	font-size: calc(var(--brief-font-size-base) * 0.615385);
 }
 
 .history-children {
@@ -1136,7 +1138,7 @@ body.vscode-high-contrast-light .history-item.current {
 	min-height: 18px;
 	padding: 2px 5px;
 	color: var(--pa-dim);
-	font-size: 10.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.807692);
 }
 
 .history-child.current {
@@ -1161,7 +1163,7 @@ body.vscode-high-contrast-light .history-item.current {
 
 .history-child-status {
 	margin-left: auto;
-	font-size: 9px;
+	font-size: calc(var(--brief-font-size-base) * 0.692308);
 	flex: 0 0 auto;
 }
 
@@ -1202,7 +1204,7 @@ body.vscode-high-contrast-light .history-item.current {
 	display: inline-flex;
 	align-items: center;
 	gap: 5px;
-	font-size: 10.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.807692);
 	padding: 2px 7px;
 	border-radius: 6px;
 	border: 1px solid var(--pa-border);
@@ -1267,7 +1269,7 @@ body.vscode-high-contrast-light .history-item.current {
 	white-space: pre-wrap;
 	word-wrap: break-word;
 	font-family: inherit;
-	font-size: 12.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.961538);
 	line-height: 1.5;
 	padding: 2px 2px 0;
 	color: var(--pa-text, var(--vscode-input-foreground));
@@ -1312,7 +1314,7 @@ body.vscode-high-contrast-light .history-item.current {
 	color: transparent;
 	caret-color: var(--pa-text, var(--vscode-input-foreground));
 	font-family: inherit;
-	font-size: 12.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.961538);
 	padding: 2px 2px 0;
 	outline: none;
 	min-height: 22px;
@@ -1357,7 +1359,7 @@ body.vscode-high-contrast-light .history-item.current {
 	display: inline-flex;
 	align-items: center;
 	height: 26px;
-	font-size: 10.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.807692);
 	padding: 2px 8px;
 	border-radius: 9px;
 	border: 1px solid var(--pa-border);
@@ -1430,7 +1432,7 @@ body.vscode-high-contrast-light .history-item.current {
 .context-label {
 	position: relative;
 	z-index: 1;
-	font-size: 11px;
+	font-size: calc(var(--brief-font-size-base) * 0.846154);
 	color: var(--pa-dim);
 	white-space: nowrap;
 	font-variant-numeric: tabular-nums;
@@ -1478,7 +1480,7 @@ body.vscode-high-contrast-light .history-item.current {
 	height: 100%;
 	gap: 5px;
 	border-radius: 6px 0 0 6px;
-	font-size: 11px;
+	font-size: calc(var(--brief-font-size-base) * 0.846154);
 }
 
 .send-mode-btn {
@@ -1534,7 +1536,7 @@ body.vscode-high-contrast-light .history-item.current {
 	gap: 8px;
 	padding: 5px 8px;
 	border-radius: 5px;
-	font-size: 11.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.884615);
 	text-align: left;
 }
 
@@ -1545,11 +1547,11 @@ body.vscode-high-contrast-light .history-item.current {
 
 .ac-label {
 	font-family: var(--vscode-editor-font-family, monospace);
-	font-size: 11px;
+	font-size: calc(var(--brief-font-size-base) * 0.846154);
 }
 
 .ac-sub {
-	font-size: 10px;
+	font-size: calc(var(--brief-font-size-base) * 0.769231);
 	color: var(--pa-dim);
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -1569,7 +1571,7 @@ body.vscode-high-contrast-light .history-item.current {
 	align-items: center;
 	gap: 7px;
 	padding: 3px 0 0;
-	font-size: 10px;
+	font-size: calc(var(--brief-font-size-base) * 0.769231);
 	color: var(--pa-dim);
 	flex-shrink: 0;
 }
@@ -1637,7 +1639,7 @@ body.vscode-high-contrast-light .history-item.current {
 	border-radius: 9px;
 	background: var(--pa-surface-2);
 	color: var(--pa-dim);
-	font-size: 10.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.807692);
 	font-variant-numeric: tabular-nums;
 	white-space: nowrap;
 	flex-shrink: 0;
@@ -1690,7 +1692,7 @@ body.vscode-high-contrast-light .history-item.current {
 
 .dropdown-header {
 	padding: 7px 10px 3px;
-	font-size: 9.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.730769);
 	text-transform: uppercase;
 	letter-spacing: 0.07em;
 	color: var(--pa-dim);
@@ -1699,7 +1701,7 @@ body.vscode-high-contrast-light .history-item.current {
 .dropdown-search {
 	margin: 6px 8px;
 	padding: 5px 9px;
-	font-size: 11.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.884615);
 	font-family: inherit;
 	color: var(--pa-text);
 	background: var(--pa-surface);
@@ -1724,7 +1726,7 @@ body.vscode-high-contrast-light .history-item.current {
 
 .dropdown-section {
 	padding: 6px 9px 2px;
-	font-size: 9.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.730769);
 	text-transform: uppercase;
 	letter-spacing: 0.07em;
 	color: var(--pa-dim);
@@ -1736,7 +1738,7 @@ body.vscode-high-contrast-light .history-item.current {
 	gap: 7px;
 	border-radius: 6px;
 	text-align: left;
-	font-size: 11.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.884615);
 }
 
 .dropdown-select {
@@ -1770,14 +1772,14 @@ body.vscode-high-contrast-light .history-item.current {
 
 .dropdown-text {
 	font-family: var(--vscode-editor-font-family, monospace);
-	font-size: 11px;
+	font-size: calc(var(--brief-font-size-base) * 0.846154);
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 
 .dropdown-sub {
-	font-size: 10px;
+	font-size: calc(var(--brief-font-size-base) * 0.769231);
 	color: var(--pa-dim);
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -1785,7 +1787,7 @@ body.vscode-high-contrast-light .history-item.current {
 }
 
 .dropdown-right {
-	font-size: 10px;
+	font-size: calc(var(--brief-font-size-base) * 0.769231);
 	color: var(--pa-dim);
 	white-space: nowrap;
 	flex-shrink: 0;
@@ -1828,7 +1830,7 @@ body.vscode-high-contrast-light .history-item.current {
 
 .dropdown-empty {
 	padding: 10px;
-	font-size: 11px;
+	font-size: calc(var(--brief-font-size-base) * 0.846154);
 	color: var(--pa-dim);
 	text-align: center;
 }
@@ -1865,7 +1867,7 @@ pre.term {
 
 .tool-path {
 	font-family: var(--vscode-editor-font-family, monospace);
-	font-size: 11px;
+	font-size: calc(var(--brief-font-size-base) * 0.846154);
 	color: var(--pa-accent);
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -1889,7 +1891,7 @@ pre.term {
 
 .edit-hunk-label {
 	padding: 2px 8px;
-	font-size: 9.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.730769);
 	color: var(--pa-dim);
 	text-transform: uppercase;
 	letter-spacing: 0.06em;
@@ -1899,7 +1901,7 @@ pre.term {
 .diff-line {
 	display: flex;
 	font-family: var(--vscode-editor-font-family, monospace);
-	font-size: 10.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.807692);
 	line-height: 1.45;
 	white-space: pre-wrap;
 	word-break: break-word;
@@ -1918,7 +1920,7 @@ pre.term {
 	white-space: pre-wrap;
 	word-break: break-word;
 	font-family: var(--vscode-editor-font-family, monospace);
-	font-size: 10.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.807692);
 }
 
 .diff-line.del {
@@ -1980,7 +1982,7 @@ pre.term {
 
 .history-group-summary {
 	padding: 6px 4px;
-	font-size: 11px;
+	font-size: calc(var(--brief-font-size-base) * 0.846154);
 	color: var(--pa-dim);
 	cursor: pointer;
 	list-style: none;
@@ -1993,7 +1995,7 @@ pre.term {
 .history-group-summary::before {
 	content: "▾ ";
 	color: var(--pa-faint);
-	font-size: 9px;
+	font-size: calc(var(--brief-font-size-base) * 0.692308);
 }
 
 .history-group:not([open]) > .history-group-summary::before {
@@ -2011,7 +2013,7 @@ pre.term {
 	background: color-mix(in srgb, transparent 88%, var(--pa-warn) 12%);
 	border-radius: 8px;
 	padding: 6px 10px;
-	font-size: 11px;
+	font-size: calc(var(--brief-font-size-base) * 0.846154);
 	color: var(--pa-text);
 }
 
@@ -2041,7 +2043,7 @@ pre.term {
 
 .composer-hint {
 	display: none;
-	font-size: 10.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.807692);
 	color: var(--pa-warn);
 	padding: 2px 4px;
 }
@@ -2087,7 +2089,7 @@ pre.term {
 	display: inline-flex;
 	align-items: center;
 	gap: 3px;
-	font-size: 10px;
+	font-size: calc(var(--brief-font-size-base) * 0.769231);
 	padding: 1px 5px;
 	border-radius: 5px;
 	color: var(--pa-dim);
@@ -2117,7 +2119,7 @@ pre.term {
 	display: inline;
 	font: inherit;
 	font-family: var(--vscode-editor-font-family, monospace);
-	font-size: 0.92em;
+	font-size: calc(var(--brief-font-size-base) * 0.92);
 	color: var(--pa-accent);
 	background: var(--pa-accent-dim);
 	border-radius: 4px;
@@ -2309,7 +2311,7 @@ pre.term {
 .subagents-strip {
 	display: none;
 	flex-direction: column;
-	font-size: 10.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.807692);
 	border-top: 1px solid var(--pa-border-faint);
 	border-bottom: 1px solid var(--pa-border-faint);
 	background: color-mix(in srgb, transparent 60%, var(--pa-raised) 40%);
@@ -2326,7 +2328,7 @@ pre.term {
 	align-items: center;
 	gap: 6px;
 	padding: 4px 10px;
-	font-size: 10px;
+	font-size: calc(var(--brief-font-size-base) * 0.769231);
 	color: var(--pa-dim);
 	width: 100%;
 	text-align: left;
@@ -2337,7 +2339,7 @@ pre.term {
 }
 
 .subagents-caret {
-	font-size: 8px;
+	font-size: calc(var(--brief-font-size-base) * 0.615385);
 }
 
 .subagents-back {
@@ -2363,7 +2365,7 @@ pre.term {
 	gap: 7px;
 	padding: 3px 8px;
 	border-radius: 6px;
-	font-size: 10.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.807692);
 	text-align: left;
 }
 
@@ -2392,7 +2394,7 @@ pre.term {
 }
 
 .subagent-badge {
-	font-size: 8.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.653846);
 	color: var(--pa-accent);
 	border: 1px solid var(--pa-accent-dim);
 	border-radius: 7px;
@@ -2400,7 +2402,7 @@ pre.term {
 }
 
 .subagent-go {
-	font-size: 9px;
+	font-size: calc(var(--brief-font-size-base) * 0.692308);
 	color: var(--pa-faint);
 }
 
@@ -2440,14 +2442,14 @@ pre.term {
 	border: 1px solid var(--pa-border);
 	border-radius: 8px;
 	padding: 7px 9px;
-	font-size: 10.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.807692);
 	line-height: 1.5;
 }
 
 .tool[data-tool-kind="shell"] .tool-section-label {
 	color: var(--pa-accent);
 	font-family: var(--vscode-editor-font-family, monospace);
-	font-size: 9.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.730769);
 }
 
 .tool[data-tool-kind="shell"] .term-prompt {
@@ -2530,7 +2532,7 @@ pre.term {
 .history-search {
 	margin: 0 12px 4px;
 	padding: 4px 8px;
-	font-size: 11px;
+	font-size: calc(var(--brief-font-size-base) * 0.846154);
 	background: var(--vscode-input-background, var(--pa-surface-2));
 	border: 1px solid var(--pa-border);
 	border-radius: 4px;
@@ -2541,7 +2543,7 @@ pre.term {
 .history-search::placeholder {
 	color: var(--pa-faint);
 	opacity: 0.75;
-	font-size: 10.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.807692);
 }
 
 .history-search:focus {
@@ -2562,7 +2564,7 @@ pre.term {
 .ac-item.dir .ac-label::before {
 	content: "▸ ";
 	color: var(--pa-dim);
-	font-size: 9px;
+	font-size: calc(var(--brief-font-size-base) * 0.692308);
 }
 
 /* ---------- subagent v2: back row, idle/active contrast, siblings ---------- */
@@ -2573,7 +2575,7 @@ pre.term {
 	gap: 5px;
 	padding: 4px 10px;
 	text-align: left;
-	font-size: 10.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.807692);
 }
 
 .subagents-back-row:hover .subagents-back-name {
@@ -2596,15 +2598,15 @@ pre.term {
 .subagent-badge.idle {
 	color: var(--pa-faint);
 	border-color: transparent;
-	font-size: 8.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.653846);
 }
 
 .subagent-badge {
-	font-size: 8.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.653846);
 }
 
 .subagents-sibling-header {
-	font-size: 9px;
+	font-size: calc(var(--brief-font-size-base) * 0.692308);
 	text-transform: uppercase;
 	letter-spacing: 0.07em;
 	color: var(--pa-faint);
@@ -2634,7 +2636,7 @@ pre.term {
 	gap: 6px;
 	width: 100%;
 	text-align: left;
-	font-size: 9px;
+	font-size: calc(var(--brief-font-size-base) * 0.692308);
 	text-transform: uppercase;
 	letter-spacing: 0.07em;
 	color: var(--pa-faint);
@@ -2702,14 +2704,14 @@ pre.term {
 	background: color-mix(in srgb, transparent 90%, var(--pa-warn) 10%);
 }
 
-.install-title { font-size: 11px; font-weight: 600; margin-bottom: 3px; }
-.install-body { font-size: 10.5px; color: var(--pa-dim); line-height: 1.4; margin-bottom: 8px; }
+.install-title { font-size: calc(var(--brief-font-size-base) * 0.846154); font-weight: 600; margin-bottom: 3px; }
+.install-body { font-size: calc(var(--brief-font-size-base) * 0.807692); color: var(--pa-dim); line-height: 1.4; margin-bottom: 8px; }
 
 /* The install one-liner, copyable in place. */
 .install-cmd {
 	display: block;
 	font-family: var(--vscode-editor-font-family, monospace);
-	font-size: 10px;
+	font-size: calc(var(--brief-font-size-base) * 0.769231);
 	color: var(--pa-text);
 	background: var(--pa-surface-2);
 	border: 1px solid var(--pa-border);
@@ -2726,7 +2728,7 @@ pre.term {
 .install-actions { display: flex; gap: 6px; }
 
 .install-cta {
-	font-size: 10.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.807692);
 	padding: 3px 10px;
 	border-radius: 7px;
 	background: var(--pa-accent);
@@ -2759,7 +2761,7 @@ pre.term {
 	border: 1px solid var(--pa-border-faint, var(--pa-border));
 	border-radius: 6px;
 	background: color-mix(in srgb, transparent 70%, var(--pa-raised) 30%);
-	font-size: 11px;
+	font-size: calc(var(--brief-font-size-base) * 0.846154);
 }
 
 .compaction-summary > summary {
@@ -2793,7 +2795,7 @@ pre.term {
 	margin: 0 10px 6px;
 	border-top: 1px dashed var(--pa-border-faint);
 	color: var(--pa-dim);
-	font-size: 11px;
+	font-size: calc(var(--brief-font-size-base) * 0.846154);
 }
 
 .pending-inputs-heading {
@@ -2814,7 +2816,7 @@ pre.term {
 
 .pending-input-phase {
 	flex: 0 0 64px;
-	font-size: 10px;
+	font-size: calc(var(--brief-font-size-base) * 0.769231);
 }
 
 .pending-input-preview {
@@ -2843,7 +2845,7 @@ pre.term {
 	border-radius: 50%;
 	background: color-mix(in srgb, hsl(var(--conversation-hue) 28% 52%) 22%, var(--pa-surface-2));
 	color: var(--pa-text);
-	font-size: 8px;
+	font-size: calc(var(--brief-font-size-base) * 0.615385);
 	font-weight: 500;
 	letter-spacing: 0.02em;
 	flex: 0 0 24px;
@@ -2884,7 +2886,7 @@ pre.term {
 .conversation-summary::after {
 	content: "›";
 	color: var(--pa-faint);
-	font-size: 14px;
+	font-size: calc(var(--brief-font-size-base) * 1.076923);
 	line-height: 1;
 	transition: transform 0.12s ease;
 }
@@ -2899,7 +2901,7 @@ pre.term {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	font-size: 11px;
+	font-size: calc(var(--brief-font-size-base) * 0.846154);
 	font-weight: 650;
 	color: var(--pa-text);
 }
@@ -2909,7 +2911,7 @@ pre.term {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	font-size: 9.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.730769);
 	color: var(--pa-faint);
 }
 
@@ -2919,7 +2921,7 @@ pre.term {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	font-size: 11px;
+	font-size: calc(var(--brief-font-size-base) * 0.846154);
 	color: var(--pa-dim);
 }
 
@@ -2941,14 +2943,14 @@ pre.term {
 	border-left: 2px solid var(--pa-accent-dim);
 	background: color-mix(in srgb, transparent 75%, var(--pa-raised) 25%);
 	border-radius: 0 4px 4px 0;
-	font-size: 11px;
+	font-size: calc(var(--brief-font-size-base) * 0.846154);
 }
 
 .custom-note-kind {
 	color: var(--pa-faint);
 	text-transform: uppercase;
 	letter-spacing: 0.04em;
-	font-size: 9.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.730769);
 	margin-bottom: 2px;
 }
 
@@ -2999,7 +3001,7 @@ pre.term {
 	padding: 3px 9px;
 	border: 1px solid var(--pa-border-faint, color-mix(in srgb, transparent 60%, var(--pa-border) 40%));
 	border-radius: 7px;
-	font-size: 10px;
+	font-size: calc(var(--brief-font-size-base) * 0.769231);
 	color: var(--pa-dim);
 	background: color-mix(in srgb, transparent 75%, var(--pa-raised) 25%);
 }
@@ -3021,7 +3023,7 @@ pre.term {
 }
 
 .spawned-view {
-	font-size: 9.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.730769);
 	color: var(--pa-faint);
 	padding: 0 4px;
 	border-radius: 4px;
@@ -3042,13 +3044,13 @@ pre.term {
 	justify-content: center;
 	gap: 8px;
 	padding: 2px 0 6px;
-	font-size: 10.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.807692);
 	color: var(--pa-dim);
 }
 
 .earlier-load {
 	padding: 3px 10px;
-	font-size: 10.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.807692);
 	color: var(--pa-text);
 	background: var(--pa-surface-2);
 	border: 1px solid var(--pa-border);
@@ -3087,7 +3089,7 @@ pre.term {
 .running-tasks-strip {
 	display: none;
 	flex-direction: column;
-	font-size: 10.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.807692);
 	border-top: 1px solid var(--pa-border-faint);
 	background: color-mix(in srgb, transparent 60%, var(--pa-raised) 40%);
 	max-height: 180px;
@@ -3101,7 +3103,7 @@ pre.term {
 	padding: 4px 10px;
 	text-align: left;
 	color: var(--pa-dim);
-	font-size: 10px;
+	font-size: calc(var(--brief-font-size-base) * 0.769231);
 }
 
 .running-tasks-header:hover { color: var(--pa-accent); }
@@ -3111,7 +3113,7 @@ pre.term {
 	align-items: center;
 	gap: 7px;
 	padding: 3px 12px 5px;
-	font-size: 10.5px;
+	font-size: calc(var(--brief-font-size-base) * 0.807692);
 	min-width: 0;
 }
 
@@ -3170,7 +3172,7 @@ body.vscode-reduce-motion .running-task-dot {
 	flex-wrap: wrap;
 }
 .statistics-heading { justify-content: space-between; }
-.statistics-heading h3 { margin: 0; font-size: 12px; }
+.statistics-heading h3 { margin: 0; font-size: calc(var(--brief-font-size-base) * 0.923077); }
 .statistics-actions button, .statistics-shortcuts button {
 	border: 1px solid var(--pa-border-strong);
 	border-radius: 4px;
@@ -3181,7 +3183,53 @@ body.vscode-reduce-motion .running-task-dot {
 }
 .statistics-actions button:disabled { opacity: .5; cursor: default; }
 .statistics-shortcuts { padding: 6px 0; }
-.statistics-state, .statistics-time, .statistics-scope, .statistics-running { margin: 6px 0; font-size: 11px; }
+.statistics-state, .statistics-time, .statistics-scope, .statistics-running { margin: 6px 0; font-size: calc(var(--brief-font-size-base) * 0.846154); }
 .statistics-card.stale .statistics-state { color: var(--vscode-editorWarning-foreground); }
-.statistics-rows { display: grid; grid-template-columns: minmax(90px, 1fr) minmax(0, 2fr); gap: 4px 12px; font-size: 12px; }
+.statistics-rows { display: grid; grid-template-columns: minmax(90px, 1fr) minmax(0, 2fr); gap: 4px 12px; font-size: calc(var(--brief-font-size-base) * 0.923077); }
 .statistics-rows dd { margin: 0; white-space: pre-wrap; }
+
+
+/* VS Code Markdown colors use live webview theme variables, not editor syntax tokens. */
+html[data-markdown-theme="vscode"] .md {
+	color: var(--vscode-editor-foreground);
+}
+html[data-markdown-theme="vscode"] .md :is(h1, h2, h3, h4, h5, h6) {
+	color: var(--vscode-symbolIcon-classForeground, var(--vscode-textLink-foreground));
+}
+html[data-markdown-theme="vscode"] .md strong {
+	color: var(--vscode-symbolIcon-constantForeground, var(--vscode-editor-foreground));
+}
+html[data-markdown-theme="vscode"] .md em {
+	color: var(--vscode-symbolIcon-stringForeground, var(--vscode-editor-foreground));
+}
+html[data-markdown-theme="vscode"] .md code {
+	color: var(--vscode-textPreformat-foreground, var(--vscode-editor-foreground));
+}
+html[data-markdown-theme="vscode"] .md pre code {
+	color: var(--vscode-editor-foreground);
+}
+html[data-markdown-theme="vscode"] .md a code {
+	color: inherit;
+}
+html[data-markdown-theme="vscode"] .md blockquote {
+	color: var(--vscode-descriptionForeground);
+}
+html[data-markdown-theme="vscode"] .md hr {
+	border-color: var(--vscode-textSeparator-foreground, var(--pa-border));
+}
+html[data-markdown-theme="vscode"] .md li::marker {
+	color: var(--vscode-symbolIcon-keywordForeground, var(--vscode-textLink-foreground));
+}
+
+/* Prime Agent TUI markdown palette, opt-in via brief.markdownTheme. */
+html[data-markdown-theme="prime"] .md h1, html[data-markdown-theme="prime-current"] .md h1,
+html[data-markdown-theme="prime"] .md h2, html[data-markdown-theme="prime-current"] .md h2,
+html[data-markdown-theme="prime"] .md h3, html[data-markdown-theme="prime-current"] .md h3,
+html[data-markdown-theme="prime"] .md h4, html[data-markdown-theme="prime-current"] .md h4 { color: var(--prime-mdHeading, #8d7fc0); }
+html[data-markdown-theme="prime"] .md a, html[data-markdown-theme="prime-current"] .md a { color: var(--prime-mdLink, #38bdf8); }
+html[data-markdown-theme="prime"] .md a code, html[data-markdown-theme="prime-current"] .md a code { color: var(--prime-mdLink, #38bdf8); }
+html[data-markdown-theme="prime"] .md code, html[data-markdown-theme="prime-current"] .md code { color: var(--prime-mdCode, #d4d4d8); }
+html[data-markdown-theme="prime"] .md pre, html[data-markdown-theme="prime-current"] .md pre { color: var(--prime-mdCodeBlock, #8ba888); border-color: var(--prime-mdQuoteBorder, #52525b); background: #0d0d10; }
+html[data-markdown-theme="prime"] .md blockquote, html[data-markdown-theme="prime-current"] .md blockquote { color: var(--prime-mdQuote, #a1a1aa); border-color: var(--prime-mdQuoteBorder, #52525b); }
+html[data-markdown-theme="prime"] .md hr, html[data-markdown-theme="prime-current"] .md hr { border-color: var(--prime-mdQuoteBorder, #52525b); }
+html[data-markdown-theme="prime"] .md li::marker, html[data-markdown-theme="prime-current"] .md li::marker { color: var(--prime-mdQuote, #a1a1aa); }

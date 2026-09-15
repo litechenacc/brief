@@ -464,6 +464,7 @@ export interface RecentSession {
 }
 
 export type HostToWebview =
+	| { type: "uiSettings"; fontSize: number; markdownTheme: "vscode-vanilla" | "vscode" | "prime-current" | "prime"; markdownColors?: Record<string, string> }
 	| { type: "statistics"; kind: StatisticsKind; requestId: number; snapshot?: StatisticsSnapshot; error?: string }
 	| { type: "attachmentCreated"; sessionId: string; id: string; error?: string }
 	| { type: "setHistoryMode"; enabled: boolean }

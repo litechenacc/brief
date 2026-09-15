@@ -14,6 +14,10 @@ The current release is ready for my everyday use. Some UI edges remain, and impr
 
 *Editor Tabs: browse and sort sessions, keep conversations alongside file tabs, and follow activity and the conversation outline.*
 
+### Appearance
+
+Configure `brief.fontSize` (pixels) to adjust chat text size. Use **Brief: Increase Font Size** and **Brief: Decrease Font Size** for one-pixel changes. Use **Brief: Select Markdown Theme** to choose the current VS Code theme, Prime current theme, or an available built-in, user, or project Prime theme. The selection updates `brief.markdownTheme` and `brief.primeTheme` immediately. You can also set these settings manually: `prime-current` follows the theme in Prime Agent settings, while `prime` uses `brief.primeTheme` (a theme name/path). The default `vscode-vanilla` preserves the original inherited Markdown styling. `vscode` maps headings, emphasis, code, quotes, and list markers to live VS Code theme color variables; this is not editor syntax-token highlighting. Links and code/quote backgrounds use VS Code colors in both modes. Brief reads built-in themes and user/project theme files only; package themes, `themes` settings arrays, and command-line session overrides are not resolved. If a theme cannot be loaded, its missing colors fall back to inherited text. Reopen Brief after changing Prime Agent theme files.
+
 ## Features I love
 
 I develop Brief out of love for code and Prime Agent. These are the details that make me happy to use it every day:

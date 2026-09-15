@@ -728,6 +728,11 @@ function acknowledgeRenderedChat(): void {
 
 function dispatchHostMessage(message: HostToWebview): void {
 	switch (message.type) {
+		case "uiSettings":
+			document.documentElement.style.setProperty("--brief-font-size", `${message.fontSize}px`);
+			document.documentElement.dataset.markdownTheme = message.markdownTheme;
+			for (const [key, value] of Object.entries(message.markdownColors ?? {})) document.documentElement.style.setProperty(`--prime-${key}`, value);
+			break;
 		case "statistics": {
 			const card = statisticsCards.get(message.kind);
 			if (!card || card.requestId !== message.requestId || !card.loading) break;

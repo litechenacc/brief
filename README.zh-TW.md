@@ -14,6 +14,10 @@ Brief 是 [sirouk/prime-agent-vscode](https://github.com/sirouk/prime-agent-vsco
 
 *Editor Tabs：瀏覽與排序 sessions，讓對話和檔案分頁並存，並查看工作狀態與對話大綱。*
 
+### 外觀
+
+設定 `brief.fontSize`（像素）可調整聊天文字大小。使用 **Brief: Increase Font Size** 與 **Brief: Decrease Font Size** 可每次調整一像素。使用 **Brief: Select Markdown Theme** 可選擇目前 VS Code 主題、Prime current theme，或可用的內建、使用者與專案 Prime theme。選擇會立即更新 `brief.markdownTheme` 與 `brief.primeTheme`。也可以手動設定：`prime-current` 跟隨 Prime Agent 設定中的主題，`prime` 使用 `brief.primeTheme`（主題名稱／路徑）。預設 `vscode-vanilla` 保留原有繼承式 Markdown 樣式。`vscode` 將標題、強調、程式碼、引用與清單標記對應至目前 VS Code 主題的色彩變數；這不是 editor syntax token highlighting。兩種模式的連結及程式碼／引用背景都使用 VS Code 色彩。Brief 僅讀取內建主題與使用者／專案主題檔；不解析 package themes、`themes` 設定陣列或命令列 session override。主題無法載入時，缺少的顏色會回退為繼承文字色。變更 Prime Agent 主題檔後請重新開啟 Brief。
+
 ## 我自己很愛的功能
 
 我帶著對程式碼與 Prime Agent 的愛開發 Brief。下面這些細節，是我每天用起來會覺得開心的地方：
