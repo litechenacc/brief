@@ -22,6 +22,7 @@ import type {
 	StatusSnapshot,
 	StatisticsKind,
 	StatisticsSnapshot,
+	QuotaSnapshot,
 	WebviewToHost,
 } from "../src/shared/protocol.js";
 
@@ -84,8 +85,8 @@ statisticsArea.hidden = true;
 chatView.append(scroller, statisticsArea, pendingInputs);
 
 // Local, manual snapshots. These never enter Transcript or saved view state.
-const statisticsCards = new Map<StatisticsKind, {
-	root: HTMLElement; requestId: number; snapshot?: StatisticsSnapshot; error?: string; loading: boolean;
+const statisticsCards = new Map<StatisticsKind | "quota", {
+	root: HTMLElement; requestId: number; snapshot?: StatisticsSnapshot; quota?: QuotaSnapshot; error?: string; loading: boolean; resetRequestId?: number; resetMessage?: string;
 }>();
 const statisticsRequestScope = Math.floor(Math.random() * 4_000_000_000);
 let nextStatisticsRequestId = 0;
@@ -96,7 +97,7 @@ function clearStatistics(): void {
 	statisticsArea.hidden = true;
 }
 
-function queryStatistics(kind: StatisticsKind): void {
+function queryStatistics(kind: StatisticsKind | "quota"): void {
 	let card = statisticsCards.get(kind);
 	if (!card) {
 		card = { root: el("article", "statistics-card"), requestId: 0, loading: false };
@@ -109,13 +110,33 @@ function queryStatistics(kind: StatisticsKind): void {
 	card.error = undefined;
 	statisticsArea.hidden = false;
 	renderStatistics(kind);
-	post({ type: "queryStatistics", kind, requestId: card.requestId });
+	post(kind === "quota" ? { type: "queryQuota", requestId: card.requestId } : { type: "queryStatistics", kind, requestId: card.requestId });
 }
 
-function renderStatistics(kind: StatisticsKind): void {
+function quotaRows(quota: QuotaSnapshot["providers"][number]): StatisticsSnapshot["rows"] {
+	const rows = [
+		{ label: "Period", value: quota.period === "weekly" ? "Weekly" : quota.period === "monthly" ? "Monthly" : "Not provided" },
+		{ label: "Usage", value: quota.usedPercent === undefined ? "Not provided"
+			: `${quota.usedPercent.toFixed(1)}% used · ${Math.max(0, 100 - quota.usedPercent).toFixed(1)}% remaining` },
+	];
+	if (quota.provider === "codex") rows.push({ label: "Banked resets", value: quota.bankedResets === undefined ? "Not provided" : String(quota.bankedResets) });
+	const reset = quota.resetAt ? new Date(quota.resetAt) : undefined;
+	rows.push({ label: "Next reset", value: reset
+		? `${reset.toLocaleString("en-US")} (${Intl.DateTimeFormat().resolvedOptions().timeZone})` : "Not provided" });
+	if (reset) {
+		const minutes = Math.ceil((reset.getTime() - Date.now()) / 60000);
+		rows.push({ label: "Resets in", value: minutes <= 0 ? "Reset time reached. Refresh to update."
+			: `${Math.floor(minutes / 1440)}d ${Math.floor(minutes % 1440 / 60)}h ${minutes % 60}m` });
+	}
+	rows.push({ label: "Queried", value: new Date(quota.fetchedAt).toLocaleString("en-US") });
+	if (quota.error) rows.push({ label: "Status", value: quota.error });
+	return rows;
+}
+
+function renderStatistics(kind: StatisticsKind | "quota"): void {
 	const card = statisticsCards.get(kind)!;
 	const snapshot = card.snapshot;
-	const title = `Brief local information · /${kind}`;
+	const title = kind === "quota" ? "Brief /Quota" : `Brief local information · /${kind}`;
 	const heading = el("h3", "", title);
 	const actions = el("div", "statistics-actions");
 	const refresh = el("button", "", "Refresh");
@@ -152,7 +173,40 @@ function renderStatistics(kind: StatisticsKind): void {
 	state.setAttribute("role", "status");
 	state.textContent = card.loading ? "Querying… Previous values remain a manual snapshot."
 		: card.error ? `${snapshot ? "Old snapshot — " : "Query failed — "}${card.error}` : "Manual snapshot · not part of the conversation";
-	card.root.appendChild(state);
+	if (kind !== "quota" || card.loading || card.error) card.root.appendChild(state);
+	if (kind === "quota") {
+		const rail = el("div", "quota-provider-rail");
+		rail.setAttribute("aria-label", "Provider quotas");
+		rail.tabIndex = 0;
+		for (const provider of card.quota?.providers ?? []) {
+			const container = el("article", "statistics-card quota-provider-card");
+			const providerHeader = el("div", "quota-provider-heading");
+			providerHeader.appendChild(el("h3", "", provider.provider === "codex" ? "Codex" : "Grok"));
+			container.appendChild(providerHeader);
+			const rows = el("dl", "statistics-rows");
+			for (const row of quotaRows(provider)) rows.append(el("dt", "", row.label), el("dd", "", row.value));
+			container.appendChild(rows);
+			if (provider.provider === "codex") {
+				const apply = el("button", "quota-apply-reset", card.resetRequestId !== undefined ? "Applying reset…" : "Apply reset") as HTMLButtonElement;
+				apply.disabled = card.loading || card.resetRequestId !== undefined || !(provider.bankedResets && provider.bankedResets > 0);
+				apply.addEventListener("click", () => {
+					card.resetRequestId = statisticsRequestScope * 1_000_000 + ++nextStatisticsRequestId;
+					card.resetMessage = undefined;
+					post({ type: "applyCodexReset", requestId: card.resetRequestId });
+					renderStatistics("quota");
+				});
+				providerHeader.appendChild(apply);
+				if (card.resetMessage) {
+					const message = el("p", "statistics-state", card.resetMessage);
+					message.setAttribute("role", "status");
+					container.appendChild(message);
+				}
+			}
+			rail.appendChild(container);
+		}
+		card.root.appendChild(rail);
+		return;
+	}
 	if (!snapshot) return;
 	card.root.append(el("p", "statistics-time", `Queried: ${snapshot.queriedAt}`), el("p", "statistics-scope", snapshot.scope));
 	if (snapshot.running) card.root.appendChild(el("p", "statistics-running", "Running — values may still increase."));
@@ -370,7 +424,7 @@ const subagents = new SubagentsStrip({
 	},
 });
 const subagentsStrip = subagents.root;
-const runningTasks = new RunningTasksStrip();
+const runningTasks = new RunningTasksStrip(post);
 const runningTasksStrip = runningTasks.root;
 
 // Install prompt banner: one persistent, dismissible card when prime-agent can't run.
@@ -733,6 +787,38 @@ function dispatchHostMessage(message: HostToWebview): void {
 			document.documentElement.dataset.markdownTheme = message.markdownTheme;
 			for (const [key, value] of Object.entries(message.markdownColors ?? {})) document.documentElement.style.setProperty(`--prime-${key}`, value);
 			break;
+		case "codexResetResult": {
+			const card = statisticsCards.get("quota");
+			if (!card || card.resetRequestId !== message.requestId) break;
+			card.resetRequestId = undefined;
+			const messages = {
+				reset: "Reset applied.",
+				nothing_to_reset: "Nothing needed resetting. Your banked reset was kept.",
+				no_credit: "No banked resets are available.",
+				already_redeemed: "This reset request was already redeemed.",
+				cancelled: "Reset cancelled.",
+				unknown: "Reset outcome could not be confirmed. Check the updated quota before trying again. Retrying before reloading VS Code uses the same request ID.",
+			};
+			card.resetMessage = messages[message.result.outcome];
+			if (message.result.outcome === "cancelled") renderStatistics("quota");
+			else queryStatistics("quota");
+			break;
+		}
+		case "quota": {
+			const card = statisticsCards.get("quota");
+			if (!card || card.requestId !== message.requestId || !card.loading) break;
+			card.loading = false;
+			card.error = message.error;
+			if (message.snapshot) {
+				card.quota = message.snapshot;
+				const rows = message.snapshot.providers.flatMap((provider) => quotaRows(provider).map((row) => ({
+					label: `${provider.provider === "codex" ? "Codex" : "Grok"} ${row.label}`, value: row.value,
+				})));
+				card.snapshot = { queriedAt: new Date().toLocaleString("en-US"), scope: "", rows, running: false };
+			}
+			renderStatistics("quota");
+			break;
+		}
 		case "statistics": {
 			const card = statisticsCards.get(message.kind);
 			if (!card || card.requestId !== message.requestId || !card.loading) break;

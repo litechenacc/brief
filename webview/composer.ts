@@ -31,7 +31,7 @@ function formatUsage(value: number): string {
 }
 const SUPPORTED_IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif"]);
 
-type UiSlashAction = "model" | "effort" | "stash" | "new" | "login" | "logout" | "goal" | "autonomous" | "rename" | "resume" | "fork" | "export" | "copy" | StatisticsKind;
+type UiSlashAction = "model" | "effort" | "stash" | "new" | "login" | "logout" | "goal" | "autonomous" | "rename" | "resume" | "fork" | "export" | "copy" | "quota" | StatisticsKind;
 
 const UI_SLASH_COMMANDS: Array<{ name: string; description: string; action: UiSlashAction }> = [
 	{ name: "model", description: "Select model", action: "model" },
@@ -50,6 +50,7 @@ const UI_SLASH_COMMANDS: Array<{ name: string; description: string; action: UiSl
 	{ name: "fork", description: "Branch from a user message in a new editor tab (no arguments)", action: "fork" },
 	{ name: "export", description: "Export this conversation as Markdown (no arguments)", action: "export" },
 	{ name: "copy", description: "Copy the latest finished agent reply (no arguments)", action: "copy" },
+	{ name: "quota", description: "Show Codex and Grok subscription quota (no arguments)", action: "quota" },
 	{ name: "usage", description: "Show local session usage snapshot (no arguments)", action: "usage" },
 	{ name: "context", description: "Show local context snapshot (no arguments)", action: "context" },
 	{ name: "session", description: "Show local session details (no arguments)", action: "session" },
@@ -121,7 +122,7 @@ export interface ComposerDeps {
 	onForkSession: () => void;
 	onExportChat: () => void;
 	onCopyLastReply: () => void;
-	onQueryStatistics: (kind: StatisticsKind) => void;
+	onQueryStatistics: (kind: StatisticsKind | "quota") => void;
 }
 
 export class Composer {
@@ -1104,7 +1105,7 @@ export class Composer {
 	send(): void {
 		if (this.composing) return;
 		const local = this.parseLeadingSlash(this.textarea.value);
-		if (local && (local.name === "usage" || local.name === "context" || local.name === "session")) {
+		if (local && (local.name === "usage" || local.name === "context" || local.name === "session" || local.name === "quota")) {
 			this.runUiSlashAction(local.name, local.args);
 			return;
 		}
@@ -2028,7 +2029,7 @@ export class Composer {
 	}
 
 	private runUiSlashAction(action: UiSlashAction, args: string): void {
-		if (action === "usage" || action === "context" || action === "session") {
+		if (action === "usage" || action === "context" || action === "session" || action === "quota") {
 			this.closeAutocomplete();
 			if (args || /[\r\n]/.test(this.textarea.value)) {
 				this.showHint(`Use /${action} without arguments on a single line.`);

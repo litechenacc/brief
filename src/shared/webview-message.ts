@@ -186,6 +186,10 @@ export function parseWebviewMessage(value: unknown): WebviewToHost | undefined {
 	if (!isRecord(value) || typeof value.type !== "string") return undefined;
 
 	switch (value.type) {
+		case "applyCodexReset":
+			return isRequestId(value.requestId) ? { type: "applyCodexReset", requestId: value.requestId } : undefined;
+		case "queryQuota":
+			return isRequestId(value.requestId) ? { type: "queryQuota", requestId: value.requestId } : undefined;
 		case "queryStatistics":
 			return (value.kind === "usage" || value.kind === "context" || value.kind === "session") && isRequestId(value.requestId)
 				? { type: "queryStatistics", kind: value.kind, requestId: value.requestId } : undefined;

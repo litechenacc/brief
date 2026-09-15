@@ -148,7 +148,7 @@ export interface RpcSessionState {
 	messageCount?: number;
 }
 
-export interface RunningTask { id: string; label: string; startedAt: number; kind: "bash" | "background"; pid?: number; }
+export interface RunningTask { id: string; label: string; startedAt: number; kind: "bash" | "background"; pid?: number; stdoutPath?: string; stderrPath?: string; }
 
 export interface SessionChild {
 	/** bare id (uuid or sub-xxxx) for display */
@@ -290,6 +290,22 @@ export interface ChatViewState {
 
 export interface ChatReadReceipt { sessionId: string; path: string; revision: number; completedAt: number; }
 
+export interface CodexResetResult {
+	outcome: "reset" | "nothing_to_reset" | "no_credit" | "already_redeemed" | "cancelled" | "unknown";
+}
+
+export interface QuotaSnapshot {
+	providers: Array<{
+		provider: "codex" | "grok";
+		period?: "weekly" | "monthly" | "unknown";
+		usedPercent?: number;
+		resetAt?: string;
+		bankedResets?: number;
+		fetchedAt: string;
+		error?: string;
+	}>;
+}
+
 export type StatisticsKind = "usage" | "context" | "session";
 
 export interface StatisticsSnapshot {
@@ -300,6 +316,8 @@ export interface StatisticsSnapshot {
 }
 
 export type WebviewToHost =
+	| { type: "queryQuota"; requestId: number }
+	| { type: "applyCodexReset"; requestId: number }
 	| { type: "queryStatistics"; kind: StatisticsKind; requestId: number }
 	| { type: "createAttachment"; sessionId: string; attachment: ComposerAttachment }
 	| { type: "openAttachment"; sessionId: string; id: string }
@@ -464,6 +482,8 @@ export interface RecentSession {
 }
 
 export type HostToWebview =
+	| { type: "quota"; requestId: number; snapshot?: QuotaSnapshot; error?: string }
+	| { type: "codexResetResult"; requestId: number; result: CodexResetResult }
 	| { type: "uiSettings"; fontSize: number; markdownTheme: "vscode-vanilla" | "vscode" | "prime-current" | "prime"; markdownColors?: Record<string, string> }
 	| { type: "statistics"; kind: StatisticsKind; requestId: number; snapshot?: StatisticsSnapshot; error?: string }
 	| { type: "attachmentCreated"; sessionId: string; id: string; error?: string }

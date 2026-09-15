@@ -16,6 +16,7 @@ EXPECTED_FILES = {
     "extension/THIRD_PARTY_NOTICES.md",
     "extension/dist/extension.js",
     "extension/dist/prime-auth-helper.mjs",
+    "extension/dist/prime-quota-helper.mjs",
     "extension/media/activity.svg",
     "extension/media/tab-light.svg",
     "extension/media/tab-dark.svg",

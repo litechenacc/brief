@@ -8,6 +8,12 @@ All notable changes to this extension are recorded here. The format follows
 
 ## [Unreleased]
 
+- Add StdOut and StdErr buttons beside running background task titles to open logs in VS Code, with elapsed time aligned to the right.
+
+- Show Codex banked reset counts and add a confirmed Apply reset action with idempotent requests and quota refresh.
+
+- Add Brief-owned `/quota` for Codex weekly usage and Grok subscription usage, reset times, and manual refresh. Reuse saved Prime OAuth credentials without loading harness extensions; expired xAI OAuth credentials require the existing login flow.
+
 ## [0.5.0]
 
 - Separate original Markdown styling (`vscode-vanilla`) from live VS Code theme color mapping (`vscode`).

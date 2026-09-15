@@ -1,5 +1,7 @@
 # Brief
 
+訂閱額度：使用 Brief 原生 [`/quota`](docs/quota.md) 查詢 Codex 與 Grok 的額度和重置時間。
+
 **A personal take on Prime Agent in VS Code. One workspace, parallel sessions, and chat that fits the way you code.**
 
 English | [繁體中文](README.zh-TW.md)

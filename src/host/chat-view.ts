@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { isSessionActive } from "../session/session-actions.js";
 import { randomBytes } from "node:crypto";
 import { loginPrimeAgent, logoutPrimeAgent } from "../runtime/prime-auth.js";
+import { applyPrimeCodexReset, queryPrimeQuota } from "../runtime/prime-quota.js";
 import { completedMessageTime } from "../session/session-completion.js";
 import * as vscode from "vscode";
 import type { ChatReadReceipt, ChatViewState, HostToWebview, RecentSession, WebviewToHost } from "../shared/protocol.js";
@@ -629,6 +630,34 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 				if (!view.closed && !view.transferring) void this.openSidebarHistory().catch((error) => {
 					(view.tab?.controller ?? this.history()).showErrorNotice(`Could not open Session History: ${String(error)}`);
 				});
+				return;
+			}
+			if (message.type === "applyCodexReset") {
+				const target = view.tab;
+				void applyPrimeCodexReset({
+					command: vscode.workspace.getConfiguration("brief").get<string>("command", "prime-agent"),
+					cwd: target?.controller.workspaceRoot || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || homedir(),
+					helperPath: vscode.Uri.joinPath(this.context.extensionUri, "dist", "prime-quota-helper.mjs").fsPath,
+					signal: this.loginAbort.signal,
+				}).then((result) => {
+					if (!view.closed && !view.transferring && view.tab === target) {
+						void view.webview.postMessage({ type: "codexResetResult", requestId: message.requestId, result });
+					}
+				});
+				return;
+			}
+			if (message.type === "queryQuota") {
+				const target = view.tab;
+				const reply = (response: HostToWebview): void => {
+					if (!view.closed && !view.transferring && view.tab === target) void view.webview.postMessage(response);
+				};
+				void queryPrimeQuota({
+					command: vscode.workspace.getConfiguration("brief").get<string>("command", "prime-agent"),
+					cwd: target?.controller.workspaceRoot || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || homedir(),
+					helperPath: vscode.Uri.joinPath(this.context.extensionUri, "dist", "prime-quota-helper.mjs").fsPath,
+					signal: this.loginAbort.signal,
+				}).then((snapshot) => reply({ type: "quota", requestId: message.requestId, snapshot }),
+					() => reply({ type: "quota", requestId: message.requestId, error: "Could not query quota. Check brief.command, Node.js, and your existing login." }));
 				return;
 			}
 			// Read-only queries must not initialize a tab or start a worker.

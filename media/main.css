@@ -3108,6 +3108,19 @@ pre.term {
 
 .running-tasks-header:hover { color: var(--pa-accent); }
 
+.running-task-log:hover { color: var(--pa-accent); }
+
+.running-task-log {
+	flex: none;
+	padding: 0 4px;
+	border: 1px solid var(--pa-border-faint);
+	border-radius: 3px;
+	color: var(--pa-dim);
+	font-size: inherit;
+}
+
+.running-task-separator { color: var(--pa-dim); }
+
 .running-task-row {
 	display: flex;
 	align-items: center;
@@ -3127,17 +3140,18 @@ pre.term {
 	animation: session-pulse 1.4s ease-in-out infinite alternate;
 }
 
-.running-task-kind,
 .running-task-time {
+	margin-left: auto;
+	flex: none;
 	color: var(--pa-dim);
 	white-space: nowrap;
 }
 
 .running-task-label {
+	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	flex: 1;
 }
 
 body:is(.vscode-high-contrast, .vscode-high-contrast-light) .running-task-dot {
@@ -3188,6 +3202,53 @@ body.vscode-reduce-motion .running-task-dot {
 .statistics-rows { display: grid; grid-template-columns: minmax(90px, 1fr) minmax(0, 2fr); gap: 4px 12px; font-size: calc(var(--brief-font-size-base) * 0.923077); }
 .statistics-rows dd { margin: 0; white-space: pre-wrap; }
 
+
+/* Quota providers stay in one compact row, independent of session statistics. */
+.statistics-area:has(> [data-kind="quota"]:only-child) {
+	flex-shrink: 0;
+	max-height: none;
+	overflow: visible;
+}
+.statistics-card[data-kind="quota"] { padding: 8px; margin-bottom: 0; min-width: 0; }
+[data-kind="quota"] > .statistics-heading { gap: 4px 8px; margin-bottom: 8px; }
+.quota-provider-rail {
+	display: flex;
+	gap: 8px;
+	overflow-x: auto;
+	overflow-y: hidden;
+	padding-bottom: 4px;
+	scroll-snap-type: x proximity;
+}
+.quota-provider-card {
+	flex: 0 0 380px;
+	max-width: 90vw;
+	box-sizing: border-box;
+	padding: 10px 12px;
+	margin: 0;
+	scroll-snap-align: start;
+}
+.quota-provider-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 26px; }
+.quota-provider-heading h3 { margin: 0; font-size: var(--brief-font-size-base); }
+.quota-provider-card .statistics-rows {
+	grid-template-columns: max-content minmax(0, 1fr);
+	gap: 4px 12px;
+	margin: 8px 0 0;
+	line-height: 1.4;
+}
+.quota-provider-card .statistics-rows dt { color: var(--vscode-descriptionForeground); }
+.quota-apply-reset {
+	border: 1px solid var(--vscode-button-border, var(--pa-border-strong));
+	border-radius: 4px;
+	background: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+	padding: 4px 10px;
+	font-size: calc(var(--brief-font-size-base) * 0.846154);
+	line-height: 1.4;
+	cursor: pointer;
+}
+.quota-apply-reset:hover:not(:disabled) { background: var(--vscode-button-hoverBackground); }
+.quota-apply-reset:disabled { opacity: .5; cursor: not-allowed; }
+.quota-apply-reset:focus-visible, .quota-provider-rail:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
 
 /* VS Code Markdown colors use live webview theme variables, not editor syntax tokens. */
 html[data-markdown-theme="vscode"] .md {

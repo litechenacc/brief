@@ -87,11 +87,13 @@ const smokeConfig = {
 function copyAuthHelper() {
 	mkdirSync("dist", { recursive: true });
 	copyFileSync("src/runtime/prime-auth-helper.mjs", "dist/prime-auth-helper.mjs");
+	copyFileSync("src/runtime/prime-quota-helper.mjs", "dist/prime-quota-helper.mjs");
 }
 copyAuthHelper();
 
 if (watch) {
 	watchFile("src/runtime/prime-auth-helper.mjs", copyAuthHelper);
+	watchFile("src/runtime/prime-quota-helper.mjs", copyAuthHelper);
 	const ext = await esbuild.context(extensionConfig);
 	const web = await esbuild.context(webviewConfig);
 	await Promise.all([ext.watch(), web.watch()]);

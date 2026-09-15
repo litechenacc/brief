@@ -156,9 +156,12 @@ export class SubagentsStrip {
 		this.root.classList.add("visible");
 
 		const live = (child: SessionChild): boolean => childStatus(child) !== "inactive";
-		const liveChildren = this.children.filter(live);
-		const liveSiblings = siblings.filter(live);
-		const historical = [...this.children, ...siblings].filter((child) => !live(child));
+		const rosterOrder = (a: SessionChild, b: SessionChild): number =>
+			Number(childStatus(b) === "running") - Number(childStatus(a) === "running") ||
+			(b.created ?? "").localeCompare(a.created ?? "");
+		const liveChildren = this.children.filter(live).sort(rosterOrder);
+		const liveSiblings = siblings.filter(live).sort(rosterOrder);
+		const historical = [...this.children, ...siblings].filter((child) => !live(child)).sort(rosterOrder);
 
 		if (parent) {
 			const back = el("button", "subagents-back-row") as HTMLButtonElement;
