@@ -77,7 +77,7 @@ import type {
 	AssistantMessage,
 	ToolResultMessage,
 	UserMessage,
-} from "../src/protocol.js";
+} from "../src/shared/protocol.js";
 
 export interface TranscriptDeps {
 	onOpenLink: (href: string) => void;

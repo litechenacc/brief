@@ -4,11 +4,11 @@
  */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { resolvePrimeAuthRuntime } from "./prime-auth-runtime.js";
+import { resolvePrimeAuthRuntime } from "../runtime/prime-auth-runtime.js";
 import { isFilePath } from "./file-link.js";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import type { FileSearchItem, HostToWebview, ImageAttachment } from "./protocol.js";
+import type { FileSearchItem, HostToWebview, ImageAttachment } from "../shared/protocol.js";
 import type { SessionController } from "./session-controller.js";
 
 

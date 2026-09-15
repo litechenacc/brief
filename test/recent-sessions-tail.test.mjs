@@ -26,7 +26,7 @@ function check(name, condition, detail = "") {
 
 const workdir = fs.mkdtempSync(path.join(os.tmpdir(), "pa-recent-"));
 const bundled = esbuild.buildSync({
-	entryPoints: ["src/recent-sessions.ts"],
+	entryPoints: ["src/session/recent-sessions.ts"],
 	outfile: path.join(workdir, "recent-sessions.cjs"),
 	bundle: true,
 	format: "cjs",

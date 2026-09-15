@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { build } from "esbuild";
 import { Window } from "happy-dom";
 
-const parserBuild = await build({ entryPoints: ["src/webview-message.ts"], bundle: true, format: "esm", platform: "node", write: false });
+const parserBuild = await build({ entryPoints: ["src/shared/webview-message.ts"], bundle: true, format: "esm", platform: "node", write: false });
 const { parseWebviewMessage } = await import(`data:text/javascript;base64,${Buffer.from(parserBuild.outputFiles[0].text).toString("base64")}`);
 const uiBuild = await build({ entryPoints: ["webview/main.ts"], bundle: true, format: "iife", platform: "browser", write: false });
 function view(savedState) {

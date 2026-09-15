@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { RunningTask } from "./protocol.js";
+import type { RunningTask } from "../shared/protocol.js";
 
 function directory(sessionFile: string | undefined): string | undefined {
 	if (!sessionFile || path.extname(sessionFile) !== ".jsonl") return undefined;

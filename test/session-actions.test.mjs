@@ -13,7 +13,7 @@ function check(name, condition, detail = "") {
 
 const workdir = fs.mkdtempSync(path.join(os.tmpdir(), "prime-agent-session-actions-"));
 const bundle = path.join(workdir, "session-actions.cjs");
-esbuild.buildSync({ entryPoints: ["src/session-actions.ts"], outfile: bundle, bundle: true, format: "cjs", platform: "node", target: "node20" });
+esbuild.buildSync({ entryPoints: ["src/session/session-actions.ts"], outfile: bundle, bundle: true, format: "cjs", platform: "node", target: "node20" });
 const { renameSessionOffline } = await import(bundle);
 
 const id = "tail-session";

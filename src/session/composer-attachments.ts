@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import type { ComposerAttachment, PromptPayload } from "./protocol.js";
+import type { ComposerAttachment, PromptPayload } from "../shared/protocol.js";
 
 function isAvif(data: Buffer): boolean {
 	if (data.length < 16 || data.toString("ascii", 4, 8) !== "ftyp") return false;

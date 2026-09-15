@@ -10,7 +10,7 @@
  * This is the flow SessionController.attachViaDaemon uses when RPC
  * switch_session reports "Session is already active".
  *
- * DaemonSidecar is bundled from src/daemon-sidecar.ts with esbuild into a
+ * DaemonSidecar is bundled from src/runtime/daemon-sidecar.ts with esbuild into a
  * temp CJS file (same approach as test/export-md.test.mjs), so the test
  * exercises real socket-discovery and protocol code, not a copy.
  *
@@ -224,7 +224,7 @@ try {
 	// ---------------------------------------------------------------
 	// Build DaemonSidecar from actual src (no stale dist artifacts).
 	// ---------------------------------------------------------------
-	const srcPath = new URL("../src/daemon-sidecar.ts", import.meta.url).pathname;
+	const srcPath = new URL("../src/runtime/daemon-sidecar.ts", import.meta.url).pathname;
 	const outFile = path.join(workRoot, "daemon-sidecar.cjs");
 	esbuild.buildSync({
 		entryPoints: [srcPath],
@@ -237,7 +237,7 @@ try {
 	});
 	const require = createRequire(import.meta.url);
 	const { DaemonSidecar } = require(outFile);
-	check("sidecar bundles from src/daemon-sidecar.ts", typeof DaemonSidecar === "function");
+	check("sidecar bundles from src/runtime/daemon-sidecar.ts", typeof DaemonSidecar === "function");
 
 	sidecar = new DaemonSidecar();
 	sidecar.onEvent = journalEvent;

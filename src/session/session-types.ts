@@ -2,7 +2,7 @@
  * Shared session-host types. Kept here so history, daemon attach, and the
  * controller can import one shape without pulling the whole host file.
  */
-import type { HostToWebview, RecentSession } from "./protocol.js";
+import type { HostToWebview, RecentSession } from "../shared/protocol.js";
 
 export interface WebviewSink {
 	post(message: HostToWebview): void;

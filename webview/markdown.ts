@@ -4,7 +4,7 @@
  */
 
 import { el } from "./dom.js";
-import { isFilePath } from "../src/file-link.js";
+import { isFilePath } from "../src/session/file-link.js";
 
 export function copyToClipboard(text: string, onDone?: () => void): void {
 	const fallback = () => {

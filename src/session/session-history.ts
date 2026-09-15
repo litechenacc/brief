@@ -4,8 +4,8 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { RecentSession } from "./protocol.js";
-import type { SavedSessionInfo, SessionSummaryRef } from "./daemon-sidecar.js";
+import type { RecentSession } from "../shared/protocol.js";
+import type { SavedSessionInfo, SessionSummaryRef } from "../runtime/daemon-sidecar.js";
 import { listRecentSessions, normalizeFsPath } from "./recent-sessions.js";
 import { readSessionCompletion } from "./session-completion.js";
 import {

@@ -303,5 +303,5 @@ Remote Procedure Call（RPC）的標準輸入輸出與 daemon 路徑能力不同
 
 ## 原始碼依據
 
-- Brief：`webview/composer.ts`、`src/session-controller.ts`、`src/session-compact.ts`。
+- Brief：`webview/composer.ts`、`src/session/session-controller.ts`、`src/session/session-compact.ts`。
 - Prime Agent 0.9.4：`dist/core/slash-commands.js`、`dist/modes/agent-connection/snapshot.js`、`dist/modes/rpc/rpc-mode.js`、`dist/modes/daemon/daemon-mode.js`。

@@ -1,7 +1,7 @@
 /** Brief VS Code extension entry point. */
 import * as fs from "node:fs";
 import * as vscode from "vscode";
-import { ChatPanels } from "./chat-view.js";
+import { ChatPanels } from "./host/chat-view.js";
 
 let chats: ChatPanels | undefined;
 

@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import * as esbuild from "esbuild";
-import { providerChoices } from "../src/prime-auth-helper.mjs";
+import { providerChoices } from "../src/runtime/prime-auth-helper.mjs";
 
 const work = mkdtempSync(join(tmpdir(), "brief-prime-auth-"));
 const require = createRequire(import.meta.url);
@@ -75,7 +75,7 @@ export class ModelRegistry {
 `;
 	writeFileSync(join(packageRoot, "sdk.mjs"), sdkSource);
 	const locatorBundle = join(work, "runtime.cjs");
-	await esbuild.build({ entryPoints: ["src/prime-auth-runtime.ts"], bundle: true, platform: "node", format: "cjs", outfile: locatorBundle, logLevel: "silent" });
+	await esbuild.build({ entryPoints: ["src/runtime/prime-auth-runtime.ts"], bundle: true, platform: "node", format: "cjs", outfile: locatorBundle, logLevel: "silent" });
 	const { findPrimeSdk, resolvePrimeAuthRuntime } = require(locatorBundle);
 	assert.equal(findPrimeSdk(shim), join(packageRoot, "sdk.mjs"));
 	assert.throws(() => findPrimeSdk(process.execPath), /does not expose/);
@@ -129,12 +129,12 @@ export class ModelRegistry {
 		},
 	};
 	const bundle = join(work, "ui.cjs");
-	await esbuild.build({ entryPoints: ["src/prime-auth.ts"], bundle: true, platform: "node", format: "cjs", outfile: bundle, logLevel: "silent", plugins: [{ name: "vscode-test", setup(build) {
+	await esbuild.build({ entryPoints: ["src/runtime/prime-auth.ts"], bundle: true, platform: "node", format: "cjs", outfile: bundle, logLevel: "silent", plugins: [{ name: "vscode-test", setup(build) {
 		build.onResolve({ filter: /^vscode$/ }, () => ({ path: "vscode", namespace: "test" }));
 		build.onLoad({ filter: /.*/, namespace: "test" }, () => ({ contents: "module.exports = globalThis.__authVscode;", loader: "js" }));
 	} }] });
 	const { loginPrimeAgent, logoutPrimeAgent } = require(bundle);
-	const options = { command: shim, cwd: work, helperPath: resolve("src/prime-auth-helper.mjs"), env: { AUTH_TEST_SAVED: saved, AUTH_TEST_ENV: "same-env", PRIME_AGENT_CODING_AGENT_DIR: join(work, "agent-dir"), PRIME_AGENT_SESSION_DIR: join(work, "unrelated-sessions") } };
+	const options = { command: shim, cwd: work, helperPath: resolve("src/runtime/prime-auth-helper.mjs"), env: { AUTH_TEST_SAVED: saved, AUTH_TEST_ENV: "same-env", PRIME_AGENT_CODING_AGENT_DIR: join(work, "agent-dir"), PRIME_AGENT_SESSION_DIR: join(work, "unrelated-sessions") } };
 	assert.equal(await loginPrimeAgent(options), true);
 	let stored = JSON.parse(readFileSync(saved));
 	assert.equal(stored.credential.key, "secret-api-key");

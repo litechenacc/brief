@@ -8,6 +8,8 @@ All notable changes to this extension are recorded here. The format follows
 
 ## [Unreleased]
 
+- Organize extension sources into host, session, runtime, and shared directories without changing runtime behavior or build output paths.
+
 - Block unsupported slash commands, including RPC-discovered extension commands, before sending. Show a composer notice and preserve the draft and attachments; keep Brief commands and runtime prompt/skill commands available.
 
 - Preserve the working indicator, verb, and elapsed time across snapshots of the same running session, including tool execution. Keep its DOM node connected to avoid restarting the animation.

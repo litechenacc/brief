@@ -57,11 +57,11 @@ const webviewConfig = {
 const testConfig = {
 	...shared,
 	entryPoints: {
-		controller: "src/session-controller.ts",
-		"session-actions": "src/session-actions.ts",
-		"daemon-sidecar": "src/daemon-sidecar.ts",
-		"bash-processes": "src/bash-processes.ts",
-		"background-tasks": "src/background-tasks.ts",
+		controller: "src/session/session-controller.ts",
+		"session-actions": "src/session/session-actions.ts",
+		"daemon-sidecar": "src/runtime/daemon-sidecar.ts",
+		"bash-processes": "src/runtime/bash-processes.ts",
+		"background-tasks": "src/runtime/background-tasks.ts",
 	},
 	bundle: true,
 	format: "cjs",
@@ -86,12 +86,12 @@ const smokeConfig = {
 // The installed SDK runs in its own Node process, not the extension host.
 function copyAuthHelper() {
 	mkdirSync("dist", { recursive: true });
-	copyFileSync("src/prime-auth-helper.mjs", "dist/prime-auth-helper.mjs");
+	copyFileSync("src/runtime/prime-auth-helper.mjs", "dist/prime-auth-helper.mjs");
 }
 copyAuthHelper();
 
 if (watch) {
-	watchFile("src/prime-auth-helper.mjs", copyAuthHelper);
+	watchFile("src/runtime/prime-auth-helper.mjs", copyAuthHelper);
 	const ext = await esbuild.context(extensionConfig);
 	const web = await esbuild.context(webviewConfig);
 	await Promise.all([ext.watch(), web.watch()]);

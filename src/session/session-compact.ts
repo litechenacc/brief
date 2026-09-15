@@ -3,7 +3,7 @@
  * Assigned onto SessionController.prototype — no extra class layer.
  */
 import { randomUUID } from "node:crypto";
-import type { RpcModel, RpcSessionState } from "./protocol.js";
+import type { RpcModel, RpcSessionState } from "../shared/protocol.js";
 import { COMPACT_REPLY_CEILING_MS, compactFailureHint, pickCompactionFallback } from "./session-logic.js";
 import type { SessionController } from "./session-controller.js";
 

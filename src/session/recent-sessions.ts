@@ -15,7 +15,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import { realpathSync } from "node:fs";
-import type { RecentSession } from "./protocol.js";
+import type { RecentSession } from "../shared/protocol.js";
 
 /** Files whose heads we are willing to open on one refresh, newest-mtime first. */
 const MAX_SCAN = 400;

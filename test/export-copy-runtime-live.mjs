@@ -75,7 +75,7 @@ try {
   }
   const outfile = path.join(workRoot, "clients.cjs");
   esbuild.buildSync({
-    stdin: { contents: 'export { RpcClient } from "./src/rpc-client.ts"; export { DaemonSidecar } from "./src/daemon-sidecar.ts"; export { buildMarkdownExport } from "./src/markdown-export.ts"; export { workspaceMethods } from "./src/session-workspace.ts";',
+    stdin: { contents: 'export { RpcClient } from "./src/runtime/rpc-client.ts"; export { DaemonSidecar } from "./src/runtime/daemon-sidecar.ts"; export { buildMarkdownExport } from "./src/session/markdown-export.ts"; export { workspaceMethods } from "./src/session/session-workspace.ts";',
       resolveDir: fileURLToPath(new URL("..", import.meta.url)), loader: "ts" },
     bundle: true, platform: "node", format: "cjs", outfile, logLevel: "silent", external: ["vscode"],
   });

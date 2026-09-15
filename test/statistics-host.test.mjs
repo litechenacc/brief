@@ -5,7 +5,7 @@ import * as esbuild from "esbuild";
 const require = createRequire(import.meta.url);
 require("./vscode-stub.cjs");
 const { SessionController } = require("../dist/controller.cjs");
-const built = await esbuild.build({ entryPoints: ["src/webview-message.ts"], bundle: true, format: "esm", platform: "node", write: false });
+const built = await esbuild.build({ entryPoints: ["src/shared/webview-message.ts"], bundle: true, format: "esm", platform: "node", write: false });
 const { parseWebviewMessage } = await import(`data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString("base64")}`);
 for (const kind of ["usage", "context", "session"]) {
  assert.deepEqual(parseWebviewMessage({ type: "queryStatistics", kind, requestId: 0, payload: "ignored" }), { type: "queryStatistics", kind, requestId: 0 });
@@ -113,7 +113,7 @@ console.log("PASS statistics host: parser, RPC/daemon, read-only observation, mi
 {
  const disposable = () => ({ dispose() {} });
  const vscode = { window: { state: { focused: true }, onDidChangeWindowState: () => disposable() }, commands: { executeCommand: async () => {} }, Uri: { joinPath: (_base, ...parts) => parts.join("/") } };
- const compiled = await esbuild.build({ entryPoints: ["src/chat-view.ts"], bundle: true, platform: "node", format: "cjs", external: ["vscode"], write: false });
+ const compiled = await esbuild.build({ entryPoints: ["src/host/chat-view.ts"], bundle: true, platform: "node", format: "cjs", external: ["vscode"], write: false });
  const module = { exports: {} };
  new Function("require", "module", "exports", compiled.outputFiles[0].text)(name => name === "vscode" ? vscode : require(name), module, module.exports);
  const manager = new module.exports.ChatPanels({ extensionUri: "/extension", globalState: memory }, { appendLine() {} });

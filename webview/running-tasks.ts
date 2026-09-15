@@ -1,5 +1,5 @@
 import { el } from "./dom.js";
-import type { RunningTask } from "../src/protocol.js";
+import type { RunningTask } from "../src/shared/protocol.js";
 
 function elapsed(ms: number): string {
 	const seconds = Math.max(0, Math.floor(ms / 1000));

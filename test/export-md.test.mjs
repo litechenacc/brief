@@ -1,6 +1,6 @@
 /**
  * Export-markdown harness: exercises buildMarkdownExport from
- * src/markdown-export.ts against representative AgentMessage arrays.
+ * src/session/markdown-export.ts against representative AgentMessage arrays.
  *
  * The exporter is pure and lives in its own module, so this harness just strips
  * the types with esbuild and imports it.
@@ -18,7 +18,7 @@ function check(name, condition, detail = "") {
 // The exporter is its own module now, so this harness imports it instead of
 // slicing it back out of the controller by string offset — the old approach
 // broke the moment anything moved below it in the file.
-const srcPath = new URL("../src/markdown-export.ts", import.meta.url);
+const srcPath = new URL("../src/session/markdown-export.ts", import.meta.url);
 const src = fs.readFileSync(srcPath, "utf8");
 const { code } = esbuild.transformSync(src, { loader: "ts", format: "esm", target: "node18" });
 

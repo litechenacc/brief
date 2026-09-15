@@ -9,8 +9,8 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-// esbuild inlines this import from ../src/rpc-client.ts
-import { RpcClient } from "../src/rpc-client.ts";
+// esbuild inlines this import from ../src/runtime/rpc-client.ts
+import { RpcClient } from "../src/runtime/rpc-client.ts";
 
 const results = [];
 function check(name, condition, detail = "") {

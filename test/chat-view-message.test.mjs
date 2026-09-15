@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import * as esbuild from "esbuild";
 
 const result = await esbuild.build({
-	entryPoints: ["src/webview-message.ts"],
+	entryPoints: ["src/shared/webview-message.ts"],
 	bundle: true,
 	format: "esm",
 	platform: "node",

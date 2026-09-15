@@ -116,7 +116,7 @@ const stub = {
 let manager;
 try {
 	const bundle = join(dir, "tabs.cjs");
-	await esbuild.build({ entryPoints: ["src/chat-view.ts"], outfile: bundle, bundle: true, platform: "node", format: "cjs", external: ["vscode"], logLevel: "silent",
+	await esbuild.build({ entryPoints: ["src/host/chat-view.ts"], outfile: bundle, bundle: true, platform: "node", format: "cjs", external: ["vscode"], logLevel: "silent",
 		plugins: [{ name: "controller-stub", setup(build) { build.onResolve({ filter: /session-controller\.js$/ }, () => ({ path: "test-controller", external: true })); build.onResolve({ filter: /prime-auth\.js$/ }, () => ({ path: "test-auth", external: true })); } }] });
 	Module._load = function (name, ...args) {
 		if (name === "vscode") return stub;

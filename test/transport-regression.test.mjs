@@ -170,8 +170,8 @@ let sidecar = null;
 try {
 	const rpcBundle = path.join(workdir, "rpc-client.cjs");
 	const daemonBundle = path.join(workdir, "daemon-sidecar.cjs");
-	esbuild.buildSync({ entryPoints: ["src/rpc-client.ts"], outfile: rpcBundle, bundle: true, format: "cjs", platform: "node", target: "node20" });
-	esbuild.buildSync({ entryPoints: ["src/daemon-sidecar.ts"], outfile: daemonBundle, bundle: true, format: "cjs", platform: "node", target: "node20" });
+	esbuild.buildSync({ entryPoints: ["src/runtime/rpc-client.ts"], outfile: rpcBundle, bundle: true, format: "cjs", platform: "node", target: "node20" });
+	esbuild.buildSync({ entryPoints: ["src/runtime/daemon-sidecar.ts"], outfile: daemonBundle, bundle: true, format: "cjs", platform: "node", target: "node20" });
 	const { RpcClient } = require(rpcBundle);
 	const { DaemonSidecar, MAX_JSONL_FRAME_BYTES } = require(daemonBundle);
 	check("transport modules bundle from source", typeof RpcClient === "function" && typeof DaemonSidecar === "function");

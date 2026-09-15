@@ -5,13 +5,13 @@
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { DaemonSidecar, type AttachSnapshot, type DaemonServerMessage, type SessionSummaryRef } from "./daemon-sidecar.js";
+import { DaemonSidecar, type AttachSnapshot, type DaemonServerMessage, type SessionSummaryRef } from "../runtime/daemon-sidecar.js";
 import { normalizeFsPath } from "./recent-sessions.js";
-import { resolveOwnerClientId, resolveWorkerDescriptor } from "./daemon-owner.js";
+import { resolveOwnerClientId, resolveWorkerDescriptor } from "../runtime/daemon-owner.js";
 import { isTransientWorkerAttachError, rosterStatus } from "./session-logic.js";
 import type { AttachRef } from "./session-types.js";
 import type { SessionController } from "./session-controller.js";
-import type { AgentEvent, AgentMessage, HostToWebview, RpcSessionState, SessionChild } from "./protocol.js";
+import type { AgentEvent, AgentMessage, HostToWebview, RpcSessionState, SessionChild } from "../shared/protocol.js";
 
 const REATTACH_BACKOFF = [1_000, 2_000, 5_000, 10_000, 10_000, 30_000];
 const OWNER_ID_HIT_TTL_MS = 30_000;

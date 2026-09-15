@@ -2,7 +2,7 @@
  * Brief chat webview: layout, host message dispatch, view switching.
  */
 
-import { parseChatViewState } from "../src/webview-message.js";
+import { parseChatViewState } from "../src/shared/webview-message.js";
 import { Composer } from "./composer.js";
 import { brandMark, el, icon } from "./dom.js";
 import { HistoryView } from "./history.js";
@@ -23,7 +23,7 @@ import type {
 	StatisticsKind,
 	StatisticsSnapshot,
 	WebviewToHost,
-} from "../src/protocol.js";
+} from "../src/shared/protocol.js";
 
 const vscode = acquireVsCodeApi();
 

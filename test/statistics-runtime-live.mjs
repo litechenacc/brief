@@ -79,7 +79,7 @@ try {
   }
   const outfile = path.join(workRoot, "clients.cjs");
   esbuild.buildSync({
-    stdin: { contents: 'export { RpcClient } from "./src/rpc-client.ts"; export { DaemonSidecar } from "./src/daemon-sidecar.ts";', resolveDir: path.resolve(new URL("..", import.meta.url).pathname), loader: "ts" },
+    stdin: { contents: 'export { RpcClient } from "./src/runtime/rpc-client.ts"; export { DaemonSidecar } from "./src/runtime/daemon-sidecar.ts";', resolveDir: path.resolve(new URL("..", import.meta.url).pathname), loader: "ts" },
     bundle: true, platform: "node", format: "cjs", outfile, logLevel: "silent",
   });
   const { RpcClient, DaemonSidecar } = createRequire(import.meta.url)(outfile);

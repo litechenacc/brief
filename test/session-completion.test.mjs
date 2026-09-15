@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { build } from "esbuild";
 
-const built = await build({ entryPoints: ["src/session-completion.ts"], bundle: true, format: "esm", platform: "node", write: false });
+const built = await build({ entryPoints: ["src/session/session-completion.ts"], bundle: true, format: "esm", platform: "node", write: false });
 const { completedMessageTime, readSessionCompletion } = await import(`data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString("base64")}`);
 const final = (timestamp, stopReason = "stop") => ({ role: "assistant", stopReason, timestamp, content: [{ type: "text", text: "done" }] });
 const entry = message => ({ type: "message", id: `m${message.timestamp}`, timestamp: "2099-01-01T00:00:00.000Z", message });

@@ -11,10 +11,10 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import * as vscode from "vscode";
-import { locateAgent } from "./agent-locator.js";
-import { DaemonSidecar } from "./daemon-sidecar.js";
-import { resolveOwnerClientId, resolveWorkerDescriptor } from "./daemon-owner.js";
-import type { AttachSnapshot, DaemonServerMessage, RosterEntry, SavedSessionInfo, SessionSummaryRef } from "./daemon-sidecar.js";
+import { locateAgent } from "../runtime/agent-locator.js";
+import { DaemonSidecar } from "../runtime/daemon-sidecar.js";
+import { resolveOwnerClientId, resolveWorkerDescriptor } from "../runtime/daemon-owner.js";
+import type { AttachSnapshot, DaemonServerMessage, RosterEntry, SavedSessionInfo, SessionSummaryRef } from "../runtime/daemon-sidecar.js";
 import {
 	COMPACT_REPLY_CEILING_MS,
 	HISTORY_OTHER_LIMIT,
@@ -55,18 +55,18 @@ import type {
 	StatisticsKind,
 	StatisticsSnapshot,
 	RpcSessionStats,
-} from "./protocol.js";
-import { DebugFileLog } from "./debug-log.js";
+} from "../shared/protocol.js";
+import { DebugFileLog } from "../runtime/debug-log.js";
 import { buildMarkdownExport } from "./markdown-export.js";
 import { listRecentSessions, normalizeFsPath } from "./recent-sessions.js";
 import { deriveSessionLabel, firstUserPrompt } from "./session-label.js";
 import { deleteSession, isSessionActive, renameSessionOffline } from "./session-actions.js";
 import { ComposerAttachments } from "./composer-attachments.js";
-import type { ComposerAttachment } from "./protocol.js";
-import { RpcClient } from "./rpc-client.js";
-import { readRunningTasks } from "./background-tasks.js";
-import { BashProcessTracker } from "./bash-processes.js";
-import type { OwnerLookup } from "./daemon-owner.js";
+import type { ComposerAttachment } from "../shared/protocol.js";
+import { RpcClient } from "../runtime/rpc-client.js";
+import { readRunningTasks } from "../runtime/background-tasks.js";
+import { BashProcessTracker } from "../runtime/bash-processes.js";
+import type { OwnerLookup } from "../runtime/daemon-owner.js";
 
 const execFileAsync = promisify(execFile);
 const MODEL_CACHE_KEY = "brief.availableModels";
@@ -81,37 +81,37 @@ export interface SessionController {
 
 	getActiveSelection(): { path: string; startLine: number; endLine: number; text: string; languageId: string } | null;
 	getActiveFilePath(): string | null;
-	searchFiles(query: string, requestId: number, reply?: (message: import("./protocol.js").HostToWebview) => void): Promise<void>;
-	resolveDroppedWorkspaceUris(uris: string[]): Promise<import("./protocol.js").FileSearchItem[]>;
+	searchFiles(query: string, requestId: number, reply?: (message: import("../shared/protocol.js").HostToWebview) => void): Promise<void>;
+	resolveDroppedWorkspaceUris(uris: string[]): Promise<import("../shared/protocol.js").FileSearchItem[]>;
 	searchDirs(query: string, max: number, token?: import("vscode").CancellationToken): Promise<string[]>;
-	pickImages(requestId: number, reply?: (message: import("./protocol.js").HostToWebview) => void): Promise<void>;
+	pickImages(requestId: number, reply?: (message: import("../shared/protocol.js").HostToWebview) => void): Promise<void>;
 	openFile(relPath: string, startLine?: number, endLine?: number): Promise<void>;
 	resolveWorkspaceUri(relPath: string): Promise<import("vscode").Uri | null>;
 	compactionStillRunning(): Promise<boolean>;
 	runNoticeAction(id: string): Promise<void>;
 	offerNoticeAction(label: string, run: () => Promise<void>): { id: string; label: string };
-	fetchAvailableModels(): Promise<import("./protocol.js").RpcModel[]>;
-	compactWithModel(model: import("./protocol.js").RpcModel): Promise<void>;
+	fetchAvailableModels(): Promise<import("../shared/protocol.js").RpcModel[]>;
+	compactWithModel(model: import("../shared/protocol.js").RpcModel): Promise<void>;
 	reportCompactFailure(detail: string): Promise<void>;
 	compact(instructions?: string, opts?: { betweenTurnsOnly?: boolean }): Promise<void>;
 	maybeTriggerAutoCompact(percent: number | null, owner: string): void;
 
 	switchSession(sessionPath: string, sessionId: string, restoreDraft?: boolean): Promise<void>;
 	startObserving(sessionId: string, previousAttachment?: AttachRef | null, epoch?: number, sessionPath?: string, observedAtStart?: string | null): Promise<boolean>;
-	ensureSidecar(options?: { reattach?: boolean }): Promise<import("./daemon-sidecar.js").DaemonSidecar>;
-	connectDaemon(): Promise<import("./daemon-sidecar.js").DaemonSidecar>;
+	ensureSidecar(options?: { reattach?: boolean }): Promise<import("../runtime/daemon-sidecar.js").DaemonSidecar>;
+	connectDaemon(): Promise<import("../runtime/daemon-sidecar.js").DaemonSidecar>;
 	onSidecarClosed(): void;
-	runReattach(sidecar: import("./daemon-sidecar.js").DaemonSidecar): Promise<void>;
+	runReattach(sidecar: import("../runtime/daemon-sidecar.js").DaemonSidecar): Promise<void>;
 	waitForDaemonDetach(activeSessionId: string): Promise<void>;
-	detachDaemonSession(sidecar: import("./daemon-sidecar.js").DaemonSidecar, activeSessionId: string): Promise<void>;
+	detachDaemonSession(sidecar: import("../runtime/daemon-sidecar.js").DaemonSidecar, activeSessionId: string): Promise<void>;
 	clearReattachTimer(): void;
 	scheduleReattach(step: number): void;
-	applyAttachedSnapshot(snapshot: import("./daemon-sidecar.js").AttachSnapshot | undefined): void;
+	applyAttachedSnapshot(snapshot: import("../runtime/daemon-sidecar.js").AttachSnapshot | undefined): void;
 	attachViaDaemon(activeSessionId: string, sessionPath: string, epoch?: number): Promise<boolean>;
-	rollbackAttachment(sidecar: import("./daemon-sidecar.js").DaemonSidecar, attachment: AttachRef): Promise<false>;
+	rollbackAttachment(sidecar: import("../runtime/daemon-sidecar.js").DaemonSidecar, attachment: AttachRef): Promise<false>;
 	detachFromDaemon(expected?: AttachRef | null): Promise<boolean>;
 	ownedRosterClientId(): string | undefined;
-	listSessions(sidecar: import("./daemon-sidecar.js").DaemonSidecar): Promise<import("./daemon-sidecar.js").SessionSummaryRef[]>;
+	listSessions(sidecar: import("../runtime/daemon-sidecar.js").DaemonSidecar): Promise<import("../runtime/daemon-sidecar.js").SessionSummaryRef[]>;
 	releaseOwnerIdentity(): void;
 	scheduleChildrenRefresh(): void;
 	runChildrenRefresh(): Promise<void>;
@@ -120,10 +120,10 @@ export interface SessionController {
 	refreshChildren(): Promise<void>;
 	browseChild(browseRef: string): Promise<boolean>;
 	backToParent(): Promise<void>;
-	onDaemonEvent(message: import("./daemon-sidecar.js").DaemonServerMessage): void;
+	onDaemonEvent(message: import("../runtime/daemon-sidecar.js").DaemonServerMessage): void;
 	onDaemonClosing(reason: string | undefined): void;
-	onRosterUpdate(message: import("./daemon-sidecar.js").DaemonServerMessage): void;
-	setupRosterSubscription(sidecar: import("./daemon-sidecar.js").DaemonSidecar): Promise<void>;
+	onRosterUpdate(message: import("../runtime/daemon-sidecar.js").DaemonServerMessage): void;
+	setupRosterSubscription(sidecar: import("../runtime/daemon-sidecar.js").DaemonSidecar): Promise<void>;
 	refreshAttachedState(): Promise<void>;
 	clearObservation(expectedId?: string | null, epoch?: number): Promise<boolean>;
 	stopObserving(): Promise<void>;

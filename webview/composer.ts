@@ -10,7 +10,7 @@ import { Dropdown, type DropdownItem } from "./dropdown.js";
 import { fitImageDataUrl, MAX_DECODED_IMAGE_BYTES, planImageFit } from "./image-fit.js";
 import { el, icon, iconButton, svgIcon } from "./dom.js";
 import { providerIcon } from "./provider-icon.js";
-import type { ChatViewState, ComposerAttachment, ComposerToolbarItem, ImageAttachment, ModelRef, RpcModel, RpcSlashCommand, SelectionAttachment, StatisticsKind } from "../src/protocol.js";
+import type { ChatViewState, ComposerAttachment, ComposerToolbarItem, ImageAttachment, ModelRef, RpcModel, RpcSlashCommand, SelectionAttachment, StatisticsKind } from "../src/shared/protocol.js";
 
 /** Keys that move the caret without producing an input event. */
 const CARET_KEYS = new Set(["ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"]);

@@ -2,8 +2,8 @@
  * Pure session helpers: thinking levels, roster status, compact fallback,
  * and small formatters. No vscode, no controller state.
  */
-import type { RecentSession, RpcModel } from "./protocol.js";
-import type { SessionSummaryRef } from "./daemon-sidecar.js";
+import type { RecentSession, RpcModel } from "../shared/protocol.js";
+import type { SessionSummaryRef } from "../runtime/daemon-sidecar.js";
 
 export const HISTORY_WORKSPACE_LIMIT = 200;
 export const HISTORY_OTHER_LIMIT = 40;

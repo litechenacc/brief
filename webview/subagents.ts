@@ -2,7 +2,7 @@
  * Subagent strip: collapsible roster floating above the composer.
  */
 import { el } from "./dom.js";
-import type { SessionChild, WebviewToHost } from "../src/protocol.js";
+import type { SessionChild, WebviewToHost } from "../src/shared/protocol.js";
 import { subagentLabel } from "./subagent-label.js";
 
 export interface SpawnCard {

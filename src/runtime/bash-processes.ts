@@ -2,7 +2,7 @@
 import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import { resolveWorkerDescriptor, type OwnerLookup } from "./daemon-owner.js";
-import type { RunningTask } from "./protocol.js";
+import type { RunningTask } from "../shared/protocol.js";
 
 interface OrphanRecord { version?: number; pid?: number; ownerPid?: number; kernelPid?: number; processStartId?: string; active?: boolean; recordedAt?: string; }
 

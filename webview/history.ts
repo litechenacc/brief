@@ -3,8 +3,8 @@
  */
 
 import { el, icon } from "./dom.js";
-import type { RecentSession } from "../src/protocol.js";
-import { deriveSessionLabel } from "../src/session-label.js";
+import type { RecentSession } from "../src/shared/protocol.js";
+import { deriveSessionLabel } from "../src/session/session-label.js";
 import { subagentLabel } from "./subagent-label.js";
 
 export interface HistoryFoldState {

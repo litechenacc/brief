@@ -11,7 +11,7 @@ const vscode = {
  commands: { executeCommand: async (...args) => { contexts.push(args); } },
  Uri: { joinPath: (_base, ...parts) => parts.join("/") },
 };
-const built = await build({ entryPoints: ["src/chat-view.ts"], bundle: true, platform: "node", format: "cjs", external: ["vscode"], write: false });
+const built = await build({ entryPoints: ["src/host/chat-view.ts"], bundle: true, platform: "node", format: "cjs", external: ["vscode"], write: false });
 const module = { exports: {} };
 new Function("require", "module", "exports", built.outputFiles[0].text)(name => name === "vscode" ? vscode : require(name), module, module.exports);
 const manager = new module.exports.ChatPanels({ extensionUri: "/extension", globalState: { get: () => [] } }, { appendLine() {} });

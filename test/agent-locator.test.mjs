@@ -1,5 +1,5 @@
 /**
- * Headless coverage for CLI discovery (src/agent-locator.ts).
+ * Headless coverage for CLI discovery (src/runtime/agent-locator.ts).
  *
  * The bug this guards: a GUI-launched editor inherits the launchd PATH, which
  * never contains npm's global bin, so an installed prime-agent spawns as ENOENT
@@ -27,7 +27,7 @@ function check(name, condition, detail = "") {
 // discovery regression.
 const bundle = path.join(workdir, "agent-locator.cjs");
 await esbuild.build({
-	entryPoints: ["src/agent-locator.ts"],
+	entryPoints: ["src/runtime/agent-locator.ts"],
 	bundle: true,
 	format: "cjs",
 	platform: "node",

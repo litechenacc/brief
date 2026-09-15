@@ -1,16 +1,16 @@
 /** Sessions own controllers; editor panels and the native sidebar are replaceable views. */
 import { unlink } from "node:fs/promises";
-import { isSessionActive } from "./session-actions.js";
+import { isSessionActive } from "../session/session-actions.js";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
-import { loginPrimeAgent, logoutPrimeAgent } from "./prime-auth.js";
-import { completedMessageTime } from "./session-completion.js";
+import { loginPrimeAgent, logoutPrimeAgent } from "../runtime/prime-auth.js";
+import { completedMessageTime } from "../session/session-completion.js";
 import * as vscode from "vscode";
-import type { ChatReadReceipt, ChatViewState, HostToWebview, RecentSession, WebviewToHost } from "./protocol.js";
-import { SessionController } from "./session-controller.js";
-import { normalizeFsPath } from "./recent-sessions.js";
-export { parseWebviewMessage } from "./webview-message.js";
-import { parseWebviewMessage } from "./webview-message.js";
+import type { ChatReadReceipt, ChatViewState, HostToWebview, RecentSession, WebviewToHost } from "../shared/protocol.js";
+import { SessionController } from "../session/session-controller.js";
+import { normalizeFsPath } from "../session/recent-sessions.js";
+export { parseWebviewMessage } from "../shared/webview-message.js";
+import { parseWebviewMessage } from "../shared/webview-message.js";
 
 declare const BRIEF_BUILD_REV: string | undefined;
 const WEBVIEW_REV = typeof BRIEF_BUILD_REV === "string" ? BRIEF_BUILD_REV : "dev";
@@ -974,7 +974,7 @@ async function handleMessage(message: WebviewToHost, controller: SessionControll
 	}
 }
 
-function buildHtml(webview: vscode.Webview, extensionUri: vscode.Uri, models: import("./protocol.js").RpcModel[]): string {
+function buildHtml(webview: vscode.Webview, extensionUri: vscode.Uri, models: import("../shared/protocol.js").RpcModel[]): string {
 	const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "main.js"));
 	const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "main.css"));
 	const nonce = getNonce();

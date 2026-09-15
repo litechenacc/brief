@@ -83,7 +83,7 @@ assert.equal(unrelatedSaves, 0, "daemon sends never save unrelated dirty documen
 controller.dispose();
 console.log("PASS controller waits for save, sends newest content/recall, rejects stale epoch");
 
-const build = await esbuild.build({ entryPoints: ["src/composer-attachments.ts"], bundle: true, platform: "node", format: "cjs", external: ["vscode"], write: false });
+const build = await esbuild.build({ entryPoints: ["src/session/composer-attachments.ts"], bundle: true, platform: "node", format: "cjs", external: ["vscode"], write: false });
 const mod = { exports: {} };
 new Function("require", "module", "exports", build.outputFiles[0].text)(require, mod, mod.exports);
 const store = new mod.exports.ComposerAttachments();
