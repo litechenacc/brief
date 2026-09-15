@@ -1,5 +1,6 @@
 /**
  * Minimal client for the prime-agent daemon protocol (prime-agent.daemon v7).
+ * Detects JSONL or private binary framing from each connection's hello.
  *
  * Brief creates resident workers and attaches as a client. Disconnecting this
  * socket therefore never owns or kills the worker.
@@ -156,7 +157,8 @@ export class DaemonSidecar {
 	private socket: net.Socket | null = null;
 	private nextIdValue = 1;
 	private readonly pending = new Map<string, Pending>();
-	private buffer = "";
+	private buffer: Buffer = Buffer.alloc(0);
+	private framing: "jsonl" | "binary" | null = null;
 	/** The handshake belongs to one concrete socket, never to the next reconnect. */
 	private helloWait:
 		| {
@@ -168,7 +170,7 @@ export class DaemonSidecar {
 		| null = null;
 	hello: DaemonHello | null = null;
 	connected = false;
-	/** Diagnostic: number of parsed socket lines since attach (used by live-driver probes). */
+	/** Diagnostic: number of parsed socket records since attach (used by live-driver probes). */
 	traceCount = 0;
 	lastLineAtom = "";
 	/** Hook for every socket record's size, without exposing its private payload. */
@@ -251,34 +253,16 @@ export class DaemonSidecar {
 		this.socket = socket;
 		this.connected = false;
 		this.hello = null;
-		this.buffer = "";
+		this.buffer = Buffer.alloc(0);
+		this.framing = null;
 		const helloWait = new Promise<DaemonHello>((resolve, reject) => {
 			const timer = setTimeout(() => this.rejectHello(socket, new Error("daemon hello timed out")), timeoutMs);
 			this.helloWait = { socket, resolve, reject, timer };
 		});
 		socket.setNoDelay(true);
-		// Node's decoder preserves a multi-byte UTF-8 character split across TCP
-		// packets; Buffer#toString on every packet does not.
-		socket.setEncoding("utf8");
-		socket.on("data", (chunk: string) => {
-			if (this.socket !== socket) return;
-			this.buffer += chunk;
-			let index = this.buffer.indexOf("\n");
-			while (index >= 0) {
-				const line = this.buffer.slice(0, index).trim();
-				this.buffer = this.buffer.slice(index + 1);
-				if (Buffer.byteLength(line, "utf8") > this.maxFrameBytes) {
-					this.rejectOversizedFrame(socket);
-					return;
-				}
-				if (line) this.handleLine(socket, line);
-				index = this.buffer.indexOf("\n");
-			}
-			// Apply the cap only to the residual unterminated record. A single TCP
-			// read can legitimately contain several complete frames whose aggregate
-			// size exceeds the per-frame ceiling.
-			if (Buffer.byteLength(this.buffer, "utf8") > this.maxFrameBytes) this.rejectOversizedFrame(socket);
-		});
+		// Decode only complete records, so split UTF-8 characters remain intact in
+		// both JSONL and length-prefixed frames. The server sends hello first.
+		socket.on("data", (chunk: Buffer) => this.onData(socket, chunk));
 		socket.on("close", () => this.onSocketClosed(socket));
 		socket.on("error", () => {
 			/* errors surface through close/pending time-outs */
@@ -322,7 +306,8 @@ export class DaemonSidecar {
 				this.socket = null;
 				this.connected = false;
 				this.hello = null;
-				this.buffer = "";
+				this.buffer = Buffer.alloc(0);
+				this.framing = null;
 				try {
 					socket.destroy();
 				} catch {
@@ -335,7 +320,8 @@ export class DaemonSidecar {
 
 	private rejectOversizedFrame(socket: net.Socket): void {
 		if (this.socket !== socket) return;
-		this.buffer = "";
+		this.buffer = Buffer.alloc(0);
+		this.framing = null;
 		this.onSocketClosed(socket);
 		try {
 			socket.destroy(new Error(`daemon frame exceeded ${this.maxFrameBytes === MAX_JSONL_FRAME_BYTES ? MAX_JSONL_FRAME_LABEL : `${this.maxFrameBytes} bytes`}`));
@@ -347,7 +333,8 @@ export class DaemonSidecar {
 	/** A non-object/non-JSON line invalidates the peer just like an oversized frame. */
 	private rejectMalformedFrame(socket: net.Socket): void {
 		if (this.socket !== socket) return;
-		this.buffer = "";
+		this.buffer = Buffer.alloc(0);
+		this.framing = null;
 		this.onSocketClosed(socket);
 		try {
 			socket.destroy(new Error("daemon sent a malformed JSONL record"));
@@ -377,7 +364,8 @@ export class DaemonSidecar {
 		this.socket = null;
 		this.connected = false;
 		this.hello = null;
-		this.buffer = "";
+		this.buffer = Buffer.alloc(0);
+		this.framing = null;
 		const error = new Error("daemon socket closed");
 		this.rejectHello(socket, error);
 		for (const [, pending] of this.pending) {
@@ -386,6 +374,56 @@ export class DaemonSidecar {
 		}
 		this.pending.clear();
 		this.onClose();
+	}
+
+	private onData(socket: net.Socket, chunk: Buffer): void {
+		if (this.socket !== socket) return;
+		this.buffer = Buffer.concat([this.buffer, chunk]);
+		if (!this.buffer.length) return;
+		// Prime's binary header is <= 1 MiB, so its uint32-BE length starts
+		// with zero. JSONL (including leading whitespace) never starts with NUL.
+		// Decide once from hello; reconnect starts detection again.
+		this.framing ??= this.buffer[0] === 0 ? "binary" : "jsonl";
+		while (this.socket === socket) {
+			let line: string;
+			if (this.framing === "jsonl") {
+				const index = this.buffer.indexOf(0x0a);
+				if (index < 0) {
+					if (this.buffer.length > this.maxFrameBytes) this.rejectOversizedFrame(socket);
+					return;
+				}
+				line = this.buffer.toString("utf8", 0, index).trim();
+				this.buffer = Buffer.from(this.buffer.subarray(index + 1));
+				if (Buffer.byteLength(line, "utf8") > this.maxFrameBytes) {
+					this.rejectOversizedFrame(socket);
+					return;
+				}
+			} else {
+				if (this.buffer.length < 8) return;
+				const headerLength = this.buffer.readUInt32BE(0);
+				const payloadLength = this.buffer.readUInt32BE(4);
+				if (headerLength + payloadLength > this.maxFrameBytes) {
+					this.rejectOversizedFrame(socket);
+					return;
+				}
+				const payloadStart = 8 + headerLength;
+				const frameLength = payloadStart + payloadLength;
+				if (this.buffer.length < frameLength) return;
+				try {
+					const header = JSON.parse(this.buffer.toString("utf8", 8, payloadStart));
+					if (header?.kind !== "outbound" || (header.payloadEncoding !== undefined && header.payloadEncoding !== "jsonl")) {
+						this.rejectMalformedFrame(socket);
+						return;
+					}
+				} catch {
+					this.rejectMalformedFrame(socket);
+					return;
+				}
+				line = this.buffer.toString("utf8", payloadStart, frameLength).trim();
+				this.buffer = Buffer.from(this.buffer.subarray(frameLength));
+			}
+			if (line) this.handleLine(socket, line);
+		}
 	}
 
 	private handleLine(socket: net.Socket, line: string): void {
@@ -469,7 +507,16 @@ export class DaemonSidecar {
 				return;
 			}
 			try {
-				socket.write(line, "utf8");
+				if (this.framing === "binary") {
+					const header = Buffer.from(JSON.stringify({ kind: "command", requestId: id, commandType: command.type }), "utf8");
+					const payload = Buffer.from(line, "utf8");
+					const prefix = Buffer.alloc(8);
+					prefix.writeUInt32BE(header.length, 0);
+					prefix.writeUInt32BE(payload.length, 4);
+					socket.write(Buffer.concat([prefix, header, payload]));
+				} else {
+					socket.write(line, "utf8");
+				}
 			} catch (error) {
 				this.pending.delete(id);
 				clearTimeout(timer);
@@ -612,7 +659,8 @@ export class DaemonSidecar {
 		this.socket = null;
 		this.connected = false;
 		this.hello = null;
-		this.buffer = "";
+		this.buffer = Buffer.alloc(0);
+		this.framing = null;
 		if (socket) this.rejectHello(socket, new Error("sidecar disposed"));
 		try {
 			socket?.destroy();

@@ -1111,6 +1111,14 @@ export class Composer {
 		if (this.attachments.some((a) => a.status !== "ready")) return;
 		if (this.expandedText().length > 200_000) { this.showHint("Prompt exceeds 200,000 characters. Remove or shorten an attachment."); return; }
 		if (this.tryRunUiSlashCommand(this.textarea.value)) return;
+		const command = this.parseLeadingSlash(this.textarea.value.trimStart());
+		// RPC discovery does not imply Brief supports an extension's UI.
+		if (command && !UI_SLASH_BY_NAME.has(command.name)
+			&& !SESSION_SLASH_COMMANDS.some((item) => item.name === command.name)
+			&& !this.commands.some((item) => item.name === command.name && (item.source === "prompt" || item.source === "skill"))) {
+			this.showHint(`Brief does not support /${command.name}; nothing was sent.`);
+			return;
+		}
 		// Keyboard paths (Enter) bypass the disabled button, so the gate lives here too.
 		if (!this.canSend()) return;
 		if (!this.vision && this.attachments.some((a) => a.kind === "image")) { this.showHint("Current model is text-only. Switch to a vision model or remove image attachments."); return; }

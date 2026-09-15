@@ -8,6 +8,12 @@ All notable changes to this extension are recorded here. The format follows
 
 ## [Unreleased]
 
+- Block unsupported slash commands, including RPC-discovered extension commands, before sending. Show a composer notice and preserve the draft and attachments; keep Brief commands and runtime prompt/skill commands available.
+
+- Preserve the working indicator, verb, and elapsed time across snapshots of the same running session, including tool execution. Keep its DOM node connected to avoid restarting the animation.
+
+- Detect daemon JSONL or length-prefixed binary framing from the connection hello and send commands in the matching format. Preserve fragmented UTF-8 records and reset framing on reconnect. Private worker authentication remains unchanged.
+
 - Keep a fixed working-indicator slot and hide it when idle to prevent layout jumps when agent activity starts or ends.
 
 ## [0.4.1]

@@ -663,20 +663,21 @@ export class Transcript {
 		this.scrollToBottom();
 	}
 
-	renderSnapshot(messages: AgentMessage[]): void {
-		this.scroller.textContent = "";
+	renderSnapshot(messages: AgentMessage[], streaming = false, sameSession = false): void {
+		// Keep the working row connected so snapshot refreshes do not restart its animation.
+		for (const node of Array.from(this.scroller.childNodes)) {
+			if (node !== this.workingRow) node.remove();
+		}
 		this.toolBlocks.clear();
 		this.streamingBubble = null;
 		this.welcome = null;
 		// The selection points at nodes in the scroller we just emptied.
 		this.pendingSelection = null;
-		// Run state belongs to the session we just left. Inheriting it paints a
-		// brand-new session as "running" with a Stop button no agent_end can clear,
-		// and stopWorking() also kills the 1s timer whose row we just deleted.
-		this.streaming = false;
+		// Preserve the verb and elapsed time only for the same active session.
+		if (!sameSession || !streaming) this.stopWorking();
+		this.streaming = streaming;
 		this.lastPartialAssistant = null;
-		this.stopWorking();
-		this.scroller.appendChild(this.workingRow!);
+		if (streaming) this.startWorking();
 		this.optimisticRows.clear();
 		this.lensTurns = [];
 		this.lensCurrent = 0;

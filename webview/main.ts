@@ -783,14 +783,15 @@ function dispatchHostMessage(message: HostToWebview): void {
 				app.inert = viewMoving || Boolean(capturedViewRequest);
 			}
 			break;
-		case "snapshot":
+		case "snapshot": {
+			const sameSession = snapshotSessionId === message.status.sessionId;
 			renderedReceipt = undefined;
 			snapshotSessionId = message.status.sessionId;
 			adoptAuthoritativeSession(message.status.sessionId);
 			pendingPrompts.clear();
 			transcript.clearSpawnCards?.();
 			subagents.resetActivity();
-			transcript.renderSnapshot(message.messages ?? []);
+			transcript.renderSnapshot(message.messages ?? [], message.status.streaming, sameSession);
 			renderPendingInputs(message.state?.sessionActions);
 			// Up/Down recall has to survive a reload or a resume, so it is seeded
 			// from the thread itself rather than only from what this panel sent.
@@ -803,6 +804,7 @@ function dispatchHostMessage(message: HostToWebview): void {
 			renderedReceipt = message.readReceipt;
 			acknowledgeRenderedChat();
 			break;
+		}
 		case "event":
 			if (message.event.type === "agent_end") renderedReceipt = undefined;
 			if (message.event.type === "session_action_update") renderPendingInputs(message.event.actions);
