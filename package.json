@@ -364,7 +364,7 @@
         "brief.liveTranscript": {
           "type": "boolean",
           "default": false,
-          "description": "Paint thinking and tool-call arguments as they stream. Off (default) keeps unfinished parts behind the working row until thinking settles, a tool starts running, or reply text appears."
+          "description": "Paint the reply as it streams: prose, thinking, and tool-call arguments. Off (default) keeps unfinished parts behind the working row, and the reply appears complete when the message ends."
         },
         "brief.showThoughtProcess": {
           "type": "boolean",

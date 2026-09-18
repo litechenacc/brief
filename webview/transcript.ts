@@ -1534,7 +1534,7 @@ export class Transcript {
 	 */
 	private assistantHasVisibleContent(message: AssistantMessage, isPartial = true): boolean {
 		for (const part of message.content ?? []) {
-			if (part.type === "text" && part.text.trim()) return true;
+			if (part.type === "text" && part.text.trim() && this.shouldShowText(isPartial)) return true;
 			if (part.type === "thinking" && part.thinking?.trim() && this.shouldShowThinking(message, isPartial)) return true;
 			if (part.type === "toolCall" && this.shouldShowToolCall(part.id, isPartial)) return true;
 		}
@@ -1543,6 +1543,19 @@ export class Transcript {
 
 	private shouldShowToolCall(id: string, isPartial: boolean): boolean {
 		return this.liveTranscript || !isPartial || this.toolBlocks.has(id);
+	}
+
+	/**
+	 * Reply text paints as a finished message unless liveTranscript is on.
+	 *
+	 * Markdown is rendered from the whole part text, so a partial reply means
+	 * rebuilding an unfinished document on every delta — a table, a fence or a
+	 * list half-drawn on one frame and rewritten on the next. What the reader
+	 * watches during a turn is the run indicator; the answer then lands in one
+	 * paint, in the same row, complete.
+	 */
+	private shouldShowText(isPartial: boolean): boolean {
+		return this.liveTranscript || !isPartial;
 	}
 
 	private shouldShowThinking(message: AssistantMessage, isPartial: boolean): boolean {
@@ -1574,6 +1587,7 @@ export class Transcript {
 		for (const part of (message as AssistantMessage).content ?? []) {
 			if (part.type === "text") {
 				if (!part.text.trim()) continue;
+				if (!this.shouldShowText(isPartial)) continue;
 				const key = `text-${textIndex++}`;
 				let md = keyed(key);
 				if (!md) {

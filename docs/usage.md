@@ -49,7 +49,7 @@ This fork focuses on how chat feels during real coding work, not only on renderi
 
 - **Immediate feedback.** Sending a prompt shows the working indicator immediately. New Session opens the empty composer while the worker starts, with sending disabled until the new session is ready.
 - **Refined animation.** Animated working indicators, cycling activity text, and elapsed time make ongoing work visible between replies and tool calls.
-- **Less visual noise.** Unfinished thinking and tool arguments stay behind the working row by default. Live transcript rendering, tool-output streaming, thought-process blocks, and usage details are separately configurable.
+- **Less visual noise.** Unfinished thinking, tool arguments, and reply text stay behind the working row by default; the reply lands complete when the message ends. Live transcript rendering, tool-output streaming, thought-process blocks, and usage details are separately configurable.
 - **History and activity indicators.** Red means work is running, including active subagents. Green means this VS Code window observed a new completion that you have not viewed. Successfully displaying the conversation clears green without affecting red; a completion in the foreground does not leave a notification. Starting the next run also clears old notifications. Other states show no light. A new installation, new window, or window reload establishes a history baseline without issuing notifications for past completions. Notifications synchronize across tabs and Sidebar in the same window, but do not persist across windows. Disconnections and unknown activity are shown as text, not inferred as completion.
 - **Stable reading.** Transcript updates, scrolling, and view handoff are designed to keep you oriented while work continues.
 - **Native visual integration.** Chat colors follow the VS Code Color Theme, including High Contrast. Brief has its own app, activity-bar, and tab branding.
@@ -91,7 +91,7 @@ Settings use the `brief.*` namespace. All commands appear under **Brief** in the
 | `brief.chatLocation` | `editor` | Default location for new sessions and Focus Chat: `editor` or `sidebar`. |
 | `brief.command` | `prime-agent` | Runtime command or absolute executable path. |
 | `brief.defaultStreamingBehavior` | `steer` | Delivery of messages sent during a run: `steer` or `followUp`. |
-| `brief.liveTranscript` | `false` | Render thinking and tool-call arguments while they stream. |
+| `brief.liveTranscript` | `false` | Render the reply while it streams: prose, thinking, and tool-call arguments. Off means the reply lands complete. |
 | `brief.streamToolOutput` | `false` | Render tool output before the tool finishes. |
 | `brief.showThoughtProcess` | `false` | Show thought-process blocks; does not change the model's thinking level. |
 | `brief.showUsageDetails` | `false` | Show per-reply usage details. |

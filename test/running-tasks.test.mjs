@@ -6,7 +6,7 @@ import * as path from "node:path";
 
 const require = createRequire(import.meta.url);
 const { BashProcessTracker, readActiveOrphans, unwrapBashCommand } = require("../dist/bash-processes.cjs");
-const { readRunningTasks } = require("../dist/background-tasks.cjs");
+const { readTasks } = require("../dist/background-tasks.cjs");
 const check = (name, condition) => { if (!condition) throw new Error(`FAIL ${name}`); console.log(`PASS ${name}`); };
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 function startId(pid) { const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8"); return `proc:${stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]}`; }
@@ -46,11 +46,23 @@ try {
 	const taskDir = path.join(dir, "session-artifacts", sessionId, "background-tasks", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
 	fs.mkdirSync(taskDir, { recursive: true });
 	fs.writeFileSync(path.join(taskDir, "state.json"), JSON.stringify({ id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", label: "build", command: ["npm", "test"], status: "running", created_at: 100, started_at: 101, child_pid: 42 }));
-	let background = await readRunningTasks(sessionFile);
-	check("running background receipt is found", background.length === 1 && background[0].label === "build" && background[0].pid === 42);
-	fs.writeFileSync(path.join(taskDir, "state.json"), JSON.stringify({ id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", label: "build", command: ["npm", "test"], status: "completed", created_at: 100 }));
-	background = await readRunningTasks(sessionFile);
-	check("completed background receipt is hidden", background.length === 0);
+	let evidence = await readTasks(sessionFile);
+	check("running background receipt is found", evidence.running.length === 1 && evidence.running[0].label === "build" && evidence.running[0].pid === 42);
+	check("a running task awaits no wake", evidence.awaitingWake === undefined);
+	const finished = Math.floor(Date.now() / 1000);
+	const terminal = (extra) => fs.writeFileSync(path.join(taskDir, "state.json"), JSON.stringify({ id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", label: "build", command: ["npm", "test"], status: "completed", created_at: 100, completed_at: finished, ...extra }));
+	terminal({ notification: "delivered", notification_at: finished });
+	evidence = await readTasks(sessionFile);
+	check("completed background receipt is hidden", evidence.running.length === 0);
+	check("a task whose wake is in flight awaits it at its completion time", evidence.awaitingWake === finished * 1000);
+	terminal({ notification: "failed", notification_at: finished, notification_error: "schedule refused" });
+	evidence = await readTasks(sessionFile);
+	check("a refused wake awaits nothing", evidence.awaitingWake === undefined);
+	terminal({ notification: "heartbeat_pending" });
+	evidence = await readTasks(sessionFile);
+	check("a heartbeat that will poll the task still awaits it", evidence.awaitingWake === finished * 1000);
+	terminal({ notification: "delivered", notification_at: finished });
+	check("an armed wake the runtime never delivered is still bounded", (await readTasks(sessionFile, (finished + 31 * 60) * 1000)).awaitingWake === undefined);
 } finally {
 	try { process.kill(-child.pid, "SIGKILL"); } catch {}
 	fs.rmSync(dir, { recursive: true, force: true });

@@ -3,6 +3,15 @@
    every var(): a bare var() drops the whole declaration when the name is
    undefined (an idle subagent dot with no border is invisible, not subtle). */
 
+:root {
+	/* The editor font is the user's own name for a family, so it can be absent
+	   from the machine that renders the webview. Keep a generic family after it:
+	   var()'s fallback only covers an undefined variable, and a named family that
+	   cannot be resolved drops straight to the browser default (serif). Named on
+	   :root because both html and body read it. */
+	--brief-mono: var(--vscode-editor-font-family, monospace), monospace;
+}
+
 body {
 	/* Every webview text size derives from the user-configured Brief base. */
 	--brief-font-size-base: var(--brief-font-size, calc(var(--vscode-font-size, 13px) * 0.96));
@@ -50,7 +59,9 @@ body {
 	margin: 0;
 	padding: 0;
 	height: 100%;
-	font-family: var(--vscode-font-family);
+	/* The whole panel renders in the editor font: markdown prose, tool output,
+	   diff and shell rows, and the composer chrome around them. */
+	font-family: var(--brief-mono);
 	font-size: var(--brief-font-size, calc(var(--vscode-font-size, 13px) * 0.96));
 	color: var(--pa-text, var(--vscode-foreground));
 	background: var(--pa-bg, transparent);
@@ -729,7 +740,7 @@ body.vscode-high-contrast-light .working-row .working-mark svg {
 .md li { margin: 0.15em 0; }
 
 .md code {
-	font-family: var(--vscode-editor-font-family, monospace);
+	font-family: var(--brief-mono);
 	font-size: calc(var(--brief-font-size-base) * 0.92);
 	background: var(--vscode-textCodeBlock-background, var(--pa-surface-2));
 	border: 1px solid var(--pa-border);
@@ -924,14 +935,14 @@ details.thinking .thinking-body {
 }
 
 .tool-name {
-	font-family: var(--vscode-editor-font-family, monospace);
+	font-family: var(--brief-mono);
 	font-size: calc(var(--brief-font-size-base) * 0.846154);
 	font-weight: 600;
 	color: var(--pa-accent);
 }
 
 .tool-summary {
-	font-family: var(--vscode-editor-font-family, monospace);
+	font-family: var(--brief-mono);
 	font-size: calc(var(--brief-font-size-base) * 0.807692);
 	color: var(--pa-dim);
 	overflow: hidden;
@@ -999,7 +1010,7 @@ details.thinking .thinking-body {
 }
 
 .tool-body pre {
-	font-family: var(--vscode-editor-font-family, monospace);
+	font-family: var(--brief-mono);
 	font-size: calc(var(--brief-font-size-base) * 0.846154);
 	white-space: pre-wrap;
 	word-break: break-word;
@@ -1309,7 +1320,7 @@ body.vscode-high-contrast-light .history-item.current {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	font-family: var(--vscode-editor-font-family, monospace);
+	font-family: var(--brief-mono);
 }
 
 .compose-chip svg {
@@ -1648,7 +1659,7 @@ body.vscode-high-contrast-light .history-item.current {
 }
 
 .ac-label {
-	font-family: var(--vscode-editor-font-family, monospace);
+	font-family: var(--brief-mono);
 	font-size: calc(var(--brief-font-size-base) * 0.846154);
 }
 
@@ -1748,7 +1759,7 @@ body.vscode-high-contrast-light .history-item.current {
 }
 
 .composer-rail > .session-id {
-	font-family: var(--vscode-editor-font-family, monospace);
+	font-family: var(--brief-mono);
 }
 
 .composer-rail > .context-meter {
@@ -1873,7 +1884,7 @@ body.vscode-high-contrast-light .history-item.current {
 }
 
 .dropdown-text {
-	font-family: var(--vscode-editor-font-family, monospace);
+	font-family: var(--brief-mono);
 	font-size: calc(var(--brief-font-size-base) * 0.846154);
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -1968,7 +1979,7 @@ pre.term {
 }
 
 .tool-path {
-	font-family: var(--vscode-editor-font-family, monospace);
+	font-family: var(--brief-mono);
 	font-size: calc(var(--brief-font-size-base) * 0.846154);
 	color: var(--pa-accent);
 	overflow: hidden;
@@ -2002,7 +2013,7 @@ pre.term {
 
 .diff-line {
 	display: flex;
-	font-family: var(--vscode-editor-font-family, monospace);
+	font-family: var(--brief-mono);
 	font-size: calc(var(--brief-font-size-base) * 0.807692);
 	line-height: 1.45;
 	white-space: pre-wrap;
@@ -2021,7 +2032,7 @@ pre.term {
 	flex: 1;
 	white-space: pre-wrap;
 	word-break: break-word;
-	font-family: var(--vscode-editor-font-family, monospace);
+	font-family: var(--brief-mono);
 	font-size: calc(var(--brief-font-size-base) * 0.807692);
 }
 
@@ -2219,7 +2230,7 @@ pre.term {
 .mention-chip {
 	display: inline;
 	font: inherit;
-	font-family: var(--vscode-editor-font-family, monospace);
+	font-family: var(--brief-mono);
 	font-size: calc(var(--brief-font-size-base) * 0.92);
 	color: var(--pa-accent);
 	background: var(--pa-accent-dim);
@@ -2549,7 +2560,7 @@ pre.term {
 
 .tool[data-tool-kind="shell"] .tool-section-label {
 	color: var(--pa-accent);
-	font-family: var(--vscode-editor-font-family, monospace);
+	font-family: var(--brief-mono);
 	font-size: calc(var(--brief-font-size-base) * 0.730769);
 }
 
@@ -2811,7 +2822,7 @@ pre.term {
 /* The install one-liner, copyable in place. */
 .install-cmd {
 	display: block;
-	font-family: var(--vscode-editor-font-family, monospace);
+	font-family: var(--brief-mono);
 	font-size: calc(var(--brief-font-size-base) * 0.769231);
 	color: var(--pa-text);
 	background: var(--pa-surface-2);

@@ -8,6 +8,12 @@ All notable changes to this extension are recorded here. The format follows
 
 ## [Unreleased]
 
+- **The panel renders in the editor font.** Transcript prose, tool output, diff and shell rows, and the composer chrome take `editor.fontFamily` instead of the workbench UI font, named once as `--brief-mono` so the family stays the user's own choice and is resolved by the client that draws the webview. The stack ends in a generic `monospace`: a family the rendering machine does not have now degrades to that machine's monospace, where `var(--vscode-editor-font-family, monospace)` — its fallback covers an undefined variable only — dropped the whole declaration through to the browser default serif.
+
+- **A reply lands complete instead of being redrawn while it is written.** `brief.liveTranscript` now covers reply text as well as thinking and tool-call arguments, and it stays off by default, so the transcript no longer rebuilds an unfinished Markdown document on every delta. A half-drawn table, fence or list that the next frame rewrote is what made a streaming reply look unstable, and each frame cost a full parse of the growing text, a DOM rebuild, and a scroll pass for text nobody reads mid-turn. The turn keeps its run indicator, tool cards still appear as their tools start, and the finished answer paints once in the same row. Turn `brief.liveTranscript` on to get the old live rendering back; tool output keeps its own `brief.streamToolOutput` switch.
+
+- Hold the run lamp red while a background task or `bash()` process is still running: a turn can end before the work it started, and the daemon roster cannot see a durable background task at all. The lamp follows the same Running tasks evidence as the strip — a durable background task for every row the Session History list shows, and a live shell process for the session on screen — and a task that has finished keeps holding it until the session receives the prompt that resumes it, so the run no longer flashes green between the task ending and the follow-up turn.
+
 - Keep the last known execution verdict on Session History rows while the daemon verdict is unknown, instead of flashing "Execution status unavailable" next to the time.
 
 - Give every control an immediate answer: pressed and disabled states across the webview, pending paints for model and thinking picks (flagged "not in effect" when the runtime answers with another value), Stop as "Stopping…", and pending rows for session resume, history stop/delete/rename, and subagent browse.

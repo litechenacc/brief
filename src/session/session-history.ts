@@ -7,7 +7,8 @@ import * as path from "node:path";
 import type { RecentSession } from "../shared/protocol.js";
 import type { SavedSessionInfo, SessionSummaryRef } from "../runtime/daemon-sidecar.js";
 import { listRecentSessions, normalizeFsPath } from "./recent-sessions.js";
-import { readSessionCompletion } from "./session-completion.js";
+import { readTasks } from "../runtime/background-tasks.js";
+import { readSessionMarks } from "./session-completion.js";
 import {
 	HISTORY_OTHER_LIMIT,
 	HISTORY_WORKSPACE_LIMIT,
@@ -23,7 +24,7 @@ import type { SessionController } from "./session-controller.js";
 
 // Controllers share notification state, not their runtime attachments or catalogs.
 const workspaceHistory = new WeakMap<SessionController["context"]["workspaceState"], Pick<SessionController,
-	"historySortMs" | "historyArchived" | "historyUnreadComplete" | "historyCompletedAt" | "historyReadAt" | "historyRuntime" | "historyRuntimeClock" | "historyPeers"
+	"historySortMs" | "historyArchived" | "historyUnreadComplete" | "historyCompletedAt" | "historyReadAt" | "historyPromptedAt" | "historyRuntime" | "historyRuntimeClock" | "historyRunningTasks" | "historyPeers"
 >>();
 
 export const historyCatalogMethods = {
@@ -49,8 +50,10 @@ restoreHistoryUiState(this: SessionController): void {
 		this.historyUnreadComplete = shared.historyUnreadComplete;
 		this.historyCompletedAt = shared.historyCompletedAt;
 		this.historyReadAt = shared.historyReadAt;
+		this.historyPromptedAt = shared.historyPromptedAt;
 		this.historyRuntime = shared.historyRuntime;
 		this.historyRuntimeClock = shared.historyRuntimeClock;
+		this.historyRunningTasks = shared.historyRunningTasks;
 		this.historyPeers = shared.historyPeers;
 		this.historyPeers.add(this);
 		return;
@@ -61,8 +64,10 @@ restoreHistoryUiState(this: SessionController): void {
 		historyUnreadComplete: this.historyUnreadComplete,
 		historyCompletedAt: this.historyCompletedAt,
 		historyReadAt: this.historyReadAt,
+		historyPromptedAt: this.historyPromptedAt,
 		historyRuntime: this.historyRuntime,
 		historyRuntimeClock: this.historyRuntimeClock,
+		historyRunningTasks: this.historyRunningTasks,
 		historyPeers: this.historyPeers,
 	});
 	const saved = this.context.workspaceState?.get<{
@@ -158,12 +163,17 @@ async unarchiveSession(this: SessionController, sessionPath: string, sessionId: 
 decorateHistoryRow(this: SessionController, row: RecentSession): RecentSession {
 	const key = this.historyPathKey(row.path);
 	const catalogMs = row.modifiedMs ?? (Number.isFinite(Date.parse(row.timestamp)) ? Date.parse(row.timestamp) : 0);
+	const runtime = this.historyRuntime.get(key);
+	// A task this window can see outranks the roster: the daemon has no view of a
+	// durable background task, so its "idle" is not proof that the row is done.
+	// `running` is left to the daemon: only a live run has a stop button.
+	const taskRunning = this.hasRunningTasks(row.path);
 	return {
 		...row,
-		...(this.historyRuntime.has(key) ? {
-			status: this.historyRuntime.get(key)?.status,
-			statusLabel: this.historyRuntime.get(key)?.statusLabel,
-			running: this.historyRuntime.get(key)?.status === "running",
+		...(runtime || taskRunning ? {
+			status: taskRunning ? "running" : runtime?.status,
+			statusLabel: taskRunning ? undefined : runtime?.statusLabel,
+			running: runtime?.status === "running",
 		} : {}),
 		sortMs: this.historySortMs.get(key) ?? catalogMs,
 		archived: this.historyArchived.has(key),
@@ -330,20 +340,39 @@ async refreshHistoryCompletions(this: SessionController, rows: Array<{ path: str
 	// Batch the notification update; a catalog scan must not repaint once per file.
 	let changed = false;
 	for (const row of rows) {
-		const completedAt = await readSessionCompletion(row.path);
+		const marks = await readSessionMarks(row.path);
 		if (this.disposed) break;
-		if (completedAt === undefined) continue;
+		if (marks === undefined) continue;
 		const key = this.historyPathKey(row.path);
+		// The prompt marker only moves forward: a live event may already have
+		// recorded a prompt newer than the transcript scan can see.
+		if (marks.prompted > (this.historyPromptedAt.get(key) ?? 0)) this.historyPromptedAt.set(key, marks.prompted);
 		if (!this.historyCompletedAt.has(key)) {
 			// First observation is a baseline, not a completion in this window.
-			this.historyCompletedAt.set(key, completedAt);
+			this.historyCompletedAt.set(key, marks.completed);
 		} else {
-			changed = this.recordHistoryCompletion(row.path, completedAt) || changed;
+			changed = this.recordHistoryCompletion(row.path, marks.completed) || changed;
 		}
 	}
 	if (changed) {
 		this.persistHistoryUiState();
 		this.paintHistory();
+	}
+},
+
+/**
+ * Durable background tasks leave no runtime trace at all, so the roster verdict
+ * cannot prove a session finished. Read the receipts for the rows on screen and
+ * let the lamp keep saying "working" while one is live — or while the wake-up of
+ * one that just finished has not reached the session yet. The prompt marker this
+ * compares against was refreshed moments ago, in the same scan.
+ */
+async refreshHistoryRunningTasks(this: SessionController, rows: Array<{ path: string }>): Promise<void> {
+	for (const row of rows) {
+		if (this.historyRuntime.get(this.historyPathKey(row.path))?.status === "running") continue;
+		const { running, awaitingWake } = await readTasks(row.path);
+		if (this.disposed) return;
+		this.updateHistoryRunningTask(row.path, "background", running.length > 0 || this.pendingTaskHandoff(row.path, awaitingWake));
 	}
 },
 
@@ -358,6 +387,7 @@ async collectHistory(this: SessionController): Promise<RecentSession[]> {
 			.filter((row) => row.sessionFile && row.cwd && (row.rlmDepth ?? 0) === 0 && row.lifecycle !== "draft")
 			.map((row) => ({ path: row.sessionFile! })));
 		const rows = this.rowsFromCatalog(catalog, revision);
+		await this.refreshHistoryRunningTasks(rows);
 		this.paintHistory();
 		return rows.map((row) => this.decorateHistoryRow(row));
 	} catch {

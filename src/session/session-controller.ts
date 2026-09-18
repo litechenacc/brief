@@ -64,7 +64,7 @@ import { deleteSession, isSessionActive, renameSessionOffline } from "./session-
 import { ComposerAttachments } from "./composer-attachments.js";
 import type { ComposerAttachment } from "../shared/protocol.js";
 import { RpcClient } from "../runtime/rpc-client.js";
-import { readRunningTasks } from "../runtime/background-tasks.js";
+import { readTasks } from "../runtime/background-tasks.js";
 import { BashProcessTracker } from "../runtime/bash-processes.js";
 import type { OwnerLookup } from "../runtime/daemon-owner.js";
 
@@ -139,6 +139,7 @@ export interface SessionController {
 	markHistoryWaitingForUser(sessionPath: string | undefined, completedAt: number): void;
 	markHistorySessionOpened(sessionPath: string, completedAt: number): void;
 	refreshHistoryCompletions(rows: Array<{ path: string }>): Promise<void>;
+	refreshHistoryRunningTasks(rows: Array<{ path: string }>): Promise<void>;
 	markHistoryArchived(sessionPath: string): void;
 	markHistoryUnarchived(sessionPath?: string): void;
 	unarchiveSession(sessionPath: string, sessionId: string): Promise<void>;
@@ -146,6 +147,10 @@ export interface SessionController {
 	showHistoryView(): void;
 	resolveHistorySession(sessionPath: string, sessionId: string, restoredDraft?: SessionSummaryRef): Promise<ResolvedHistorySession | null>;
 	updateHistoryRuntime(sessionPath: string, status: RecentSession["status"], statusLabel?: string, revision?: number): void;
+	updateHistoryRunningTask(sessionPath: string, kind: "background" | "shell", running: boolean): boolean;
+	hasRunningTasks(sessionPath: string): boolean;
+	recordHistoryPrompt(sessionPath: string | undefined, at: number): void;
+	pendingTaskHandoff(sessionPath: string, awaitingWake: number | undefined): boolean;
 	rowsFromCatalog(catalog: SessionSummaryRef[], revision?: number): RecentSession[];
 	collectHistory(): Promise<RecentSession[]>;
 	listHistory(): Promise<void>;
@@ -254,9 +259,29 @@ export class SessionController implements vscode.Disposable {
 	/** Window-local completion baselines; read receipts use the same timestamps. */
 	historyCompletedAt = new Map<string, number>();
 	historyReadAt = new Map<string, number>();
+	/**
+	 * Latest prompt each session received, in message-timestamp terms. This is the
+	 * only proof that a finished task's wake-up reached the session, so the lamp
+	 * can tell "waiting for the agent" from "waiting for the operator".
+	 */
+	historyPromptedAt = new Map<string, number>();
 	historyRuntime = new Map<string, { status: RecentSession["status"]; statusLabel?: string; revision: number }>();
 	historyRuntimeClock = { revision: 0 };
 	historyPeers = new Set<SessionController>([this]);
+	/**
+	 * Running-task evidence for the lamps. The roster verdict cannot carry it:
+	 * a durable background task leaves no runtime trace at all, and a shell
+	 * process found through the worker journal is invisible to the daemon. Kept
+	 * apart from `historyRuntime` because it is evidence rather than a verdict —
+	 * only the task itself may clear it, and keys are history path keys.
+	 */
+	historyRunningTasks = new Map<string, { background: boolean; shell: boolean }>();
+	/**
+	 * Session file this window's strip poll publishes shell evidence for. The
+	 * poll is the only proof of a live shell process, so the window must retract
+	 * that half when it stops reading the session.
+	 */
+	shellTaskPath: string | undefined;
 	/** Monotonic navigation ownership: late session RPCs cannot repaint a newer view. */
 	viewEpoch = 0;
 	/** Supersedes slow history/search answers so they cannot repaint a newer query. */
@@ -368,6 +393,8 @@ export class SessionController implements vscode.Disposable {
 				clearTimeout(this.runningTasksTimer);
 				this.runningTasksTimer = null;
 			}
+			// No view is left to prove a shell process is running.
+			if (this.sinks.size === 0) this.retractShellTaskEvidence();
 		});
 	}
 
@@ -375,10 +402,15 @@ export class SessionController implements vscode.Disposable {
 		if (this.disposed) return;
 		if (message.type === "snapshot" || message.type === "status") {
 			const sessionPath = message.status.sessionFile;
-			const runtime = sessionPath ? this.historyRuntime.get(this.historyPathKey(sessionPath)) : undefined;
+			const key = sessionPath === undefined ? undefined : this.historyPathKey(sessionPath);
+			const runtime = key === undefined ? undefined : this.historyRuntime.get(key);
+			// A running task is local evidence the roster cannot have — the daemon
+			// cannot see a durable background task — so it settles the lamp even
+			// where the verdict is missing or says the session is idle.
+			const taskRunning = key !== undefined && this.historyRunningTasks.has(key);
 			message = { ...message, status: { ...message.status,
-				unreadComplete: Boolean(sessionPath && this.historyUnreadComplete.has(this.historyPathKey(sessionPath))),
-				historyRunning: runtime ? runtime.status === undefined ? null : runtime.status === "running" : undefined,
+				unreadComplete: Boolean(key !== undefined && this.historyUnreadComplete.has(key)),
+				historyRunning: taskRunning ? true : runtime ? runtime.status === undefined ? null : runtime.status === "running" : undefined,
 			} };
 		}
 		if (this.sinks.size === 0) this.debugLog.append(`broadcast ${message.type} with no sinks`);
@@ -611,6 +643,7 @@ export class SessionController implements vscode.Disposable {
 		if (this.runningTasksTimer) clearTimeout(this.runningTasksTimer);
 		if (this.disposed) return;
 		this.disposed = true;
+		this.retractShellTaskEvidence();
 		this.historyPeers.delete(this);
 		this.stop();
 		// Drop the attach intent before tearing the socket down, or the close
@@ -639,6 +672,55 @@ export class SessionController implements vscode.Disposable {
 	// Event routing
 	// ------------------------------------------------------------------
 
+	/**
+	 * Record one session's running-task evidence. Returns true when the answer
+	 * changed, so callers repaint only on a real move.
+	 */
+	updateHistoryRunningTask(sessionPath: string, kind: "background" | "shell", running: boolean): boolean {
+		const key = this.historyPathKey(sessionPath);
+		const current = this.historyRunningTasks.get(key) ?? { background: false, shell: false };
+		if (current[kind] === running) return false;
+		const next = { ...current, [kind]: running };
+		if (next.background || next.shell) this.historyRunningTasks.set(key, next);
+		else this.historyRunningTasks.delete(key);
+		return true;
+	}
+
+	/** True while a task this window can see is still running for the session. */
+	hasRunningTasks(sessionPath: string): boolean {
+		return this.historyRunningTasks.has(this.historyPathKey(sessionPath));
+	}
+
+	/** Record a prompt the session received; the marker only moves forward. */
+	recordHistoryPrompt(sessionPath: string | undefined, at: number): void {
+		if (sessionPath === undefined || !Number.isFinite(at) || at <= 0) return;
+		const key = this.historyPathKey(sessionPath);
+		if (at > (this.historyPromptedAt.get(key) ?? 0)) this.historyPromptedAt.set(key, at);
+	}
+
+	/**
+	 * A task that finished while the prompt that resumes the session has not
+	 * arrived yet. The work is over, but the session is waiting on its own
+	 * wake-up rather than on the operator, so the run lamp stays red until that
+	 * prompt lands — the way live children already hold it.
+	 */
+	pendingTaskHandoff(sessionPath: string, awaitingWake: number | undefined): boolean {
+		if (awaitingWake === undefined) return false;
+		return (this.historyPromptedAt.get(this.historyPathKey(sessionPath)) ?? 0) <= awaitingWake;
+	}
+
+	/**
+	 * Retract the shell half this window published. Losing sight of a task is
+	 * unknown, never proof that it finished: the daemon verdict takes the lamp
+	 * back and owns it until fresh local evidence arrives.
+	 */
+	private retractShellTaskEvidence(): void {
+		const previous = this.shellTaskPath;
+		if (previous === undefined) return;
+		this.shellTaskPath = undefined;
+		this.updateHistoryRunningTask(previous, "shell", false);
+	}
+
 	private runningTaskLookup(): OwnerLookup | null {
 		const sessionFile = this.viewedSessionPath();
 		const activeSessionId = this.attached?.activeSessionId ?? this.observedSession?.activeSessionId;
@@ -662,11 +744,23 @@ export class SessionController implements vscode.Disposable {
 		this.runningTasksRefreshing = true;
 		let count = 0;
 		try {
-			const background = await readRunningTasks(lookup?.sessionFile);
-			const bash = lookup ? await this.bashProcesses.refresh(lookup, new Set(background.flatMap(task => task.pid === undefined ? [] : [task.pid]))) : [];
+			const background = await readTasks(lookup?.sessionFile);
+			const bash = lookup ? await this.bashProcesses.refresh(lookup, new Set(background.running.flatMap(task => task.pid === undefined ? [] : [task.pid]))) : [];
 			if (this.disposed || epoch !== this.viewEpoch || this.sinks.size === 0) return;
-			const tasks = [...background, ...bash].sort((a, b) => a.startedAt - b.startedAt);
+			const tasks = [...background.running, ...bash].sort((a, b) => a.startedAt - b.startedAt);
 			count = tasks.length;
+			// A finished turn is not a finished session: a task the strip shows, or one
+			// whose wake-up the session has not received yet, holds the lamps red
+			// exactly as live children do. Settling on "done" the moment the process
+			// exits is what flashed green before the follow-up turn arrived.
+			const sessionFile = lookup?.sessionFile;
+			if (sessionFile === undefined) this.retractShellTaskEvidence();
+			else {
+				if (this.shellTaskPath !== undefined && this.shellTaskPath !== sessionFile) this.retractShellTaskEvidence();
+				this.shellTaskPath = sessionFile;
+				const moved = this.updateHistoryRunningTask(sessionFile, "background", background.running.length > 0 || this.pendingTaskHandoff(sessionFile, background.awaitingWake));
+				if (this.updateHistoryRunningTask(sessionFile, "shell", bash.length > 0) || moved) this.paintHistory();
+			}
 			const payload = JSON.stringify(tasks);
 			if (payload !== this.lastRunningTasksPayload) {
 				this.lastRunningTasksPayload = payload;
@@ -693,6 +787,10 @@ export class SessionController implements vscode.Disposable {
 		if ((event.type === "message_start" || event.type === "message_end") && event.message.role === "user") {
 			if (!this.firstPromptLabel) this.firstPromptLabel = deriveSessionLabel({ firstPrompt: firstUserPrompt([event.message]) });
 			this.markHistoryUnarchived();
+			// A prompt that just arrived is the wake-up a finished task was waiting
+			// for, so the task evidence can let the lamp go.
+			const arrived = event.message.timestamp;
+			this.recordHistoryPrompt(this.viewedSessionPath(), typeof arrived === "number" ? arrived : Date.now());
 		}
 		switch (event.type) {
 			case "agent_start": {

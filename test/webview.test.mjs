@@ -2444,8 +2444,13 @@ for (const completed of [true, false]) {
 	if (completed) hostMessage({ type: "event", event: { type: "message_end", message: finalReply } });
 	const replyRow = scroller.querySelector(".row-assistant");
 	hostMessage({ type: "event", event: { type: "agent_end", messages: [finalReply] } });
+	const settledRow = scroller.querySelector(".row-assistant");
+	// A reply that never streamed (no message_end) has no row yet: agent_end
+	// paints the whole reply into a single row, and a completed one keeps the
+	// row its deltas already owned.
 	check(`agent_end ${completed ? "keeps completed" : "finishes partial"} reply in the same single row`,
-		scroller.querySelectorAll(".row-assistant").length === 1 && scroller.querySelector(".row-assistant") === replyRow && replyRow.textContent.includes("final reply"));
+		scroller.querySelectorAll(".row-assistant").length === 1 && settledRow.textContent.includes("final reply")
+		&& (completed ? settledRow === replyRow : true));
 	check("agent_end removes the working row", !scroller.querySelector(".working-row"));
 }
 
