@@ -318,6 +318,7 @@ rowsFromCatalog(this: SessionController, catalog: SessionSummaryRef[], revision 
 				...(child.thinkingLevel ? { thinkingLevel: child.thinkingLevel } : {}),
 				status: rosterStatus(child) as "running" | "idle",
 				rlmDepth: child.rlmDepth,
+				...(child.sessionFile ? { path: child.sessionFile } : {}),
 			}));
 		if (children.length > 0) entry.row.children = children;
 	}

@@ -8,6 +8,18 @@ All notable changes to this extension are recorded here. The format follows
 
 ## [Unreleased]
 
+- Keep the last known execution verdict on Session History rows while the daemon verdict is unknown, instead of flashing "Execution status unavailable" next to the time.
+
+- Give every control an immediate answer: pressed and disabled states across the webview, pending paints for model and thinking picks (flagged "not in effect" when the runtime answers with another value), Stop as "Stopping…", and pending rows for session resume, history stop/delete/rename, and subagent browse.
+
+- Hold the Session History list and mark the clicked row while a resume is in flight, so the previous transcript is never presented as the new session. Keep scroll and focus for in-place updates, and open a subagent child row from its session file.
+
+- Report sends that draw no transcript echo (mid-run steering, attachment sends) in the pending-input panel as "Sending", and keep the quota rail's horizontal offset and the running-tasks strip's scroll and focus across updates.
+
+- Replace silent drops with visible outcomes: a failed `abort` over RPC, an Attach-menu pick with no active file or selection, and a workspace-file drop refused by the view guard now answer with a notice or an empty resolution.
+
+- Explain the wait while the webview is inert during a view move, publish the serialized-operation wait as "N queued", make composer hints readable at once, and stop hiding the history row's time and run lamp on hover.
+
 ## [0.5.1]
 
 - Add StdOut and StdErr buttons beside running background task titles to open logs in VS Code, with elapsed time aligned to the right.

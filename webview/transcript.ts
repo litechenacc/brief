@@ -1460,13 +1460,7 @@ export class Transcript {
 	/** Message actions; usage belongs to model calls, not user text. */
 	private buildUserFooter(row: HTMLElement, text: string): HTMLElement {
 		const footer = el("div", "user-footer");
-		const copyBtn = el("button", "uf-icon") as HTMLButtonElement;
-		copyBtn.title = "Copy message";
-		copyBtn.appendChild(icon("copy", 11));
-		copyBtn.addEventListener("click", (event) => {
-			event.stopPropagation();
-			copyToClipboard(text);
-		});
+		const copyBtn = this.makeCopyIconButton("uf-icon", "Copy message", () => text);
 		const forkBtn = el("button", "uf-icon") as HTMLButtonElement;
 		forkBtn.title = "Fork the session starting from this message";
 		forkBtn.appendChild(icon("fork", 11));
@@ -1650,16 +1644,10 @@ export class Transcript {
 		const details = el("details", "thinking") as HTMLDetailsElement;
 		details.open = isPartial;
 		const summary = el("summary", "", "Thought process");
-		const copyBtn = el("button", "thinking-copy") as HTMLButtonElement;
-		copyBtn.title = "Copy thinking";
-		copyBtn.appendChild(icon("copy", 11));
-		copyBtn.addEventListener("click", (event) => {
-			event.preventDefault();
-			event.stopPropagation();
-			// Read the text off the node, not a closure: the block is reused across
-			// streaming frames, so a captured string would copy the first chunk only.
-			copyToClipboard((details.querySelector(".thinking-body") as HTMLElement | null)?.textContent ?? "");
-		});
+		// Read the text off the node, not a closure: the block is reused across
+		// streaming frames, so a captured string would copy the first chunk only.
+		const copyBtn = this.makeCopyIconButton("thinking-copy", "Copy thinking", () =>
+			(details.querySelector(".thinking-body") as HTMLElement | null)?.textContent ?? "");
 		summary.appendChild(copyBtn);
 		const body = el("div", "thinking-body");
 		body.textContent = thinking;
@@ -1748,13 +1736,8 @@ export class Transcript {
 			return line.childElementCount ? line : null;
 		}
 		if (!line.childElementCount && message.content.length === 0) return null;
-		const copyBtn = el("button", "uf-icon usage-copy") as HTMLButtonElement;
-		copyBtn.title = "Copy the full reply (text + thinking)";
-		copyBtn.appendChild(icon("copy", 11));
-		copyBtn.addEventListener("click", (event) => {
-			event.stopPropagation();
-			copyToClipboard(this.assistantCopyMarkdown(message) || this.assistantAllText(message));
-		});
+		const copyBtn = this.makeCopyIconButton("uf-icon usage-copy", "Copy the full reply (text + thinking)", () =>
+			this.assistantCopyMarkdown(message) || this.assistantAllText(message));
 		line.appendChild(copyBtn);
 		return line;
 	}
@@ -1894,21 +1877,26 @@ export class Transcript {
 		const nameEl = el("span", "tool-name", name);
 		const summary = el("span", "tool-summary", this.toolSummary(name, args));
 		const pill = el("span", "tool-pill", "running");
-		const copyAllBtn = el("button", "uf-icon tool-copy-all") as HTMLButtonElement;
-		copyAllBtn.title = "Copy full tool call and all output (markdown)";
-		copyAllBtn.appendChild(icon("copy", 11));
-		copyAllBtn.addEventListener("click", (event) => {
-			event.stopPropagation();
-			copyToClipboard(this.buildToolCopy(id));
-		});
+		const copyAllBtn = this.makeCopyIconButton("uf-icon tool-copy-all", "Copy full tool call and all output (markdown)", () =>
+			this.buildToolCopy(id));
 		toggle.append(chevron, statusDot, nameEl, summary, pill);
 		header.append(toggle, copyAllBtn);
 		const body = el("div", "tool-body");
 		root.append(header, body);
-		toggle.addEventListener("click", () => {
+		const setOpen = () => {
 			const open = root.classList.toggle("open");
 			toggle.setAttribute("aria-expanded", String(open));
+		};
+		// The header is what paints the hover background, so the whole strip — its
+		// padding and the 7px gap before the copy button included — is the hit
+		// target. A click on a nested control stays with that control, as in the
+		// history rows, so the copy button and keyboard activation still win.
+		header.addEventListener("click", (event) => {
+			const target = event.target as HTMLElement | null;
+			if (target?.closest?.("button, input, select, textarea, a, [contenteditable='true']")) return;
+			setOpen();
 		});
+		toggle.addEventListener("click", setOpen);
 
 		const inputSection = el("div", "tool-section");
 		const view = toolView(name, args);
@@ -1976,9 +1964,40 @@ export class Transcript {
 		btn.title = "Copy to clipboard";
 		btn.addEventListener("click", (event) => {
 			event.stopPropagation();
-			copyToClipboard(text, () => {
-				btn.textContent = "Copied";
-				setTimeout(() => (btn.textContent = "Copy"), 1000);
+			copyToClipboard(text, (ok) => {
+				btn.textContent = ok ? "Copied" : "Could not copy";
+				if (!ok) btn.title = "Could not copy — select the text and copy it manually.";
+				setTimeout(() => {
+					btn.textContent = "Copy";
+					btn.title = "Copy to clipboard";
+				}, 1000);
+			});
+		});
+		return btn;
+	}
+
+	/**
+	 * A copy control that carries only a glyph. The click answers with a check
+	 * mark for a moment — a "Copied" label would widen the hover-revealed footer
+	 * it sits in — and only once the write actually resolved. A refused clipboard
+	 * shows a cross plus the wording the install banner uses, so the control never
+	 * claims a copy that did not land.
+	 */
+	private makeCopyIconButton(className: string, title: string, text: () => string): HTMLButtonElement {
+		const btn = el("button", className) as HTMLButtonElement;
+		btn.title = title;
+		btn.appendChild(icon("copy", 11));
+		btn.addEventListener("click", (event) => {
+			// Inside <summary> the default action would toggle the thinking block.
+			event.preventDefault();
+			event.stopPropagation();
+			copyToClipboard(text(), (ok) => {
+				btn.replaceChildren(icon(ok ? "check" : "close", 11));
+				if (!ok) btn.title = "Could not copy — select the text and copy it manually.";
+				setTimeout(() => {
+					btn.replaceChildren(icon("copy", 11));
+					btn.title = title;
+				}, 1200);
 			});
 		});
 		return btn;

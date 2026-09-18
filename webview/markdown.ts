@@ -6,7 +6,13 @@
 import { el } from "./dom.js";
 import { isFilePath } from "../src/session/file-link.js";
 
-export function copyToClipboard(text: string, onDone?: () => void): void {
+/**
+ * Copy `text`, and report whether the write really landed. The clipboard can be
+ * refused (unfocused document, denied permission) and the `execCommand` fallback
+ * can return false, so a caller that confirms a copy has to know the difference
+ * — the same rule the install banner follows before it says "copied".
+ */
+export function copyToClipboard(text: string, onDone?: (ok: boolean) => void): void {
 	const fallback = () => {
 		const ta = document.createElement("textarea");
 		ta.value = text;
@@ -14,16 +20,17 @@ export function copyToClipboard(text: string, onDone?: () => void): void {
 		ta.style.opacity = "0";
 		document.body.appendChild(ta);
 		ta.select();
+		let copied = false;
 		try {
-			document.execCommand("copy");
+			copied = document.execCommand("copy");
 		} catch {
-			// ignore
+			// reported as a failure through `copied`
 		}
 		ta.remove();
-		onDone?.();
+		onDone?.(copied);
 	};
 	if (navigator.clipboard?.writeText) {
-		navigator.clipboard.writeText(text).then(() => onDone?.(), fallback);
+		navigator.clipboard.writeText(text).then(() => onDone?.(true), fallback);
 	} else {
 		fallback();
 	}
@@ -138,9 +145,13 @@ export function renderMarkdown(markdown: string, container: HTMLElement, onOpenL
 			const copyBtn = el("button", "codeblock-copy", "Copy");
 			copyBtn.addEventListener("click", (event) => {
 				event.stopPropagation();
-				copyToClipboard(codeText, () => {
-					copyBtn.textContent = "Copied";
-					setTimeout(() => (copyBtn.textContent = "Copy"), 1200);
+				copyToClipboard(codeText, (ok) => {
+					copyBtn.textContent = ok ? "Copied" : "Could not copy";
+					if (!ok) copyBtn.title = "Could not copy — select the text and copy it manually.";
+					setTimeout(() => {
+						copyBtn.textContent = "Copy";
+						copyBtn.title = "";
+					}, 1200);
 				});
 			});
 			head.appendChild(copyBtn);

@@ -166,6 +166,9 @@ function renderStatistics(kind: StatisticsKind | "quota"): void {
 	actions.append(refresh, copy, close);
 	const header = el("div", "statistics-heading");
 	header.append(heading, actions);
+	// A refresh rebuilds the card twice per round-trip; the rail's horizontal
+	// offset belongs to the operator, not to the render.
+	const railScrollLeft = card.root.querySelector<HTMLElement>(".quota-provider-rail")?.scrollLeft ?? 0;
 	card.root.replaceChildren(header);
 	card.root.setAttribute("aria-busy", String(card.loading));
 	card.root.classList.toggle("stale", Boolean(card.error && snapshot));
@@ -205,6 +208,7 @@ function renderStatistics(kind: StatisticsKind | "quota"): void {
 			rail.appendChild(container);
 		}
 		card.root.appendChild(rail);
+		rail.scrollLeft = railScrollLeft;
 		return;
 	}
 	if (!snapshot) return;
@@ -215,13 +219,27 @@ function renderStatistics(kind: StatisticsKind | "quota"): void {
 	card.root.appendChild(rows);
 }
 
+/**
+ * Prompts this panel sent that the runtime has not named yet, keyed by their
+ * client request id. A steer or an attachment send draws no transcript echo, so
+ * without a row here the operator's words simply disappear.
+ */
+const localPendingInputs = new Map<string, string>();
+/** Last authoritative projection, so a local row can be added without erasing it. */
+let lastPendingActions: SessionActionSnapshot | undefined;
+
 /** Keep queue previews outside durable history. Preview text is not an identity. */
 function renderPendingInputs(actions?: SessionActionSnapshot): void {
+	lastPendingActions = actions;
+	// A row the runtime now names is no longer local: its own list is the receipt.
+	const named = new Set<string>([...(actions?.steering ?? []), ...(actions?.followUps ?? [])]);
+	if (actions?.active?.kind === "turn") named.add(actions.active.label);
+	for (const [clientRequestId, text] of localPendingInputs) if (named.has(text)) localPendingInputs.delete(clientRequestId);
 	pendingInputsList.replaceChildren();
-	const add = (label: string, text: string) => {
+	const add = (label: string, text: string, title = text) => {
 		const row = el("div", "pending-input");
 		row.append(el("span", "pending-input-phase", label), el("span", "pending-input-preview", text));
-		row.title = text;
+		row.title = title;
 		pendingInputsList.appendChild(row);
 	};
 	if (actions?.active?.kind === "turn" && actions.active.phase !== "running") {
@@ -229,6 +247,9 @@ function renderPendingInputs(actions?: SessionActionSnapshot): void {
 	}
 	for (const text of actions?.steering ?? []) add("Next turn", text);
 	for (const text of actions?.followUps ?? []) add("After run", text);
+	for (const text of localPendingInputs.values()) {
+		add("Sending", text, "Sent, not yet accepted by the runtime. This row is not a delivery receipt.");
+	}
 	const count = pendingInputsList.childElementCount;
 	pendingInputs.hidden = count === 0;
 	pendingInputsHeading.textContent = `Pending input · ${count}`;
@@ -253,15 +274,36 @@ let nextFileSearchRequestId = 0;
 const pendingFileSearches = new Map<number, number>();
 /** Last host-confirmed session identity displayed in this panel. */
 let authoritativeSessionId: string | undefined;
+/**
+ * Resume in flight: `path` is the history row the operator clicked, `from` the
+ * session that was on screen at that moment. The chat view still holds that
+ * previous transcript for the whole attach, so it must not be shown first.
+ */
+let pendingResume: { path: string; from: string | undefined } | undefined;
+
+/** Settle a resume. The history list repaints from the sessions it last held. */
+function clearPendingResume(): void {
+	if (!pendingResume) return;
+	pendingResume = undefined;
+	historyView.setPendingResume(undefined);
+}
 const composerDeps = {
 	onSend: (text: string, images: ImageAttachment[], selections: SelectionAttachment[], attachments: ComposerAttachment[] = []) => {
 		const clientRequestId = `${promptClientScope}-${++nextPromptClientRequestId}`;
 		// Attachment files can have changed in an editor. Only the host can know
 		// the actual message; wait for its authoritative echo instead of inventing one.
-		const optimistic = !composer.isStreaming && attachments.length === 0;
+		const streaming = composer.isStreaming;
+		const optimistic = !streaming && attachments.length === 0;
 		pendingPrompts.set(clientRequestId, { text, images: [...images], selections: [...selections], attachments: attachments.map((attachment) => ({ ...attachment, ...(attachment.image ? { image: { ...attachment.image } } : {}) })), optimistic });
 		if (optimistic) transcript.showOptimisticUserMessage(clientRequestId, text, images);
-		if (!composer.isStreaming) transcript.markSending();
+		if (!streaming) transcript.markSending();
+		if (!optimistic) {
+			// A steer, or a send whose attachments the host still has to resolve,
+			// draws no bubble: the queue panel is the only place this send can be
+			// acknowledged before the runtime's own projection arrives.
+			localPendingInputs.set(clientRequestId, text.trim() || "(no text)");
+			renderPendingInputs(lastPendingActions);
+		}
 		post({
 			type: "prompt",
 			// Stamp the thread this was typed in. The host refuses the send if that
@@ -280,7 +322,12 @@ const composerDeps = {
 	onOpenAttachment: (id: string) => {
 		if (authoritativeSessionId) post({ type: "openAttachment", sessionId: authoritativeSessionId, id });
 	},
-	onStop: () => post({ type: "abort" }),
+	onStop: () => {
+		// An abort can be ignored or refused, and the run keeps streaming until the
+		// host says otherwise: paint the wait on the button, not on the run.
+		composer.setStopping(true);
+		post({ type: "abort" });
+	},
 	onSearchFiles: (query: string, requestId: number) => {
 		const hostRequestId = fileSearchRequestScope * 1_000_000 + ++nextFileSearchRequestId;
 		pendingFileSearches.clear();
@@ -378,7 +425,18 @@ const historyView = new HistoryView({
 		// session id and overwrites the draft the operator saved there.
 		composer.flushDraft();
 		renderedReceipt = undefined;
-		showView("chat");
+		// Clicking the session already on screen cannot reveal a stale transcript —
+		// the host answers that there is nothing to switch to — so it closes the
+		// list at once, as it always did.
+		if (historyOnly || sessionId === authoritativeSessionId) {
+			showView("chat");
+			post({ type: "switchSession", path, sessionId });
+			return;
+		}
+		// Hold the list and mark the row. Showing the chat now would display the
+		// PREVIOUS transcript, with an enabled composer, for the whole attach.
+		pendingResume = { path, from: authoritativeSessionId };
+		historyView.setPendingResume(path);
 		post({ type: "switchSession", path, sessionId });
 	},
 	onDelete: (path, sessionId) => {
@@ -399,7 +457,10 @@ const historyView = new HistoryView({
 	onSearch: (query) => {
 		post({ type: "searchHistory", query });
 	},
-	onBack: () => showView("chat"),
+	onBack: () => {
+		clearPendingResume();
+		showView("chat");
+	},
 });
 
 // ---------------------------------------------------------------------------
@@ -430,6 +491,17 @@ const runningTasksStrip = runningTasks.root;
 // Install prompt banner: one persistent, dismissible card when prime-agent can't run.
 const installBanner = el("div", "install-banner");
 let installPromptShown = false;
+/** The banner's retry button while it waits for the runtime to answer. */
+let installRetry: HTMLButtonElement | undefined;
+
+/** The wait ends when the host reports a status, or re-raises the banner. */
+function settleInstallRetry(): void {
+	if (!installRetry) return;
+	installRetry.disabled = false;
+	installRetry.textContent = "Retry";
+	installRetry.title = "Try starting the agent runtime again";
+	installRetry = undefined;
+}
 function renderInstallBanner(url: string, reason: string): void {
 	if (installPromptShown) return;
 	installPromptShown = true;
@@ -462,8 +534,12 @@ function renderInstallBanner(url: string, reason: string): void {
 	retry.textContent = "Retry";
 	retry.title = "Try starting the agent runtime again";
 	retry.addEventListener("click", () => {
-		installPromptShown = false;
-		installBanner.classList.remove("visible");
+		// The banner is the only object that represents this retry: the host can
+		// spend a kill plus twenty create attempts before it says anything.
+		retry.disabled = true;
+		retry.textContent = "Retrying…";
+		retry.title = "Waiting for the agent runtime to start";
+		installRetry = retry;
 		post({ type: "restart" });
 	});
 	const dismiss = document.createElement("button");
@@ -507,9 +583,11 @@ function requestNewSession(): void {
 
 function startNewThread(): void {
 	clearStatistics();
+	clearPendingResume();
 	showView("chat");
 	subagents.resetForNewThread();
 	pendingPrompts.clear();
+	localPendingInputs.clear();
 	authoritativeSessionId = undefined;
 	renderPendingInputs();
 	transcript.clearSpawnCards?.();
@@ -556,6 +634,8 @@ app.append(newChatBtn, historyBtn);
 
 let currentStatus: StatusSnapshot | null = null;
 let observing = false;
+/** Actions the host admitted but has not started yet (viewBusy). */
+let queuedOperations = 0;
 /** Agent-provided titles survive ordinary status refreshes, but never a session change. */
 let extensionTitle: { sessionId?: string; title: string; provisional: boolean } | null = null;
 
@@ -575,6 +655,7 @@ function adoptAuthoritativeSession(sessionId: string | undefined): boolean {
 		return false;
 	}
 	authoritativeSessionId = sessionId;
+	localPendingInputs.clear();
 	renderPendingInputs();
 	pendingPrompts.clear();
 	pendingImageRequests.clear();
@@ -664,6 +745,16 @@ function applyStatus(incomingStatus: StatusSnapshot): void {
 	composer.setContext(status.contextPercent, status.contextTokens, status.contextWindow,
 		status.compactThresholdPercent ?? null, status.compactDefaultPercent ?? null);
 	setObserving(!!status.observingId);
+	// The host reporting the work is the clearing signal for the notice action.
+	if (status.compacting && noticeActionWatch) retireNotice(noticeActionWatch);
+	if (installRetry) {
+		// The runtime answered: the card's own claim no longer holds.
+		if (status.connected) {
+			installPromptShown = false;
+			installBanner.classList.remove("visible");
+		}
+		settleInstallRetry();
+	}
 }
 
 /** Runtime execution is authoritative when known; connection state stays text-only. */
@@ -683,6 +774,8 @@ function renderLiveLabel(status: StatusSnapshot): void {
 			: status.statusText || base;
 	const lanes: string[] = [];
 	if (busy && status.connected && !status.streaming && working > 0) lanes.push(`${working} subagent${working === 1 ? "" : "s"} working`);
+	// The host serializes every action; without this a queued click looks dead.
+	if (queuedOperations > 0) lanes.push(`${queuedOperations} queued`);
 	liveLabel.textContent = lanes.length > 0 ? `${text} · ${lanes.join(" · ")}` : text === "opened" ? "" : text;
 	const lamp = busy ? "working" : status.unreadComplete ? "complete" : "";
 	liveLabel.className = `live-label ${lamp}`.trim();
@@ -699,7 +792,16 @@ function setObserving(value: boolean): void {
 // Notices
 // ---------------------------------------------------------------------------
 
-function addNotice(level: "info" | "warning" | "error", text: string, action?: { id: string; label: string }): void {
+/**
+ * The notice whose action the host is running. Its work can outlive every notice
+ * timer (a compaction may run for half an hour), so the notice is kept on screen
+ * as the object to watch until the host reports progress or replaces it.
+ */
+let noticeActionWatch: HTMLElement | undefined;
+
+function addNotice(level: "info" | "warning" | "error", text: string, action?: { id: string; label: string }): HTMLElement {
+	// A new notice is the host's own successor to the one being watched.
+	if (noticeActionWatch) retireNotice(noticeActionWatch);
 	const note = el("div", `notice ${level}`);
 	note.appendChild(el("span", "", text));
 	if (action) {
@@ -708,9 +810,13 @@ function addNotice(level: "info" | "warning" | "error", text: string, action?: {
 		run.textContent = action.label;
 		run.title = action.label;
 		run.addEventListener("click", () => {
+			// Keep the notice: retiring it here left nothing on screen to watch
+			// while the host ran the recovery it had just offered.
 			run.disabled = true;
+			run.textContent = "Working…";
+			run.title = "Waiting for the runtime to report progress";
+			noticeActionWatch = note;
 			post({ type: "noticeAction", id: action.id });
-			retireNotice(note);
 		});
 		note.appendChild(run);
 	}
@@ -722,9 +828,11 @@ function addNotice(level: "info" | "warning" | "error", text: string, action?: {
 	note.appendChild(dismiss);
 	notices.appendChild(note);
 	if (level === "info") setTimeout(() => retireNotice(note), 9000);
+	return note;
 }
 
 function retireNotice(note: HTMLElement): void {
+	if (noticeActionWatch === note) noticeActionWatch = undefined;
 	if (!note.isConnected) return;
 	note.remove();
 }
@@ -763,6 +871,26 @@ let capturedViewRequest: string | undefined;
 let capturedViewSessionId: string | undefined;
 let snapshotSessionId: string | undefined;
 let renderedReceipt: ChatReadReceipt | undefined;
+
+/** The notice that explains why the whole app is inert, while it is. */
+let movingNotice: HTMLElement | undefined;
+
+/**
+ * `inert` swallows every click and says nothing about why. Pair it with the
+ * reason, and drop that reason the moment the block ends.
+ */
+function updateAppInert(): void {
+	const blocked = viewMoving || Boolean(capturedViewRequest);
+	app.inert = blocked;
+	if (blocked) {
+		if (!movingNotice) movingNotice = addNotice("info", "Moving this chat — clicks are paused until it lands.");
+		return;
+	}
+	if (movingNotice) {
+		retireNotice(movingNotice);
+		movingNotice = undefined;
+	}
+}
 
 function focusRenderedChat(): void {
 	acknowledgeRenderedChat();
@@ -839,7 +967,7 @@ function dispatchHostMessage(message: HostToWebview): void {
 			break;
 		case "setViewMoving":
 			viewMoving = message.moving;
-			app.inert = viewMoving || Boolean(capturedViewRequest);
+			updateAppInert();
 			break;
 		case "captureViewState":
 		case "restoreViewState": {
@@ -851,7 +979,7 @@ function dispatchHostMessage(message: HostToWebview): void {
 					if (!state) throw new Error("This draft exceeds the transfer limits. The original chat has been kept.");
 					capturedViewRequest = message.requestId;
 					capturedViewSessionId = message.sessionId;
-					app.inert = viewMoving || Boolean(capturedViewRequest);
+					updateAppInert();
 					post({ type: "viewStateCaptured", requestId: message.requestId, sessionId: message.sessionId, state });
 				} else {
 					if (message.sessionId && snapshotSessionId !== message.sessionId) throw new Error("Wait for the session snapshot before restoring this chat.");
@@ -871,7 +999,7 @@ function dispatchHostMessage(message: HostToWebview): void {
 			if (capturedViewRequest === message.requestId && message.sessionId === capturedViewSessionId) {
 				capturedViewRequest = undefined;
 				capturedViewSessionId = undefined;
-				app.inert = viewMoving || Boolean(capturedViewRequest);
+				updateAppInert();
 			}
 			break;
 		case "snapshot": {
@@ -883,6 +1011,12 @@ function dispatchHostMessage(message: HostToWebview): void {
 			transcript.clearSpawnCards?.();
 			subagents.resetActivity();
 			transcript.renderSnapshot(message.messages ?? [], message.status.streaming, sameSession);
+			// The chat is truthful only now: this snapshot names the session the host
+			// adopted, which is the switch the operator asked for.
+			if (pendingResume && message.status.sessionId !== pendingResume.from) {
+				clearPendingResume();
+				showView("chat");
+			}
 			renderPendingInputs(message.state?.sessionActions);
 			// Up/Down recall has to survive a reload or a resume, so it is seeded
 			// from the thread itself rather than only from what this panel sent.
@@ -910,6 +1044,10 @@ function dispatchHostMessage(message: HostToWebview): void {
 			break;
 		case "status":
 			applyStatus(message.status);
+			break;
+		case "viewBusy":
+			queuedOperations = message.pending;
+			if (currentStatus) renderLiveLabel(currentStatus);
 			break;
 		case "models":
 			composer.setModels(message.models);
@@ -942,6 +1080,10 @@ function dispatchHostMessage(message: HostToWebview): void {
 			historyView.setCurrentSession(message.sessionId);
 			break;
 		case "history":
+			// The host's own list settles a resume: with the clicked row gone there
+			// is no row left to keep marked, and the list on screen is stale.
+			const resumedPath = pendingResume?.path;
+			if (resumedPath !== undefined && !message.sessions.some((session) => session.path === resumedPath)) clearPendingResume();
 			historyView.render(message.sessions, historyOnly ? historySessionId : currentStatus?.sessionId);
 			break;
 		case "showHistory":
@@ -958,6 +1100,7 @@ function dispatchHostMessage(message: HostToWebview): void {
 			// spawn-card dedupe keeps suppressing every id seen before the observed
 			// transcript, and "Subagent spawned" never appears again for them.
 			pendingPrompts.clear();
+			localPendingInputs.clear();
 			transcript.clearSpawnCards?.();
 			subagents.resetActivity();
 			transcript.renderSnapshot(message.messages);
@@ -975,9 +1118,13 @@ function dispatchHostMessage(message: HostToWebview): void {
 			addNotice("info", "Stopped watching the live session.");
 			break;
 		case "notice":
+			// A refusal ends the wait: the list must stop claiming a switch is coming.
+			if (message.level === "error") clearPendingResume();
 			addNotice(message.level, message.text, message.action);
 			break;
 		case "installPrompt":
+			// The host re-raised the card: its button is live again.
+			settleInstallRetry();
 			renderInstallBanner(message.url, message.reason);
 			break;
 		case "uiState":
@@ -1025,6 +1172,8 @@ function dispatchHostMessage(message: HostToWebview): void {
 			// Host acceptance makes the prompt durable. Keep its optimistic row until
 			// the transcript echoes it, but do not block switching away from a run.
 			if (message.clientRequestId) pendingPrompts.delete(message.clientRequestId);
+			// Accepted: the runtime's own queue replaces the local stand-in row.
+			if (message.clientRequestId && localPendingInputs.delete(message.clientRequestId)) renderPendingInputs(lastPendingActions);
 			break;
 		}
 		case "editorText":
@@ -1043,6 +1192,7 @@ function dispatchHostMessage(message: HostToWebview): void {
 			const rejected = message.clientRequestId ? pendingPrompts.get(message.clientRequestId) : undefined;
 			const removed = transcript.rejectOptimistic(message.clientRequestId);
 			if (message.clientRequestId) pendingPrompts.delete(message.clientRequestId);
+			if (message.clientRequestId && localPendingInputs.delete(message.clientRequestId)) renderPendingInputs(lastPendingActions);
 			transcript.clearSendingIfIdle();
 			// A selection-only prompt draws no local echo, so `removed` is false for
 			// it — gating the restore on `removed` alone silently ate the operator's

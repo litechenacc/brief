@@ -119,6 +119,41 @@ export class HistoryView {
 	private folds: HistoryFoldState;
 	private applyingFolds = false;
 	private expandedChildSessions = new Set<string>();
+	/**
+	 * Last verdict painted per session path. An unanswered daemon (RPC flap)
+	 * makes the verdict unknown; reusing the last one keeps the row's time and
+	 * lamp steady instead of flashing a warning the operator cannot act on.
+	 */
+	private lastKnownStatus = new Map<string, { status?: RecentSession["status"]; statusLabel?: string; running?: boolean }>();
+	/**
+	 * Session the operator asked to resume. A click is not an answer from the
+	 * host, so the row stays on screen dimmed until the snapshot that adopts
+	 * that session arrives, or an error notice, or the operator leaves history.
+	 */
+	private pendingResumePath: string | undefined;
+
+	/**
+	 * Mark the row being resumed. Cleared by the host signal only — never by a
+	 * timer, or a slow attach would look like a finished one.
+	 */
+	setPendingResume(path: string | undefined): void {
+		if (path === this.pendingResumePath) return;
+		this.pendingResumePath = path;
+		if (path !== undefined) {
+			this.paintPendingResume();
+			return;
+		}
+		// Settled: the list may be replaced again, with whatever arrived while the
+		// switch was in flight.
+		this.render(this.lastSessions ?? [], this.currentId);
+	}
+
+	/** Only the clicked row is marked, and only for as long as the switch is open. */
+	private paintPendingResume(): void {
+		for (const item of Array.from(this.listEl.querySelectorAll<HTMLElement>(".history-item"))) {
+			item.classList.toggle("pending", item.dataset.path === this.pendingResumePath);
+		}
+	}
 
 	/** Keep the last render on screen while a fresh list arrives; mark subtly. */
 	showLoading(): void {
@@ -133,6 +168,29 @@ export class HistoryView {
 	setCurrentSession(sessionId?: string): void {
 		if (sessionId === this.currentId) return;
 		this.render(this.lastSessions ?? [], sessionId);
+	}
+
+	/**
+	 * Repaint the list the operator is working inside (expand/collapse, optimistic
+	 * archive/unarchive): the same rows come back, so the scroll offset and the
+	 * keyboard focus have to survive the rebuild. Search, scope and sort change
+	 * which rows exist, so those keep the plain render that starts at the top.
+	 */
+	private renderInPlace(sessions: RecentSession[] = this.lastSessions ?? []): void {
+		const scrollTop = this.listEl.scrollTop;
+		const active = document.activeElement as HTMLElement | null;
+		const focused = active && this.listEl.contains(active) ? active : undefined;
+		const focusClass = focused?.classList.item(0);
+		const focusPath = focused?.closest<HTMLElement>(".history-item")?.dataset.path;
+		this.render(sessions, this.currentId);
+		// Emptying the list clamped the offset; put it back where the operator left it.
+		this.listEl.scrollTop = scrollTop;
+		if (!focusClass) return;
+		const row = focusPath
+			? Array.from(this.listEl.querySelectorAll<HTMLElement>(".history-item")).find((item) => item.dataset.path === focusPath)
+			: this.listEl;
+		// The nodes were rebuilt, so the focus lands on the replacement control.
+		(row ?? this.listEl).querySelector<HTMLElement>(`.${focusClass}`)?.focus();
 	}
 
 	render(sessions: RecentSession[], currentId?: string): void {
@@ -183,6 +241,14 @@ export class HistoryView {
 		this.currentId = currentId;
 		this.fetching = false;
 		this.root.classList.remove("refreshing");
+		// A resume is in flight: replacing the list would take the row the operator
+		// just clicked off screen. The painted rows stay, with that row still marked,
+		// and the data that arrived meanwhile is shown once the host settles the
+		// switch and clears the pending path.
+		if (this.pendingResumePath !== undefined) {
+			this.paintPendingResume();
+			return;
+		}
 		this.listEl.textContent = "";
 		if (withRanks.length === 0) {
 			const emptyText = needle
@@ -262,6 +328,9 @@ export class HistoryView {
 		// rename input must never become descendants of the resume control.
 		const item = el("div", "history-item");
 		item.title = session.cwd;
+		// The path is the row's identity for the pending resume and for restoring
+		// the keyboard focus after an in-place repaint.
+		item.dataset.path = session.path;
 		item.dataset.showFolder = showFolder ? "1" : "0";
 		const isCurrent = session.id === this.currentId;
 		const hasCurrentChild = session.children?.some(
@@ -286,30 +355,41 @@ export class HistoryView {
 			),
 		);
 		if (session.isNew) meta.appendChild(el("span", "history-new-session", "New session"));
-		const status = session.status;
-		const lamp = status === "running" || session.running ? "working" : session.unreadComplete ? "complete" : "";
+		// An unknown verdict means the daemon did not answer, not that the session
+		// is broken: keep the last known one so the row's time and lamp stay put.
+		const remembered = this.lastKnownStatus.get(session.path);
+		const status = session.status ?? remembered?.status;
+		const statusLabel = session.statusLabel ?? remembered?.statusLabel;
+		const running = session.running ?? remembered?.running ?? false;
+		if (session.status !== undefined) {
+			this.lastKnownStatus.set(session.path, { status: session.status, statusLabel: session.statusLabel, running: session.running });
+		}
+		const lamp = status === "running" || running ? "working" : session.unreadComplete ? "complete" : "";
 		if (lamp) {
 			const mark = el("span", `running-mark ${lamp}`);
 			mark.title = lamp === "working"
-				? session.statusLabel != null ? `Working — flagged by the daemon as ${session.statusLabel}` : "Working"
+				? statusLabel != null ? `Working — flagged by the daemon as ${statusLabel}` : "Working"
 				: "Newly completed";
 			const dot = el("span", "running-dot");
 			if (lamp === "working") dot.style.animationDelay = `${-(Date.now() % RUNNING_PULSE_CYCLE_MS)}ms`;
 			mark.appendChild(dot);
 			meta.appendChild(mark);
 		}
-		if (status === undefined && !session.running) {
+		if (status === undefined && !running) {
 			meta.appendChild(el("span", "history-execution-unknown", "Execution status unavailable"));
 		}
 		resume.append(meta);
 		const actions = el("div", "history-actions");
-		if (session.running) {
+		if (running) {
 			const stop = document.createElement("button");
 			stop.className = "history-action";
 			stop.title = "Stop this session (aborts the live run)";
 			stop.appendChild(icon("stop", 10));
 			stop.addEventListener("click", (event) => {
 				event.stopPropagation();
+				// "Requested" is not "stopped": the row is dimmed and its actions are
+				// neutralised until the next list says what the host did.
+				item.classList.add("pending");
 				this.deps.onStop(session.path, session.id);
 			});
 			actions.appendChild(stop);
@@ -330,16 +410,16 @@ export class HistoryView {
 			unarchive.appendChild(icon("back", 11));
 			unarchive.addEventListener("click", (event) => {
 				event.stopPropagation();
-				this.render((this.lastSessions ?? []).map((row) =>
-					row.path === session.path ? { ...row, archived: false } : row), this.currentId);
+				this.renderInPlace((this.lastSessions ?? []).map((row) =>
+					row.path === session.path ? { ...row, archived: false } : row));
 				this.deps.onUnarchive(session.path, session.id);
 			});
 			actions.appendChild(unarchive);
 		} else {
 			const archive = document.createElement("button");
 			archive.className = "history-action";
-			archive.disabled = !!session.running || (status !== "idle" && status !== "inactive");
-			archive.title = status === "running" || session.running
+			archive.disabled = running || (status !== "idle" && status !== "inactive");
+			archive.title = status === "running" || running
 				? "Archive unavailable while this session is running"
 				: archive.disabled
 					? "Archive unavailable: execution status unknown"
@@ -348,8 +428,8 @@ export class HistoryView {
 			archive.addEventListener("click", (event) => {
 				event.stopPropagation();
 				if (archive.disabled) return;
-				this.render((this.lastSessions ?? []).map((row) =>
-					row.path === session.path ? { ...row, archived: true } : row), this.currentId);
+				this.renderInPlace((this.lastSessions ?? []).map((row) =>
+					row.path === session.path ? { ...row, archived: true } : row));
 				this.deps.onArchive(session.path, session.id);
 			});
 			actions.appendChild(archive);
@@ -364,7 +444,13 @@ export class HistoryView {
 				this.armConfirm(item, session, actions, {
 					label: "Delete",
 					className: "history-action destructive",
-					run: () => this.deps.onDelete(session.path, session.id),
+					run: () => {
+					// The confirm pair stays in place but is neutralised by
+					// `.history-item.pending`; the row is not removed, because a delete
+					// that the host refuses must still have a row to come back to.
+					item.classList.add("pending");
+					this.deps.onDelete(session.path, session.id);
+				},
 				});
 			});
 			// Delete stays last: the furthest from a stray click.
@@ -396,7 +482,7 @@ export class HistoryView {
 				event.stopPropagation();
 				if (expanded) this.expandedChildSessions.delete(childrenKey);
 				else this.expandedChildSessions.add(childrenKey);
-				this.render(this.lastSessions ?? [], this.currentId);
+				this.renderInPlace();
 			});
 			item.appendChild(toggle);
 			if (expanded) {
@@ -404,7 +490,19 @@ export class HistoryView {
 				for (const child of session.children) {
 					const childItem = el("div", "history-child");
 					if (child.id === this.currentId || child.activeSessionId === this.currentId) childItem.classList.add("current");
-					childItem.addEventListener("click", (event) => event.stopPropagation());
+					// A child that has a session file of its own is a session like any
+					// other, so its row opens it; without a path it stays a status line.
+					// Either way the click stops here instead of resuming the parent.
+					const childPath = child.path;
+					if (childPath) {
+						childItem.classList.add("clickable");
+						childItem.addEventListener("click", (event) => {
+							event.stopPropagation();
+							this.deps.onResume(childPath, child.id);
+						});
+					} else {
+						childItem.addEventListener("click", (event) => event.stopPropagation());
+					}
 					childItem.append(
 						el("span", "history-child-arrow", "↳"),
 						el("span", "history-child-name", subagentLabel(child)),
@@ -450,8 +548,17 @@ export class HistoryView {
 		input.addEventListener("keydown", (event) => {
 			event.stopPropagation();
 			if (event.key === "Enter") {
+				const typed = input.value.trim();
 				restore();
-				this.deps.onRename(session.path, session.id, input.value.trim());
+				// The restored element still carries the OLD label, which is what made
+				// the typed name visibly revert for the whole round-trip. Paint it now,
+				// dim the row, and let the host's next list correct it either way.
+				if (typed) {
+					const label = resume.querySelector(".history-item-name");
+					if (label) label.textContent = typed;
+					item.classList.add("pending");
+				}
+				this.deps.onRename(session.path, session.id, typed);
 			} else if (event.key === "Escape") {
 				restore();
 			} else {
@@ -490,7 +597,10 @@ export class HistoryView {
 		cancel.appendChild(icon("close", 11));
 		cancel.addEventListener("click", (event) => {
 			event.stopPropagation();
-			if (!item.isConnected) return;
+			// The 6s auto-cancel fires a programmatic click that ignores the pending
+			// rule's `pointer-events: none`, and it must not repaint a row whose action
+			// the host is still working on.
+			if (!item.isConnected || item.classList.contains("pending")) return;
 			item.classList.remove("confirming");
 			item.parentElement?.insertBefore(this.buildItem(session, item.dataset.showFolder === "1"), item);
 			item.remove();

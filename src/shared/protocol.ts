@@ -471,7 +471,12 @@ export interface RecentSession {
 	 */
 	sortMs?: number;
 	/** Live direct subagents attached to this history session. */
-	children?: Array<{ id: string; activeSessionId?: string; name?: string; model?: { provider?: string; id?: string }; thinkingLevel?: string; status: "running" | "idle"; rlmDepth?: number }>;
+	children?: Array<{
+		id: string; activeSessionId?: string; name?: string; model?: { provider?: string; id?: string };
+		thinkingLevel?: string; status: "running" | "idle"; rlmDepth?: number;
+		/** Session file of the child; the webview can open the child from it. */
+		path?: string;
+	}>;
 	/** True when the operator archived this row from Brief (not daemon auto-archive). */
 	archived?: boolean;
 	/**
@@ -489,6 +494,8 @@ export type HostToWebview =
 	| { type: "attachmentCreated"; sessionId: string; id: string; error?: string }
 	| { type: "setHistoryMode"; enabled: boolean }
 	| { type: "setViewMoving"; moving: boolean }
+	/** Serialized-queue visibility: actions admitted but still waiting behind the running one. */
+	| { type: "viewBusy"; pending: number }
 	| { type: "captureViewState"; requestId: string; sessionId: string }
 	| { type: "restoreViewState"; requestId: string; sessionId: string; state: ChatViewState }
 	| { type: "releaseViewState"; requestId: string; sessionId: string }

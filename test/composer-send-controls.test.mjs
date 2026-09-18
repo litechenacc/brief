@@ -70,23 +70,23 @@ function parity(label, behavior, queued) {
 		assert.equal(sends.length, before + 1);
 		assert.deepEqual(sends.at(-1), { text: "message", behavior, queued });
 		assert.equal(textarea.value, "");
-		state("blocked", label, true, label !== "Send");
+		state("empty", label, true, label !== "Send");
 	}
 }
 try {
-	state("blocked", "Blocked", true, false);
+	state("unavailable", "Blocked", true, false);
 	c.setEnabled(true);
 	c.setSteerDefault("followUp");
 	assert.equal(c.isStreaming, false, "streaming getter reports idle state");
-	state("blocked", "Send", true, false);
+	state("empty", "Send", true, false);
 	parity("Send", "followUp", false);
 	c.setStreaming(true);
 	assert.equal(c.isStreaming, true, "streaming getter reports active state");
-	state("blocked", "Queue", true, true);
+	state("empty", "Queue", true, true);
 	assert.equal(visible(stop), true);
 	parity("Queue", "followUp", true);
 	choose("Steer", "Queue");
-	state("blocked", "Steer", true, true);
+	state("empty", "Steer", true, true);
 	parity("Steer", "steer", false);
 	choose("Queue", "Steer");
 	parity("Queue", "followUp", true);
@@ -114,7 +114,7 @@ try {
 	]) {
 		c.setEnabled(true); c.setObserving(false); c.setText("blocked draft");
 		menu(); block(); closed();
-		state("blocked", "Blocked", true, false);
+		state("unavailable", "Blocked", true, false);
 		const before = sends.length;
 		main.click(); key();
 		assert.equal(sends.length, before);
@@ -122,7 +122,7 @@ try {
 	}
 	assert.equal(visible(stop), false, "read-only observation cannot stop someone else's run");
 	c.setObserving(false); c.setEnabled(true); c.setText("");
-	state("blocked", "Queue", true, true);
+	state("empty", "Queue", true, true);
 	const beforeStop = sends.length;
 	stop.click();
 	assert.equal(stops, 1, "empty draft does not disable Stop");
@@ -132,7 +132,7 @@ try {
 	Object.defineProperty(paste, "clipboardData", { value: { files: [], getData: () => "x".repeat(1001) } });
 	textarea.dispatchEvent(paste);
 	assert.equal(creates.length, 1);
-	state("blocked", "Blocked", true, true);
+	state("unavailable", "Blocked", true, true);
 	main.click(); key();
 	assert.equal(sends.length, beforeStop, "pending attachment blocks click and Enter");
 	stop.click(); assert.equal(stops, 2, "pending attachment does not disable Stop");

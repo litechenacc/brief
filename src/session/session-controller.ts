@@ -1260,6 +1260,13 @@ export class SessionController implements vscode.Disposable {
 			await this.client.request({ type: "abort" }, 10_000);
 		} catch (err) {
 			this.output.appendLine(`[prime-agent] abort failed: ${String(err)}`);
+			// Same reason as the attached branch: a failed stop that only reaches
+			// the output log leaves the operator clicking Stop on a live run.
+			this.broadcast({
+				type: "notice",
+				level: "error",
+				text: `Could not stop the run: ${err instanceof Error ? err.message : String(err)}`,
+			});
 		}
 	}
 

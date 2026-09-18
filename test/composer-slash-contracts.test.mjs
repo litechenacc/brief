@@ -34,7 +34,9 @@ function command(text) { input(text); c.send(); }
 function close() { document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); }
 function row(label) { return [...document.querySelectorAll(".dropdown-item")].find(el => el.textContent.includes(label)); }
 input("draft"); command("/model FIRST"); assert.deepEqual(calls.at(-1), ["model", "p", "one"]); assert.equal(textarea.value, "draft");
-command("/model P/TWO"); assert.deepEqual(calls.at(-1), ["model", "p", "two"]);
+// A reasoning model: the picked model's own capabilities are painted from the catalog
+// immediately, and the host's matching status is what settles the pick.
+command("/model Q/ONE"); assert.deepEqual(calls.at(-1), ["model", "q", "one"]); c.setModel("q/one", "q", "one");
 for (const query of ["", "one", "unknown"]) { const n = calls.length; command(`/model ${query}`); assert.equal(document.querySelector(".dropdown-search").value, query); assert.equal(calls.length, n); close(); assert.equal(textarea.value, "draft"); }
 command("/model"); c.setStreaming(true); const n = calls.length; row("p/two").click(); assert.equal(calls.length, n); assert.equal(textarea.value, "draft");
 for (const block of [() => c.setStreaming(true), () => c.setBusy(true), () => c.setObserving(true)]) {

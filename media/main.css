@@ -64,6 +64,13 @@ body {
 	position: relative;
 }
 
+/* The webview makes the whole app inert while a view moves. Without a visual
+   reason every click in that window looks broken. */
+#app[inert] {
+	opacity: 0.6;
+	cursor: progress;
+}
+
 .spacer {
 	flex: 1;
 }
@@ -82,6 +89,21 @@ button:focus-visible {
 	outline: 1px solid var(--vscode-focusBorder, var(--pa-border-strong));
 	outline-offset: 1px;
 	border-radius: 4px;
+}
+
+/* Press feedback: acknowledge the press itself, before any host round-trip.
+   Brightness, not transform: a transform would clip inside the tool cards. */
+button:not(:disabled):active,
+.history-item:active,
+.history-child.clickable:active,
+.running-task:active,
+.subagent-row:active,
+.tool-header:active,
+.lens-marker:active,
+.mention-chip:active,
+.ac-item:active,
+.dropdown-item:active {
+	filter: brightness(0.9);
 }
 
 .chrome-action {
@@ -109,6 +131,63 @@ button:focus-visible {
 .icon-btn:hover {
 	background: var(--pa-accent-dim);
 	color: var(--pa-accent);
+}
+
+.tool-open:hover,
+.notice-dismiss:hover {
+	background: var(--pa-accent-dim);
+	color: var(--pa-accent);
+}
+
+/* The tool header paints its own hover, so its inner toggle only needs ink. */
+.tool-toggle:hover {
+	color: var(--pa-accent);
+}
+
+/* A disabled control must not look pressable: dim it and suppress the hover
+   wash the enabled control would paint. */
+.history-action:disabled,
+.history-action:disabled:hover,
+.spawned-view:disabled,
+.spawned-view:disabled:hover,
+.attachment-open:disabled,
+.attachment-open:disabled:hover,
+.tool-open:disabled,
+.tool-open:disabled:hover {
+	opacity: 0.45;
+	cursor: default;
+	background: none;
+	color: var(--pa-dim);
+}
+
+/* Action in flight: the control stays on screen, dimmed, until the host
+   answers. Pending is never painted as done. */
+.pending {
+	opacity: 0.65;
+	cursor: progress;
+}
+
+.history-item.pending .history-action,
+.history-item.pending .history-children-toggle {
+	pointer-events: none;
+	opacity: 0.45;
+}
+
+.rail-pill.pending {
+	opacity: 0.7;
+	cursor: progress;
+}
+
+/* A refused change keeps the picked value readable but flags it as not in
+   effect, so a slow refusal is never mistaken for a slow success. */
+.rail-pill.not-applied .pill-label {
+	color: var(--pa-warn);
+	text-decoration: underline dotted;
+}
+
+.send-btn.stopping,
+.send-btn.stopping:disabled {
+	cursor: progress;
 }
 
 /* ---------- notices ---------- */
@@ -797,6 +876,8 @@ details.thinking .thinking-body {
 	width: 100%;
 	padding: 5px 9px;
 	text-align: left;
+	/* The whole header is the expand/collapse target, not only the inner toggle. */
+	cursor: pointer;
 }
 
 .tool-header:hover {
@@ -1020,6 +1101,8 @@ details.thinking .thinking-body {
 	border-radius: 4px;
 	background: transparent;
 	text-align: left;
+	/* The whole row is a target: the resume area, the padding and the sub-line. */
+	cursor: pointer;
 }
 
 .history-item:hover {
@@ -1142,6 +1225,15 @@ body.vscode-high-contrast-light .history-item.current {
 }
 
 .history-child.current {
+	color: var(--pa-accent);
+}
+
+.history-child.clickable {
+	cursor: pointer;
+}
+
+.history-child.clickable:hover {
+	background: var(--pa-accent-dim);
 	color: var(--pa-accent);
 }
 
@@ -1505,6 +1597,16 @@ body.vscode-high-contrast-light .history-item.current {
 	background: transparent;
 	color: var(--pa-dim);
 	cursor: not-allowed;
+}
+
+/* "Blocked because the runtime is unreachable" is not the same state as "the
+   draft is empty"; the composer publishes both through data-state. */
+.send-control[data-state="unavailable"] {
+	border-color: var(--pa-warn);
+}
+
+.send-control[data-state="unavailable"] > .send-btn {
+	color: var(--pa-warn);
 }
 
 /* ---------- autocomplete ---------- */
@@ -2054,8 +2156,7 @@ pre.term {
 }
 
 @keyframes pa-hint-fade {
-	0% { opacity: 0; transform: translateY(2px); }
-	8% { opacity: 1; transform: none; }
+	0% { opacity: 1; }
 	80% { opacity: 1; }
 	100% { opacity: 0.35; }
 }
@@ -2079,8 +2180,8 @@ pre.term {
 	display: inline-flex;
 }
 
-.history-item:hover .history-item-meta,
-.history-item:focus-within .history-item-meta,
+/* The time and the run lamp stay readable while the operator reaches for the
+   inline actions: deciding needs both. Only the confirm swap replaces them. */
 .history-item.confirming .history-item-meta {
 	display: none;
 }

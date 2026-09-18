@@ -36,18 +36,23 @@ export class RunningTasksStrip {
 	}
 
 	private render(): void {
+		// Task snapshots arrive while the operator is reading a log: keep the scroll
+		// offset and the control they are standing on across the rebuild.
+		const scrollTop = this.root.scrollTop;
+		const focusKey = this.focusedKey();
 		this.root.replaceChildren();
 		this.root.classList.toggle("visible", this.tasks.length > 0);
 		if (this.tasks.length === 0) return;
 		const header = el("button", "running-tasks-header", `${this.expanded ? "▾" : "▸"} Running tasks (${this.tasks.length})`) as HTMLButtonElement;
 		header.setAttribute("aria-expanded", String(this.expanded));
+		header.dataset.focus = "header";
 		header.addEventListener("click", () => {
 			this.expanded = !this.expanded;
 			this.autoExpandSuppressed = !this.expanded;
 			this.render();
 		});
 		this.root.appendChild(header);
-		if (!this.expanded) return;
+		if (!this.expanded) { this.restorePlace(scrollTop, focusKey); return; }
 		for (const task of this.tasks) {
 			const { stdoutPath, stderrPath } = task;
 			const row = el("div", "running-task-row");
@@ -58,6 +63,7 @@ export class RunningTasksStrip {
 			if (stdoutPath) {
 				const stdout = el("button", "running-task-log", "StdOut");
 				stdout.title = `Open stdout.log in VS Code — ${task.label}`;
+				stdout.dataset.focus = stdoutPath;
 				stdout.addEventListener("click", () => this.post({ type: "openFile", path: stdoutPath }));
 				row.appendChild(stdout);
 			}
@@ -69,11 +75,32 @@ export class RunningTasksStrip {
 			if (stderrPath) {
 				const stderr = el("button", "running-task-log", "StdErr");
 				stderr.title = `Open stderr.log in VS Code — ${task.label}`;
+				stderr.dataset.focus = stderrPath;
 				stderr.addEventListener("click", () => this.post({ type: "openFile", path: stderrPath }));
 				row.appendChild(stderr);
 			}
+			// Rows stay in `this.tasks` order: `updateElapsed` reads the time nodes
+			// by index, so row order and task order must not drift apart.
 			row.appendChild(el("span", "running-task-time", elapsed(Date.now() - task.startedAt)));
 			this.root.appendChild(row);
 		}
+		this.restorePlace(scrollTop, focusKey);
+	}
+
+	/** Identity of the control the operator is standing on, if it lives in this strip. */
+	private focusedKey(): string | null {
+		const active = document.activeElement as HTMLElement | null;
+		if (!active || active === this.root || !this.root.contains(active)) return null;
+		return active.dataset.focus ?? null;
+	}
+
+	/** Put the strip back where it was: same control focused, same scroll offset. */
+	private restorePlace(scrollTop: number, focusKey: string | null): void {
+		if (focusKey) {
+			for (const node of Array.from(this.root.querySelectorAll<HTMLElement>("[data-focus]"))) {
+				if (node.dataset.focus === focusKey) { node.focus(); break; }
+			}
+		}
+		this.root.scrollTop = scrollTop;
 	}
 }

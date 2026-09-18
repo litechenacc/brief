@@ -59,7 +59,7 @@ earlyModelButton.click();
 const earlyModelItem = [...document.querySelectorAll(".dropdown-item")].find((item) => item.textContent.includes("cached-model"));
 check("cached model picker works before any host message", !!earlyModelItem);
 earlyModelItem?.click();
-check("cached selection queues host operation without optimistic model state", earlyModelButton.textContent === "Choose model" && posted.some((message) => message.type === "setModel" && message.modelId === "cached-model"));
+check("cached selection paints the pick as pending while the host operation is queued", earlyModelButton.textContent.includes("cached-model") && earlyModelButton.classList.contains("pending") && posted.some((message) => message.type === "setModel" && message.modelId === "cached-model"));
 
 // The chat opens immediately. The status strip remains the connection indicator,
 // while the composer accepts a draft before the first status arrives.
@@ -84,14 +84,14 @@ startupInput.dispatchEvent(new window.Event("input", { bubbles: true }));
 for (const restoring of [false, true]) {
 	hostMessage({ type: "status", status: { connected: false, restoring, streaming: false, modelLabel: "Agent", thinkingLevel: "off" } });
 	check(`startup remains editable (restoring=${restoring})`, !startupInput.disabled && startupInput.placeholder === "Message Brief…");
-	check("connection-only status does not invent a selected model", earlyModelButton.textContent === "Choose model");
+	check("connection-only status does not invent a selected model", earlyModelButton.textContent.includes("cached-model") && earlyModelButton.textContent !== "Agent");
 	startupInput.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
 	startupSend.click();
 	check("startup cannot send by Enter or click", !posted.some((m) => m.type === "prompt") && startupInput.value === "draft while connecting");
 }
 // A restoring status must not invent a confirmed model selection.
 hostMessage({ type: "status", status: { connected: false, restoring: true, streaming: false, modelLabel: "Agent", thinkingLevel: "off" } });
-check("startup status waits for authoritative model selection", earlyModelButton.textContent === "Choose model");
+check("startup status waits for authoritative model selection", earlyModelButton.textContent.includes("cached-model") && earlyModelButton.classList.contains("pending"));
 
 hostMessage({ type: "uiState", title: "early agent title", statusText: "warming up" });
 check("uiState statusText paints before the first status snapshot", document.querySelector(".live-label")?.textContent === "warming up");
@@ -1909,11 +1909,13 @@ check("ArrowDown+Enter picks a model from /model", posted.some((m) => m.type ===
 check("picking a model restores the stashed draft", textarea.value === "draft before model", JSON.stringify(textarea.value));
 check("model menu closed after keyboard select", !document.querySelector(".dropdown"));
 
-textarea.value = "/model glm";
+// A reasoning model: the picked model's own capabilities are painted immediately,
+// so the thinking menu below only exists for a model that supports thinking.
+textarea.value = "/model kimi";
 posted.length = 0;
 textarea.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
-check("/model glm sets the model without a picker", posted.some((m) => m.type === "setModel" && m.modelId === "glm") && !document.querySelector(".dropdown"), JSON.stringify(posted));
-check("/model glm restores the prior draft", textarea.value === "draft before model", JSON.stringify(textarea.value));
+check("/model kimi sets the model without a picker", posted.some((m) => m.type === "setModel" && m.modelId === "kimi") && !document.querySelector(".dropdown"), JSON.stringify(posted));
+check("/model kimi restores the prior draft", textarea.value === "draft before model", JSON.stringify(textarea.value));
 
 textarea.value = "/effort";
 textarea.selectionStart = textarea.selectionEnd = textarea.value.length;

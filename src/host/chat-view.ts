@@ -196,10 +196,46 @@ export class ChatPanels implements vscode.Disposable, vscode.WebviewPanelSeriali
 		return vscode.workspace.getConfiguration("brief").get<ChatLocation>("chatLocation", "editor");
 	}
 
+	/**
+	 * Queue depth for the webview. `enqueue` serializes every action, so a click
+	 * admitted behind a slow head (a session switch can hold the queue for a
+	 * minute) looks like a dead control. `waiting` counts actions admitted but not
+	 * started; one of them is free to run as soon as the queue is empty, so only
+	 * the ones behind a running action are reported as pending.
+	 */
+	private waitingOperations = 0;
+	private runningOperations = 0;
+	private operationsBusy = false;
+
+	private pendingOperationCount(): number {
+		return this.runningOperations > 0 ? this.waitingOperations : Math.max(0, this.waitingOperations - 1);
+	}
+
+	private publishViewBusy(): void {
+		const pending = this.pendingOperationCount();
+		// Publish the wait appearing and ending only: per-keystroke `draftChanged`
+		// traffic must not repaint every open view.
+		if ((pending > 0) === this.operationsBusy) return;
+		this.operationsBusy = pending > 0;
+		const message: HostToWebview = { type: "viewBusy", pending };
+		if (this.sidebar && !this.sidebar.tab && !this.sidebar.closed) void this.sidebar.webview.postMessage(message);
+		for (const tab of this.tabs) {
+			if (tab.view && !tab.view.closed) void tab.view.webview.postMessage(message);
+		}
+	}
+
 	private enqueue<T>(action: () => Promise<T>): Promise<T> {
+		this.waitingOperations++;
+		this.publishViewBusy();
 		const result = this.operations.then(() => {
-			if (this.disposed) throw new Error("Chat is closed.");
-			return action();
+			this.waitingOperations--;
+			if (this.disposed) { this.publishViewBusy(); throw new Error("Chat is closed."); }
+			this.runningOperations++;
+			this.publishViewBusy();
+			return Promise.resolve().then(action).finally(() => {
+				this.runningOperations--;
+				this.publishViewBusy();
+			});
 		});
 		this.operations = result.catch(() => {});
 		return result;
@@ -1026,9 +1062,10 @@ async function handleMessage(message: WebviewToHost, controller: SessionControll
 		case "dropWorkspaceUris": {
 			const epoch = controller.viewEpoch, attached = controller.attached, observingId = controller.observingId;
 			const files = await controller.resolveDroppedWorkspaceUris(message.uris);
-			if (!controller.disposed && epoch === controller.viewEpoch && attached === controller.attached && observingId === controller.observingId) {
-				reply({ type: "droppedWorkspaceUrisResolved", requestId: message.requestId, files });
-			}
+			const current = !controller.disposed && epoch === controller.viewEpoch && attached === controller.attached && observingId === controller.observingId;
+			// The webview keeps a pending entry per request id until this reply lands;
+			// dropping it here left that entry waiting forever.
+			reply({ type: "droppedWorkspaceUrisResolved", requestId: message.requestId, files: current ? files : [] });
 			return;
 		}
 		case "openFile":
@@ -1040,11 +1077,13 @@ async function handleMessage(message: WebviewToHost, controller: SessionControll
 		case "attachActiveFile": {
 			const file = controller.getActiveFilePath();
 			if (file) reply({ type: "insertMention", path: file });
+			else reply({ type: "notice", level: "warning", text: "No active editor file to attach." });
 			return;
 		}
 		case "attachSelection": {
 			const selection = controller.getActiveSelection();
 			if (selection) reply({ type: "insertSelection", selection });
+			else reply({ type: "notice", level: "warning", text: "No editor selection in this workspace to attach." });
 			return;
 		}
 		case "pickModel":

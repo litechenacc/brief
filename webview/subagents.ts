@@ -41,6 +41,10 @@ export class SubagentsStrip {
 	private rosterSeen = false;
 	private historicalExpanded = false;
 	private spawnSeenBaseline = false;
+	/** Child id whose browse is in flight; cleared by the next roster push. */
+	private pendingChildId: string | null = null;
+	/** "‹ parent" was clicked; cleared by the next roster push. */
+	private pendingBack = false;
 
 	constructor(private readonly deps: SubagentsStripDeps) {
 		this.root = el("div", "subagents-strip") as HTMLElement;
@@ -55,6 +59,7 @@ export class SubagentsStrip {
 		this.expanded = false;
 		this.autoExpandSuppressed = false;
 		this.spawnSeenBaseline = false;
+		this.clearPending();
 		this.resetActivityBaseline();
 		this.render();
 	}
@@ -70,8 +75,15 @@ export class SubagentsStrip {
 		this.siblings = [];
 		this.viewedId = null;
 		this.spawnSeenBaseline = false;
+		this.clearPending();
 		this.resetActivityBaseline();
 		this.render();
+	}
+
+	/** A browse in flight is settled by the roster that comes back, not by a timer. */
+	private clearPending(): void {
+		this.pendingChildId = null;
+		this.pendingBack = false;
 	}
 
 	/** Forget spawn-card / auto-expand baselines without collapsing the strip. */
@@ -87,6 +99,8 @@ export class SubagentsStrip {
 		viewedActiveSessionId?: string | null;
 		spawned?: Array<{ activeSessionId: string; browseRef?: string; name?: string; created?: string }>;
 	}): void {
+		// The roster is the host's answer to any browse that was in flight.
+		this.clearPending();
 		this.children = message.children ?? [];
 		this.parent = message.parent ?? null;
 		this.viewedId = message.viewedActiveSessionId ?? null;
@@ -144,6 +158,10 @@ export class SubagentsStrip {
 	}
 
 	private render(): void {
+		// A roster push rebuilds the strip while the operator may be reading it:
+		// keep the scroll offset and the control they are standing on.
+		const scrollTop = this.root.scrollTop;
+		const focusKey = this.focusedKey();
 		this.root.textContent = "";
 		const parent = this.parent;
 		const viewedId = this.viewedId;
@@ -167,7 +185,18 @@ export class SubagentsStrip {
 			const back = el("button", "subagents-back-row") as HTMLButtonElement;
 			back.append(el("span", "subagents-back", "‹ parent"), el("span", "subagents-back-name", subagentLabel(parent)));
 			back.title = "Return to the parent agent";
-			back.addEventListener("click", () => this.deps.post({ type: "backToParent" }));
+			back.dataset.focus = "back";
+			if (this.pendingBack) {
+				back.classList.add("pending");
+				back.title = "Returning to the parent agent — waiting for the host to confirm";
+			}
+			back.addEventListener("click", () => {
+				if (this.pendingBack) return;
+				// Two daemon round-trips (detach + attach) before the roster changes.
+				this.pendingBack = true;
+				this.render();
+				this.deps.post({ type: "backToParent" });
+			});
 			this.root.appendChild(back);
 		}
 
@@ -188,9 +217,10 @@ export class SubagentsStrip {
 			this.autoExpandSuppressed = !this.expanded;
 			this.render();
 		});
+		header.dataset.focus = "header";
 		this.root.appendChild(header);
 
-		if (!this.expanded) return;
+		if (!this.expanded) { this.restorePlace(scrollTop, focusKey); return; }
 
 		const buildRow = (child: SessionChild, isSibling: boolean): HTMLElement => {
 			const row = el("button", `subagent-row${isSibling ? " sibling" : ""}`) as HTMLButtonElement;
@@ -228,10 +258,20 @@ export class SubagentsStrip {
 				row.classList.add("viewing");
 				row.title = "Currently viewing — this transcript shows this subagent";
 			}
+			const pending = !viewing && this.pendingChildId === childKey(child);
+			if (pending) {
+				row.classList.add("pending");
+				row.title = "Opening this subagent — waiting for the host to confirm";
+			}
+			row.dataset.focus = childKey(child);
 			row.append(dot, name, badge, suffix);
 			row.addEventListener("click", (event) => {
 				event.stopPropagation();
-				if (!viewing && child.browseRef) this.deps.post({ type: "browseChild", browseRef: child.browseRef });
+				if (viewing || !child.browseRef || pending) return;
+				// Browse costs a list + attach round-trip; paint the row before it.
+				this.pendingChildId = childKey(child);
+				this.render();
+				this.deps.post({ type: "browseChild", browseRef: child.browseRef });
 			});
 			return row;
 		};
@@ -259,6 +299,7 @@ export class SubagentsStrip {
 				this.historicalExpanded = !this.historicalExpanded;
 				this.render();
 			});
+			histHeader.dataset.focus = "historical";
 			this.root.appendChild(histHeader);
 			if (this.historicalExpanded) {
 				const list = el("div", "subagents-list historical");
@@ -266,5 +307,23 @@ export class SubagentsStrip {
 				this.root.appendChild(list);
 			}
 		}
+		this.restorePlace(scrollTop, focusKey);
+	}
+
+	/** Identity of the control the operator is standing on, if it lives in this strip. */
+	private focusedKey(): string | null {
+		const active = document.activeElement as HTMLElement | null;
+		if (!active || active === this.root || !this.root.contains(active)) return null;
+		return active.dataset.focus ?? null;
+	}
+
+	/** Put the strip back where it was: same control focused, same scroll offset. */
+	private restorePlace(scrollTop: number, focusKey: string | null): void {
+		if (focusKey) {
+			for (const node of Array.from(this.root.querySelectorAll<HTMLElement>("[data-focus]"))) {
+				if (node.dataset.focus === focusKey) { node.focus(); break; }
+			}
+		}
+		this.root.scrollTop = scrollTop;
 	}
 }

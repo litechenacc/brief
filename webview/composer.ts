@@ -99,6 +99,16 @@ function base64Bytes(value: string): number {
 	return Math.max(0, Math.floor((compact.length * 3) / 4) - padding);
 }
 
+/** Model or thinking value the operator picked, painted before the host confirms it. */
+type PendingPick =
+	| { kind: "model"; provider: string; modelId: string; label: string }
+	| { kind: "thinking"; level: string };
+
+/** Marker wording for a pick the runtime has not confirmed yet. */
+const PICK_APPLYING = "applying — waiting for the runtime to confirm";
+/** Marker wording for a pick the runtime answered with a different value. */
+const PICK_NOT_APPLIED = "not in effect — the runtime answered with a different value";
+
 export interface ComposerDeps {
 	onSend: (text: string, images: ImageAttachment[], selections: SelectionAttachment[], attachments?: ComposerAttachment[]) => void;
 	onCreateAttachment: (attachment: ComposerAttachment) => void;
@@ -194,6 +204,12 @@ export class Composer {
 	private steerDefault: "steer" | "followUp" = "steer";
 	private modelMenu: Dropdown | null = null;
 	private thinkingMenu: Dropdown | null = null;
+	/** The model/thinking pick waiting for the host to confirm or refuse it. */
+	private pendingPick: PendingPick | null = null;
+	/** The host answered the pick with something else: the picked value is not in effect. */
+	private pickNotApplied = false;
+	/** Stop was requested; the host has not reported the run ended yet. */
+	private stopping = false;
 
 	private acItems: Array<{ label: string; sub?: string; insert: string; dir?: boolean; action?: UiSlashAction }> = [];
 	private acSelected = 0;
@@ -452,6 +468,9 @@ export class Composer {
 	}
 
 	setModel(label: string, provider?: string, modelId?: string): void {
+		// A pick the operator just made is still on screen: this status settles it
+		// instead of silently replacing the chosen value with the older one it carries.
+		if (!this.settleModelPick(provider, modelId)) return;
 		// Debug hook: instrument setModel label churn to catch menu-killers live.
 		const dbg = window as unknown as { __modelLog?: string[] };
 		if (Array.isArray(dbg.__modelLog)) {
@@ -478,6 +497,7 @@ export class Composer {
 	}
 
 	setThinking(level: string, availableLevels?: string[] | null): void {
+		if (!this.settleThinkingPick(level)) return;
 		// "max" is a real level, distinct from "xhigh" — several models (Kimi K3 TEE)
 		// support max and nothing else. Aliasing it made the pill read a level the
 		// operator could not have chosen and never marked the current row.
@@ -487,6 +507,99 @@ export class Composer {
 		// and keeping the last model's list is how stale levels survive a switch.
 		this.availableThinkingLevels = Array.isArray(availableLevels) && availableLevels.length > 0 ? [...availableLevels] : null;
 		if (this.reasoning) this.brainBtn.title = `Thinking level: ${this.currentThinking}`;
+	}
+
+	/**
+	 * Paint the picked model before posting it: the rail must never read the old
+	 * model for the whole `set_model` + status round-trip. The pick is remembered
+	 * until a status push settles it — never until a timer.
+	 */
+	private markModelPick(provider: string, modelId: string, label: string): void {
+		// A new pick replaces the previous one rather than settling it, so drop the
+		// old pick before repainting — otherwise the pill would refuse its own paint.
+		this.pendingPick = null;
+		this.pickNotApplied = false;
+		const levels = this.availableThinkingLevels;
+		this.setModel(label, provider, modelId);
+		// setModel drops the level list because it belongs to the outgoing model, but
+		// the host has not confirmed this model yet: taking the levels away here would
+		// refuse /effort for the whole round-trip. The status that settles the pick
+		// clears and refills the list.
+		if (levels && !this.availableThinkingLevels) this.availableThinkingLevels = levels;
+		this.pendingPick = { kind: "model", provider, modelId, label };
+		this.paintPickState();
+	}
+
+	/** Same for a thinking level: paint the pick, let the host's status settle it. */
+	private markThinkingPick(level: string): void {
+		this.pendingPick = null;
+		this.pickNotApplied = false;
+		this.setThinking(level, this.availableThinkingLevels);
+		this.pendingPick = { kind: "thinking", level };
+		this.paintPickState();
+	}
+
+	/**
+	 * Host status for the model. Returns false when the status must not repaint the
+	 * pill: a matching pick retires the markers, and a status carrying something
+	 * else keeps the picked value visible with an explicit "not in effect" flag
+	 * (the operator chose it; reverting it silently is what looks broken).
+	 */
+	private settleModelPick(provider?: string, modelId?: string): boolean {
+		const pick = this.pendingPick;
+		if (pick?.kind !== "model") return true;
+		if (pick.provider === provider && pick.modelId === modelId) {
+			this.pendingPick = null;
+			this.pickNotApplied = false;
+			this.paintPickState();
+			return true;
+		}
+		this.pickNotApplied = true;
+		this.paintPickState();
+		return false;
+	}
+
+	/** Thinking-level twin of `settleModelPick`. */
+	private settleThinkingPick(level: string): boolean {
+		const pick = this.pendingPick;
+		if (pick?.kind !== "thinking") return true;
+		if (pick.level === level) {
+			this.pendingPick = null;
+			this.pickNotApplied = false;
+			this.paintPickState();
+			return true;
+		}
+		this.pickNotApplied = true;
+		this.paintPickState();
+		return false;
+	}
+
+	/** Re-apply the local pick markers and their wording after any repaint. */
+	private paintPickState(): void {
+		const pick = this.pendingPick;
+		const modelPick = pick?.kind === "model" ? pick : null;
+		const thinkingPick = pick?.kind === "thinking" ? pick : null;
+		const refused = pick !== null && this.pickNotApplied;
+		this.modelBtn.classList.toggle("pending", !!modelPick && !refused);
+		this.modelBtn.classList.toggle("not-applied", !!modelPick && refused);
+		this.brainBtn.classList.toggle("pending", !!thinkingPick && !refused);
+		this.brainBtn.classList.toggle("not-applied", !!thinkingPick && refused);
+		// Base titles (capability, vision note) come from the model state; the
+		// marker wording below is on top of them.
+		this.updateReasoningState();
+		const note = refused ? PICK_NOT_APPLIED : PICK_APPLYING;
+		if (modelPick) {
+			this.modelBtn.title = `${modelPick.label} — ${note}`;
+			this.modelBtn.setAttribute("aria-label", this.modelBtn.title);
+		} else {
+			this.modelBtn.removeAttribute("aria-label");
+		}
+		if (thinkingPick) {
+			this.brainBtn.title = `Thinking level ${thinkingPick.level} — ${note}`;
+			this.brainBtn.setAttribute("aria-label", this.brainBtn.title);
+		} else {
+			this.brainBtn.removeAttribute("aria-label");
+		}
 	}
 
 	setObserving(observing: boolean): void {
@@ -605,6 +718,10 @@ export class Composer {
 	}
 
 	setStreaming(streaming: boolean): void {
+		// The host reporting the run ended is the only thing that retires
+		// "Stopping…" — an abort the runtime ignores must not read as confirmed,
+		// and a timer would claim a stop that never happened.
+		if (!streaming) this.setStopping(false);
 		this.streaming = streaming;
 		this.applyRunControls();
 		// Back to the configured default between runs — not hard-coded "steer",
@@ -619,6 +736,21 @@ export class Composer {
 		const show = this.streaming && !this.observing;
 		this.stopBtn.style.display = show ? "" : "none";
 		this.updateSendState();
+	}
+
+	/**
+	 * A stop has been requested and the host has not reported the run ended yet.
+	 * Honest pending, not success: the disc is disabled and names what it waits
+	 * for, and only `setStreaming(false)` retires it.
+	 */
+	setStopping(value: boolean): void {
+		if (this.stopping === value) return;
+		this.stopping = value;
+		this.stopBtn.classList.toggle("stopping", value);
+		this.stopBtn.disabled = value;
+		const label = value ? "Stopping…" : "Stop run (Esc)";
+		this.stopBtn.title = label;
+		this.stopBtn.setAttribute("aria-label", label);
 	}
 
 	// Parameter deliberately NOT named `window`: this class calls window.setTimeout
@@ -951,7 +1083,13 @@ export class Composer {
 	resolveWorkspaceDrop(requestId: number, files: Array<{ path: string; isDir: boolean }>): void {
 		const pending = this.pendingWorkspaceDrops.get(requestId);
 		this.pendingWorkspaceDrops.delete(requestId);
-		if (!pending || pending.generation !== this.sessionGeneration || this.textarea.disabled) return;
+		if (!pending || pending.generation !== this.sessionGeneration || this.textarea.disabled) {
+			// The host answers every drop, with an empty list when it refused one. A
+			// stale entry has no insert left to do, so an empty answer is said out
+			// loud instead of vanishing with the entry.
+			if (!files.length) this.showHint("No supported workspace files or images in this drop.");
+			return;
+		}
 		if (this.textarea.value !== pending.text) { this.showHint("Draft changed. Drop the files again."); return; }
 		if (files.length) {
 			const paths = files.map((file) => file.isDir ? `${file.path.replace(/\/+$/, "")}/` : file.path).filter(Boolean);
@@ -1066,6 +1204,12 @@ export class Composer {
 		this.modelMenu = null;
 		this.thinkingMenu?.hide();
 		this.thinkingMenu = null;
+		// A pending model/thinking pick and an unconfirmed stop both belong to the
+		// session that just left the panel; neither can be settled any more.
+		this.pendingPick = null;
+		this.pickNotApplied = false;
+		this.paintPickState();
+		this.setStopping(false);
 		window.clearTimeout(this.hintTimer);
 		this.hintEl?.classList.remove("visible");
 
@@ -1109,7 +1253,11 @@ export class Composer {
 			this.runUiSlashAction(local.name, local.args);
 			return;
 		}
-		if (this.attachments.some((a) => a.status !== "ready")) return;
+		// Enter bypasses the disabled button, so a silent return would just look broken.
+		if (this.attachments.some((a) => a.status !== "ready")) {
+			this.showHint("Attachments are not ready — resolve errors or wait for upload");
+			return;
+		}
 		if (this.expandedText().length > 200_000) { this.showHint("Prompt exceeds 200,000 characters. Remove or shorten an attachment."); return; }
 		if (this.tryRunUiSlashCommand(this.textarea.value)) return;
 		const command = this.parseLeadingSlash(this.textarea.value.trimStart());
@@ -1121,7 +1269,12 @@ export class Composer {
 			return;
 		}
 		// Keyboard paths (Enter) bypass the disabled button, so the gate lives here too.
-		if (!this.canSend()) return;
+		// Reuse the wording the blocked button already carries in its tooltip.
+		if (!this.canSend()) {
+			this.updateSendState();
+			this.showHint(this.sendBtn.title);
+			return;
+		}
 		if (!this.vision && this.attachments.some((a) => a.kind === "image")) { this.showHint("Current model is text-only. Switch to a vision model or remove image attachments."); return; }
 		const text = this.attachments.length ? this.textarea.value : this.textarea.value.trim();
 		if (!text && this.images.length === 0 && this.selections.length === 0) return;
@@ -1262,6 +1415,8 @@ export class Composer {
 					if (restore) this.restoreComposerStash(this.lastNonSlashDraft);
 					return;
 				}
+				// Paint the level now; the host's status retires the marker.
+				this.markThinkingPick(level);
 				this.deps.onSetThinking(level);
 				if (restore) this.restoreComposerStash(this.lastNonSlashDraft);
 			},
@@ -1334,6 +1489,8 @@ export class Composer {
 					if (restore) this.restoreComposerStash(this.lastNonSlashDraft);
 					return;
 				}
+				// Paint the choice now; the host's status retires the marker.
+				this.markModelPick(model.provider, model.id, this.modelLabelFor(model));
 				this.deps.onSetModel(model.provider, model.id);
 				if (restore) this.restoreComposerStash(this.lastNonSlashDraft);
 			},
@@ -1478,8 +1635,9 @@ export class Composer {
 			this.send();
 			return;
 		}
-		// Escape stops a run when the composer is empty
-		if (event.key === "Escape" && this.streaming && !this.textarea.value) {
+		// Escape stops a run when the composer is empty. While the first abort is
+		// still unconfirmed, a second Escape would only re-post the same request.
+		if (event.key === "Escape" && this.streaming && !this.textarea.value && !this.stopping) {
 			this.deps.onStop();
 		}
 	}
@@ -1661,7 +1819,8 @@ export class Composer {
 			: action === "queue" ? "Queue (Enter) — delivered when the run ends"
 			: action === "steer" ? "Steer (Enter) — delivered after the current turn, mid-run" : "Send (Enter)";
 		this.sendBtn.disabled = unavailable || pending || !hasContent;
-		this.sendControl.dataset.state = this.sendBtn.disabled ? "blocked" : action;
+		// Frozen vocabulary the CSS keys on: blocked-why, nothing-to-send, or the action.
+		this.sendControl.dataset.state = unavailable || pending ? "unavailable" : !hasContent ? "empty" : action;
 		this.sendControl.title = reason;
 		this.sendBtn.title = reason;
 		this.sendBtn.setAttribute("aria-label", this.sendBtn.disabled ? `${label}: ${reason}` : reason);
@@ -2247,6 +2406,7 @@ export class Composer {
 			const match = this.findExactModelMatch(query);
 			if (match) {
 				this.restoreStashAfterPicker = false;
+				this.markModelPick(match.provider, match.id, this.modelLabelFor(match));
 				this.deps.onSetModel(match.provider, match.id);
 				this.restoreComposerStash(this.lastNonSlashDraft);
 				return;
@@ -2293,6 +2453,7 @@ export class Composer {
 				return;
 			}
 			this.restoreStashAfterPicker = false;
+			this.markThinkingPick(requested);
 			this.deps.onSetThinking(requested);
 			this.restoreComposerStash(this.lastNonSlashDraft);
 			return;
